@@ -5,10 +5,10 @@ import itertools
 
 import torch
 from torch import Tensor
-from base import COMPLEX, CUDA
+from base import CUDA
+from CGO.cuda.project import project
 from FreeFermion.linalg import hamiltonian, wick, williamson
 from CGO.sdp import extremal
-from CGO.cuda.gaussian import PatchProjector
 
 type Term = tuple[complex, list[int]] # one (coefficient, labels) term of a Majorana string
 
@@ -52,45 +52,17 @@ class GaussianCGO:
         self.mixed = [k for k in range(self.modes) if k not in self.pure]
         self.size = 2 ** len(self.mixed)
 
-        # The register geometry the kernel is written against -- the mode masks, the
-        # Jordan-Wigner signs and the coefficient columns -- is derived and owned by
-        # the extension; the classification of the modes is its only input.
-        self._projector = PatchProjector(
-            self.rotation,
-            torch.tensor([1 if k in self.mixed else 0 for k in range(self.modes)],
-                         dtype=torch.int8, 
-                         device=device))
-
-    def project(self, *term: Term) -> Tensor:
+    def project(self, *terms: Term) -> Tensor:
         r'''
-        Matrix of the Majorana string on V_L, the support of the reduced state.
-
-        V_L is spanned by the mixed modes (both occupations) with every pure mode pinned to |0>, so a basis state splits into a mixed register (the row/column index, big-endian) and a pure register.  The amplitudes are carried as a batch over the pure register, of shape (2**len(pure), size, size), and one label expands over the normal modes at once: a normal-mode Majorana flips one occupation of either register and multiplies by its Jordan-Wigner sign, and amplitudes that end outside the pure vacuum are dropped, which is the projection onto V_L.  The expansion runs in ``CGO/cuda/gaussian.cu``, so the batch stays on the device.
+        Project a Majorana string to the patch, P_V gamma_A P_V: rotate every label to the
+        canonical basis of the patch, contract the pure modes in their ground state, and
+        build the operator of the remaining mixed Majoranas on their register.
         Args:
-            term: the terms of the Majorana string, each (coefficient, labels), the labels in `internal_index` in ascending order.
+            term: the terms of the Majorana string.
         Returns:
-            The matrix of shape (size, size).
-        Raises:
-            ValueError: if a label does not belong to the patch.
+            The projected operator, shape (size, size), on CUDA.
         '''
-        matrix = torch.zeros((self.size, self.size), 
-                             dtype=COMPLEX, 
-                             device=self.device)
-        for coefficient, labels in term:
-            if any(label not in self.position for label in labels):
-                raise ValueError(f'every label of {labels} must belong to the patch '
-                                 f'{self.internal_index}')
-            amps = self._projector.vacuum()   # the pure vacuum, shared by every string
-            # The kernel left-multiplies, so walking the labels backwards is what
-            # makes the product come out in the order they are written in; walking
-            # them forwards would reverse the string, which flips the sign of every
-            # monomial with d(d-1)/2 odd (d = 2, 3 mod 4).
-            for label in reversed(labels):
-                # gamma_a = sum_b R_ba gamma_b: the kernel expands the label over the
-                # normal modes and applies the whole expansion to the batch.
-                amps = self._projector.apply(amps, self.position[label])
-            matrix = matrix + coefficient * amps[0]
-        return matrix
+        return project(self.rotation, self.internal_index, self.mixed, self.pure, *terms)
 
     def sample_operators(self,
                          count: int,
