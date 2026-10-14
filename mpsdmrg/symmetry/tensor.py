@@ -398,19 +398,19 @@ no_grad = torch.no_grad
 
 
 
-def _data(x: Tensor | torch.Tensor | complex) -> torch.Tensor:
+def _data(x: Tensor | torch.Tensor | complex) -> torch.Tensor | complex:
     '''
     Return the dense storage of an operand.
     Args:
         x: a ``Tensor``, a raw ``torch.Tensor`` or a scalar.
     Returns:
-        The dense array of ``x``, in shape ``x.shape``.
+        The dense array of ``x`` in shape ``x.shape``, or the scalar ``x`` itself.
     Raises:
         NotImplementedError: If a ``Tensor`` operand stores more than one charge block,
             in which case no single dense array represents it.
     '''
     if not isinstance(x, Tensor):
-        return torch.as_tensor(x)
+        return x
     if len(x.blocks) != 1:
         raise NotImplementedError('The dense operations need a single charge block, '
                                   f'but the tensor stores {len(x.blocks)}.')
@@ -867,7 +867,11 @@ class Tensor:
 
     def __setitem__(self, key, value: Tensor | torch.Tensor | complex) -> None:
         if self.is_dense:
-            self.to_torch()[key] = _data(value)
+            data = _data(value)
+            self.to_torch()[key] = data if torch.is_tensor(data) else torch.as_tensor(
+                data,
+                dtype=self.dtype,
+                device=self.device)
             return
         if torch.is_tensor(key) and key.dtype == torch.bool and key.numel() == 1:
             if bool(key.item()):
