@@ -6,67 +6,15 @@ import pickle as pkl
 from math import sqrt
 from typing import Literal
 from numpy.typing import NDArray
-from torch import Tensor
-from opt_einsum import contract_expression
 
-from base import COMPLEX, CUDA, REAL
+from base import COMPLEX, CUDA
+# ``_expr_cache`` is re-exported by name so a profiling script can clear it.
+from mpsdmrg.symmetry import (Group, Leg, Tensor, _expr_cache, cached_einsum, inner, no_grad,
+                              norm, qr, rq, svd, svdvals, trace)
 
 
-# ---------------------------------------------------------------------------
-# Module-level cache for oe.contract_expression objects.
-# Keys are (einsum_string, *shapes); values are the compiled expression.
-# This avoids redundant path-optimization when the same contraction shape
-# is encountered repeatedly (e.g. inside Lanczos or sweep environment updates).
-# ---------------------------------------------------------------------------
-_expr_cache: dict = {}
+from mpsdmrg.operators import SpinOperator
 
-def cached_einsum(einsum_str: str, *tensors: Tensor) -> Tensor:
-    """Perform an einsum contraction using a cached ``ContractExpression``."""
-    shapes = tuple(t.shape for t in tensors)
-    key = (einsum_str,) + shapes
-    try:
-        return _expr_cache[key](*tensors)
-    except KeyError:
-        _expr_cache[key] = contract_expression(
-            einsum_str, *shapes, optimize='auto'
-        )
-        return _expr_cache[key](*tensors)
-
-class SpinOperator:
-    '''
-    A tensor representing spin operators (Sx, Sy, Sz) for a given physical dimension.
-    '''
-    def __init__(self, phys_dim:int, dtype:torch.dtype = COMPLEX, device:torch.device = CUDA):
-        self.data = torch.zeros((3, phys_dim, phys_dim),
-                                 dtype=dtype,
-                                 device=device,
-                                 requires_grad=False)
-        # Sz
-        s = (phys_dim - 1) / 2
-        for i in range(phys_dim):
-            self.data[2, i, i] = s - i
-            m = s - i
-            if i == phys_dim - 1:
-                break
-            self.data[0, i   ,i+1] = sqrt(s * (s + 1) - m * (m - 1)) # S+
-            self.data[1, i + 1, i] = sqrt(s * (s + 1) - m * (m - 1)) # S-
-
-        self.data[0],self.data[1] = 0.5 * (self.data[0] + self.data[1]), -0.5j * (self.data[0] - self.data[1])# Sx, Sy
-
-        self.phys_dim = phys_dim
-        self.dtype = dtype
-        self.device = device
-    def to(self, device):
-        '''
-        Move the spin operator tensor to the specified device (e.g., 'cuda' or 'cpu').
-        '''
-        self.device = device
-        self.data = self.data.to(device)
-    def __repr__(self):
-        if self.phys_dim %2 == 0:
-            return f"Spin {self.phys_dim//2} operator \n {self.data})"
-        else:
-            return f"Spin {self.phys_dim}/2 operator \n {self.data})"
 
 class MPS:
     '''
@@ -77,16 +25,16 @@ class MPS:
                  phys_dim:int,
                  bond_dims:list[int]|None = None,
                  init_state:list[Tensor]|None = None,
-                 dtype:torch.dtype = COMPLEX,
-                 device:torch.device = CUDA):
+                 dtype = COMPLEX,
+                 device = CUDA):
         '''
         Args:
             L (int): Length of the MPS (number of sites).
             phys_dim (int): Physical dimension of each site.
             bond_dims (list[int] | None): List of bond dimensions for each bond in the MPS. Including the left and right virtual bonds, the length of this list should be L+1. If None, defaults to [1] + [phys_dim] * (L - 1) + [1].
             init_state (list[Tensor] | None): Optional initial state for the MPS. If None, random tensors will be generated.
-            dtype (torch.dtype): Data type for the MPS tensors (default: COMPLEX).
-            device (torch.device): Device to store the MPS tensors (default: 'cuda').
+            dtype: data type of the MPS tensors (default: COMPLEX).
+            device: device that stores the MPS tensors (default: CUDA).
         Raises:
             ValueError: If the length of bond_dims does not match L+1.
         '''
@@ -104,10 +52,9 @@ class MPS:
         # Initialize MPS tensors (left_bond_dim, phys_dim, right_bond_dim)
         if init_state is None:
             self.tensors = [
-            torch.rand((bond_dims[i], phys_dim, bond_dims[i + 1]),
-                       dtype=dtype,
-                       device=device,
-                       requires_grad=False) for i in range(L)
+            Tensor.rand((bond_dims[i], phys_dim, bond_dims[i + 1]),
+                        dtype=dtype,
+                        device=device) for i in range(L)
         ]
         else:
             self.tensors = init_state
@@ -140,10 +87,10 @@ class MPS:
         if new_center < 0 or new_center >= self.L:
             raise IndexError('New center index is out of bounds for the MPS length.')
         if new_center < self.center:
-            for i in range(self.center, new_center, -1):  # move to the right
+            for i in range(self.center, new_center, -1):  # move to the left
                 self._right_canonicalize_site(i, update_center=True)
         elif new_center > self.center:
-            for i in range(self.center, new_center):      # move to the left
+            for i in range(self.center, new_center):      # move to the right
                 self._left_canonicalize_site(i, update_center=True)
 
     def expectation(self,operators, mode:Literal['direct','env'] = 'env')-> complex:
@@ -161,8 +108,7 @@ class MPS:
         Raises:
             ValueError: If the operator shapes do not match the physical dimension of the MPS tensors.
         '''
-        # Check if operators is an MPO instance (imported locally to avoid circular refs)
-        if type(operators).__name__ == 'MPO':
+        if isinstance(operators, MPO):
             return self._mpo_expectation(operators)
         # Otherwise treat as dict[int, Tensor]
         if any(op.shape != (self.phys_dim, self.phys_dim) for op in operators.values()):
@@ -178,7 +124,7 @@ class MPS:
         if mode == 'env':
             return cached_einsum('abc,abc->', self.tensors[self.center].conj(), self.tensors[self.center]).item()
         elif mode == 'direct':
-            return self.expectation({})
+            return self.expectation({}, mode='direct')
 
     def normalize(self):
         '''
@@ -187,7 +133,7 @@ class MPS:
         norm:complex = self.norm(mode='env')
         self.tensors[self.center] /= sqrt(norm.real)
 
-    @torch.no_grad()
+    @no_grad()
     def _mpo_expectation(self, mpo) -> complex:
         '''
         Compute <psi|O|psi> by contracting MPS* @ MPO @ MPS from left to right.
@@ -203,26 +149,27 @@ class MPS:
         # lenv shape: (1, 1, D); pick the MPO end state (index -1)
         return lenv[0, 0, -1].item()
 
-    @torch.no_grad()
+    @no_grad()
     def _full_dir_contract(self,operators:dict[int,Tensor]):
         '''
         Brute-force contraction of the MPS with the given operators to compute the expectation value.
         '''
-        try:
-            op = operators[0]
-            lenv = cached_einsum('aib,ajc,ij->bc', self.tensors[0].conj(), self.tensors[0], op)
-        except KeyError:
+        if 0 in operators:
+            lenv = cached_einsum('aib,ajc,ij->bc', self.tensors[0].conj(), self.tensors[0],
+                                 operators[0])
+        else:
             lenv = cached_einsum('aib,aic->bc', self.tensors[0].conj(), self.tensors[0])
         for i in range(1,self.L):
-            try:
-                op = operators[i]
-                lenv = cached_einsum('ab,aic,bjd,ij->cd', lenv, self.tensors[i].conj(), self.tensors[i], op)
-            except KeyError:
-                lenv = cached_einsum('ab,aic,bid->cd', lenv, self.tensors[i].conj(), self.tensors[i])
-        return torch.trace(lenv).item()
+            if i in operators:
+                lenv = cached_einsum('ab,aic,bjd,ij->cd', lenv, self.tensors[i].conj(),
+                                     self.tensors[i], operators[i])
+            else:
+                lenv = cached_einsum('ab,aic,bid->cd', lenv, self.tensors[i].conj(),
+                                     self.tensors[i])
+        return trace(lenv).item()
 
 
-    @torch.no_grad()
+    @no_grad()
     def _full_env_contract(self, operators: dict[int, Tensor]):
         '''
         Compute the expectation value of a list of operators on the MPS using the canonical form.
@@ -239,16 +186,15 @@ class MPS:
                                     self.tensors[leftmost],
                                     operators[leftmost])
         for i in range(leftmost + 1, rightmost + 1):
-            try:
-                op = operators[i]
+            if i in operators:
                 lenv = cached_einsum('ab,aic,bjd,ij->cd', lenv,
-                                    self.tensors[i].conj(), self.tensors[i], op)
-            except KeyError:
+                                    self.tensors[i].conj(), self.tensors[i], operators[i])
+            else:
                 lenv = cached_einsum('ab,aic,bid->cd', lenv,
                                     self.tensors[i].conj(), self.tensors[i])
-        return torch.trace(lenv).item()
+        return trace(lenv).item()
 
-    @torch.no_grad()
+    @no_grad()
     def entanglement_entropy(self,bond:int,alpha:float|None = None, svd_tol:float = 1e-14)-> float:
         '''
         Compute the entanglement entropy of ith and i+1th site.
@@ -260,7 +206,7 @@ class MPS:
         if bond < 0 or bond >= self.L - 1:
             raise IndexError(f"Bond index {bond} is out of bounds for MPS of length {self.L}.")
         self.move_center_to(bond)
-        s = torch.linalg.svdvals(self.tensors[bond].reshape(-1, self.bond_dim[bond + 1]))
+        s = svdvals(self.tensors[bond], (0, 1), (2,))
         s = s[s > svd_tol]
         if alpha is None:
             return -torch.sum(s**2 * torch.log(s**2)).item()
@@ -268,7 +214,7 @@ class MPS:
             return 1/(1-alpha) * torch.log(torch.sum(s**(2*alpha))).item()
 
 
-    @torch.no_grad()
+    @no_grad()
     def _left_canonicalize_site(self, i, update_center=True):
         '''
         Canonicalize the MPS site at index i to the left canonical form using QR decomposition. Optionally update the center site index.
@@ -285,17 +231,14 @@ class MPS:
         '''
         if i < 0 or i >= self.L-1:
             raise IndexError(f"Index {i} is out of bounds for MPS of length {self.L}.")
-        self.tensors[i] = self.tensors[i].reshape(-1, self.bond_dim[i + 1])
-        q,r = torch.linalg.qr(self.tensors[i])
-        new_bond = q.shape[-1]
-        self.bond_dim[i+1] = new_bond
-        self.tensors[i] = q.reshape(self.bond_dim[i],self.phys_dim,new_bond) # (bond_dim[i], phys_dim, new_bond)
+        q, r = qr(self.tensors[i], (0, 1), (2,))
+        self.bond_dim[i+1] = q.shape[-1]
+        self.tensors[i] = q
         self.tensors[i+1] = cached_einsum('ab,bcd->acd', r, self.tensors[i+1])
         if update_center:
             self.center = i + 1
-        del q,r
 
-    @torch.no_grad()
+    @no_grad()
     def _right_canonicalize_site(self, i, update_center=True):
         '''
         Canonicalize the MPS site at index i to the right canonical form using RQ decomposition. Optionally update the center site index.
@@ -312,15 +255,12 @@ class MPS:
         '''
         if i <= 0 or i >= self.L:
             raise IndexError(f"Index {i} is out of bounds for MPS of length {self.L}.")
-        self.tensors[i] = self.tensors[i].reshape(self.bond_dim[i], -1)
-        q,r = torch.linalg.qr(self.tensors[i].H)
-        q,r = q.H, r.H
+        r, q = rq(self.tensors[i], (0,), (1, 2))
         self.bond_dim[i] = q.shape[0]
-        self.tensors[i] = q.reshape(self.bond_dim[i], self.phys_dim, self.bond_dim[i+1])
+        self.tensors[i] = q
         self.tensors[i-1] = cached_einsum('lpb,br->lpr', self.tensors[i-1], r)
         if update_center:
             self.center = i - 1
-        del r, q
 
     def canonicalize(self):
         '''
@@ -357,22 +297,23 @@ class MPO:
     '''
     A class representing a Matrix Product Operator (MPO) in quantum physics and tensor networks.
     '''
-    @torch.no_grad()
+    @no_grad()
     def __init__(self,
                  L:int,
                  phys_dim:int,
-                 mapping:dict[str,Tensor]|None = None,
-                 dtype:torch.dtype = COMPLEX,
-                 device:torch.device = CUDA):
+                 mapping:dict[str,torch.Tensor]|None = None,
+                 dtype = COMPLEX,
+                 device = CUDA):
         '''
         Args:
             L (int): Length of the MPO (number of sites).
             phys_dim (int): Physical dimension of the MPO.
-            mapping (dict[str, Tensor]): A dictionary mapping operator names to their corresponding Tensor representations. If None, default mappings will be used.
+            mapping (dict[str, torch.Tensor]): A dictionary mapping operator names to their dense torch operator matrices. If None, default mappings will be used.
         '''
         self.dtype = dtype
         self.device = device
         self.L = L
+        self.group: Group | None = None  # set by the engine that owns the Hamiltonian
         self.couplings: list[tuple[tuple[str, ...], complex, tuple[int, ...]]] = []
         self.physical_dim = phys_dim
         self.tensors: list[Tensor] = []
@@ -409,6 +350,7 @@ class MPO:
                   dtype=self.dtype,
                   device=self.device)
         new.couplings = [(ops, coeff, locs) for ops, coeff, locs in self.couplings]
+        new.group = self.group
         if self.tensors:
             new.tensors = [t.clone().detach() for t in self.tensors]
         new.bond_dim = self.bond_dim
@@ -428,12 +370,7 @@ class MPO:
             new = self.copy()
             # Copy any missing operator matrices from other into new.mapping
             for op_name in set(op for ops, _, _ in other.couplings for op in ops):
-                if op_name not in new.mapping:
-                    base = op_name.split('@')[0]
-                    mat = new.mapping[base[0]]
-                    for ch in base[1:]:
-                        mat = mat @ new.mapping[ch]
-                    new.mapping[op_name] = mat.to(dtype=new.dtype, device=new.device)
+                new._register_merged_op(op_name)
             # Directly merge couplings (they are already merged by add_couplings)
             new.couplings.extend(other.couplings)
             new.build()
@@ -478,10 +415,8 @@ class MPO:
                 t1 = self.tensors[i]
                 t2 = other.tensors[i]
                 # t1: (wL1, wR1, p, q), t2: (wL2, wR2, q, r)  →  (wL1*wL2, wR1*wR2, p, r)
-                wL1, wR1 = t1.shape[0], t1.shape[1]
-                wL2, wR2 = t2.shape[0], t2.shape[1]
-                new_t = cached_einsum('abpq,cdqr->acbdpr', t1, t2).reshape(
-                    wL1 * wL2, wR1 * wR2, self.physical_dim, self.physical_dim)
+                new_t = cached_einsum('abpq,cdqr->acbdpr', t1, t2).combine_legs(
+                    ((0, 1), (2, 3), (4,), (5,)))
                 new.tensors.append(new_t)
             new.bond_dim = self.bond_dim * other.bond_dim
             return new
@@ -548,21 +483,6 @@ class MPO:
             self.mapping[op_string] = mat.to(dtype=self.dtype, device=self.device)
         return op_string
 
-    @staticmethod
-    def _state_key(c_idx: int, op_str: str, rel_pos: int) -> tuple:
-        '''Build a state key.
-
-        Nearest-neighbour states (``rel_pos == 1``) are shared across
-        couplings — safe when no two couplings share the same first-operator
-        site, because NN states have no identity pass-through that could
-        create cross-terms.  Long-range states (``rel_pos > 1``) are kept
-        unique per coupling via *c_idx* to prevent spurious paths through
-        the shared identity-propagation segments.
-        '''
-        if rel_pos == 1:
-            return (op_str, rel_pos)
-        return (c_idx, op_str, rel_pos)
-
     def build(self):
         '''
         Build the MPO tensors from the current couplings and mapping.
@@ -572,7 +492,15 @@ class MPO:
         distance (in sites) to the next operator.  Nearest-neighbour states
         are shared across couplings; long-range states are kept unique per
         coupling to avoid spurious paths.
+
+        A non-abelian group is delegated to :meth:`_build_invariant`, which builds the
+        isotropic nearest-neighbour SU(2) Heisenberg chain and refuses every other
+        coupling; the automaton below is the general path.
         '''
+        group = self.group
+        if group is not None and not group.is_abelian:
+            self._build_invariant(group)
+            return
         first_site_counts: dict[tuple, int] = {}
         for c_idx, (ops, _, locs) in enumerate(self.couplings):
             if len(ops) > 1 and locs[1] - locs[0] == 1:
@@ -590,7 +518,9 @@ class MPO:
                     else:
                         key = (ops[n], rel_pos)          # shared
                 else:
-                    key = self._state_key(c_idx, ops[n], rel_pos)
+                    # long-range states stay unique per coupling, so no shared identity
+                    # segment can open a spurious path between two couplings
+                    key = (ops[n], rel_pos) if rel_pos == 1 else (c_idx, ops[n], rel_pos)
                 coupling_keys[c_idx].append(key)
                 state_ranges.setdefault(key, set()).add((locs[n], locs[n + 1]))
 
@@ -600,10 +530,10 @@ class MPO:
 
         D = self.bond_dim
         p = self.physical_dim
-        self.tensors = [torch.zeros((1, D, p, p), dtype=self.dtype, device=self.device)]
-        self.tensors += [torch.zeros((D, D, p, p), dtype=self.dtype, device=self.device)
+        self.tensors = [Tensor.zeros((1, D, p, p), dtype=self.dtype, device=self.device)]
+        self.tensors += [Tensor.zeros((D, D, p, p), dtype=self.dtype, device=self.device)
                          for _ in range(1, self.L)]
-        self.tensors += [torch.zeros((D, 1, p, p), dtype=self.dtype, device=self.device)]
+        self.tensors += [Tensor.zeros((D, 1, p, p), dtype=self.dtype, device=self.device)]
 
         eye = torch.eye(p, dtype=self.dtype, device=self.device)
         self.tensors[0][0, 0] = eye                       # site-0 start
@@ -614,7 +544,7 @@ class MPO:
 
         # identity on skipped sites for long-range couplings
         for key, ranges in state_ranges.items():
-            rel_pos = key[-1] if len(key) == 3 else key[1]
+            rel_pos = key[-1]
             if rel_pos <= 1:
                 continue
             s = self.state_idx[key]
@@ -640,44 +570,233 @@ class MPO:
                     self.tensors[self.L][state_in, 0] += mat
                 else:
                     self.tensors[site][state_in, state_out] += mat
+
+    def _build_invariant(self, group: Group) -> None:
+        r'''
+        Build the tensors of an isotropic nearest-neighbour chain under SU(2).
+
+        Every site carries one invariant tensor on the legs
+        ``(bond_l, bond_r, bra_phys, ket_phys)``.  The bond is the direct sum of a
+        ``j = 0`` channel, whose two copies are the start and the end of an interaction,
+        and a ``j = 1`` channel carrying the spin operator of an interaction that has
+        started, so the only nonzero paths pair one nearest-neighbour bond with
+        :math:`\mathbf{S}_i \cdot \mathbf{S}_{i+1}`.
+
+        The gauge is fixed by the dense limit: the ``j = 0`` block is :math:`\sqrt{2}`,
+        which expands to the identity, and the opening and closing ``j = 1`` insertions
+        are :math:`\sqrt{3/2}` and :math:`-\sqrt{3/2}`, which expand to the spin operator.
+        A bond coupling :math:`J` is split as :math:`\sqrt{J}` on its opening and its
+        closing, so the pair picks up exactly :math:`J`.
+
+        Args:
+            group: the symmetry group of the chain.
+        Raises:
+            NotImplementedError: If the group is not SU(2), the physical leg is not
+                spin-1/2, or the couplings are not an isotropic nearest-neighbour
+                ``(X, X)``, ``(Y, Y)``, ``(Z, Z)`` triplet.
+        '''
+        if group.group_name != 'SU(2)' or self.physical_dim != 2:
+            raise NotImplementedError(
+                f'An invariant Hamiltonian needs SU(2) spin-1/2 sites, not {group.group_name} '
+                f'with physical dimension {self.physical_dim}.')
+        components: dict[int, dict[str, complex]] = {}
+        for ops, coeff, locs in self.couplings:
+            if len(ops) != 2 or ops[0] != ops[1] or ops[0] not in 'XYZ' or locs[1] != locs[0] + 1:
+                raise NotImplementedError(
+                    f'An invariant Hamiltonian needs nearest-neighbour (X, X), (Y, Y) and '
+                    f'(Z, Z) couplings, not {tuple(ops)} at {tuple(locs)}.')
+            components.setdefault(int(locs[0]), {})[ops[0]] = coeff
+        strength: dict[int, complex] = {}
+        for site, terms in components.items():
+            if set(terms) != set('XYZ') or max(abs(v - terms['X']) for v in terms.values()) > 1e-10:
+                raise NotImplementedError(
+                    f'The couplings at site {site} are not the isotropic Heisenberg '
+                    f'triplet: {terms}.')
+            strength[site] = complex(terms['X']) ** 0.5
+
+        triv = Leg.trivial(1, group)
+        phys = Leg(group, ((self.physical_dim - 1,),), (0, self.physical_dim), qconj=1)
+        # the bond of the nearest-neighbour automaton: a ``j = 0`` channel whose two copies
+        # are the start and the end of an interaction, and a ``j = 1`` channel carrying the
+        # spin operator of an interaction that is under way
+        link = Leg(group, ((0,), (2,)), (0, 2, 5), qconj=1)
+        identity, opening, closing = sqrt(2.0), sqrt(1.5), -sqrt(1.5)
+        self.tensors = []
+        for i in range(self.L):
+            if i == 0:
+                wl, wr, role = triv, link.conj(), 'left'
+            elif i == self.L - 1:
+                wl, wr, role = link, triv.conj(), 'right'
+            else:
+                wl, wr, role = link, link.conj(), 'bulk'
+            tensor = Tensor.zeros(wl.dim, wr.dim, self.physical_dim, self.physical_dim,
+                                  legs=(wl, wr, phys, phys.conj()), qtotal=group.trivial_sector,
+                                  dtype=self.dtype, device=self.device)
+            for block, q in zip(tensor.blocks, tensor.qdata):
+                if q[0] == 0 and q[1] == 0:
+                    if role == 'right':
+                        block[wl.multiplicity(0) - 1, 0, 0, 0] = identity
+                    else:
+                        block[0, 0, 0, 0] = identity
+                        if role == 'bulk':
+                            block[wl.multiplicity(0) - 1, wr.multiplicity(0) - 1, 0, 0] = identity
+                elif q[0] == 0 and q[1] == 1 and role != 'right':
+                    block[0, 0, 0, 0] = torch.tensor(opening * strength[i], dtype=block.dtype,
+                                                     device=block.device)
+                elif q[0] == 1 and q[1] == 0 and role != 'left':
+                    block[0, wr.multiplicity(0) - 1, 0, 0] = torch.tensor(
+                        closing * strength[i - 1], dtype=block.dtype, device=block.device)
+            self.tensors.append(tensor)
+        self.bond_dim = link.dim
+
     def __sizeof__(self):
         return sum(t.numel() * t.element_size() for t in self.tensors)
 
 
 class Broomstick:
     '''
-    A class that optimize an MPS given an MPO Hamiltonian.
+    A 2-site DMRG engine: the Hamiltonian it minimises, the state it optimises, and the
+    sweeps that do it.
 
-    Performs 2-site DMRG sweeping on the MPS to minimize the energy with respect to the MPO Hamiltonian. The MPS and MPO must be initialized and built externally before being passed in.
+    The Hamiltonian is built through the engine and the state is filled in afterwards, so a
+    caller never constructs an ``MPO`` or an ``MPS``:
 
+        stick = Broomstick(L=8, phys_dim=2)
+        for i in range(7):
+            stick.add_couplings(('Z', 'Z'), 1.0, (i, i + 1))
+        stick.build()
+        stick.initialize_state(bond_dims=[1] + [4] * 7 + [1])
+        stick.sweep()
+
+    A state or a Hamiltonian built elsewhere is still taken through ``mps`` and ``mpo``.
     '''
     def __init__(self,
-                 mps: MPS,
-                 mpo: MPO,
+                 mps: MPS | None = None,
+                 mpo: MPO | None = None,
                  max_bond_dim: int = 50,
                  svd_tol: float = 1e-14,
-                 device: torch.device | None = None,
-                 dtype: torch.dtype | None = None):
-        self.state = mps
-        self.Hamiltonian = mpo
+                 device = None,
+                 dtype = None,
+                 L: int | None = None,
+                 phys_dim: int | None = None,
+                 mapping: dict[str, torch.Tensor] | None = None,
+                 group: Group | None = None):
+        '''
+        Args:
+            mps: the state to optimize; filled in later by ``initialize_state`` if None.
+            mpo: the Hamiltonian; built here from ``L``, ``phys_dim`` and ``mapping`` if None.
+            max_bond_dim: largest bond dimension a sweep keeps.
+            svd_tol: singular values not greater than this are discarded.
+            device: device of the engine; from ``mps`` or ``mpo`` if None.
+            dtype: data type of the engine; from ``mps`` or ``mpo`` if None.
+            L: number of sites; from ``mps`` or ``mpo`` if None.
+            phys_dim: physical dimension of one site; from ``mps`` or ``mpo`` if None.
+            mapping: operator names to their dense torch matrices, for the Hamiltonian built here.
+            group: symmetry group of the state and of the Hamiltonian; no symmetry if None.
+        Raises:
+            ValueError: If no source gives the number of sites or the physical dimension,
+                or if the sources disagree.
+        '''
+        lengths = [value for value in (
+            L, None if mps is None else mps.L, None if mpo is None else mpo.L) if value is not None]
+        dims = [value for value in (
+            phys_dim, None if mps is None else mps.phys_dim,
+            None if mpo is None else mpo.physical_dim) if value is not None]
+        if not lengths or not dims:
+            raise ValueError('The engine needs L and phys_dim, or an MPS, or an MPO.')
+        if len(set(lengths)) != 1:
+            raise ValueError(f'The site counts disagree: {lengths}.')
+        if len(set(dims)) != 1:
+            raise ValueError(f'The physical dimensions disagree: {dims}.')
 
-        if self.state.L != self.Hamiltonian.L:
-            raise ValueError(f"MPS length {self.state.L} does not match MPO length {self.Hamiltonian.L}.")
-        self.L = mps.L
-        
-        self.physical_dim = mps.phys_dim
-        if self.physical_dim != self.Hamiltonian.physical_dim:
-            raise ValueError(f"MPS physical dimension {self.physical_dim} does not match MPO physical dimension {self.Hamiltonian.physical_dim}.")
-        
+        self.L = lengths[0]
+        self.physical_dim = dims[0]
+        self.dtype = dtype or (mps.dtype if mps is not None else
+                               (mpo.dtype if mpo is not None else COMPLEX))
+        self.device = device or (mps.device if mps is not None else
+                                 (mpo.device if mpo is not None else CUDA))
+        self.state: MPS | None = mps
+        self.group = group
+        self.Hamiltonian = mpo if mpo is not None else MPO(
+            self.L, self.physical_dim, mapping=mapping, dtype=self.dtype, device=self.device)
+        self.Hamiltonian.group = group
         self.max_bond_dim = max_bond_dim
         self.svd_tol = svd_tol
-        self.device = device if device is not None else mps.device
-        self.dtype = dtype if dtype is not None else mps.dtype
 
         self.center = 0
-        self.renv = []
-        self.lenv = []
+        self.renv: dict[int, Tensor] = {}
+        self.lenv: dict[int, Tensor] = {}
         self._last_energy = None  # cached from the most recent sweep
+
+        if self.state is None and group is not None:
+            self.initialize_state()
+
+    def add_couplings(self, operators: tuple[str, ...], coeff: complex,
+                      locations: NDArray[np.int64] | tuple[int, ...]) -> None:
+        '''Add one coupling to the Hamiltonian, as ``MPO.add_couplings`` does.'''
+        self.Hamiltonian.add_couplings(operators, coeff, locations)
+
+    def build(self) -> None:
+        '''Build the Hamiltonian tensors from the couplings added so far.'''
+        self.Hamiltonian.build()
+
+    def initialize_state(self,
+                         bond_dims: list[int] | None = None,
+                         init_state: list[Tensor] | None = None) -> None:
+        '''
+        Fill in the state to optimize, once the Hamiltonian is built.
+
+        With a group the state is built invariant: one singlet tensor per site, whose bond
+        legs carry every sector the physical legs to their left fuse to.
+
+        Args:
+            bond_dims: bond dimensions of the state, as in ``MPS``; ``[1]``, the physical
+                dimension on the inner bonds and ``[1]`` if None. Ignored with a group.
+            init_state: the state tensors, as in ``MPS``; random if None. Ignored with a group.
+        '''
+        if self.group is not None:
+            tensors, bond_dims = self._invariant_tensors(self.group)
+            init_state = tensors
+        self.state = MPS(self.L, self.physical_dim, bond_dims=bond_dims, init_state=init_state,
+                         dtype=self.dtype, device=self.device)
+
+    def _invariant_tensors(self, group: Group) -> tuple[list[Tensor], list[int]]:
+        '''
+        One singlet tensor per site of a chain with a symmetry group.
+
+        The physical leg carries the sector of dimension ``phys_dim``, every tensor fuses
+        its two bond legs and the physical leg to the trivial sector, and each bond carries
+        every sector the physical legs to its left fuse to, so the state is a singlet.
+
+        Args:
+            group: the symmetry group of the chain.
+        Returns:
+            The tensors and the dimension of every bond, left boundary first.
+        Raises:
+            NotImplementedError: If the group is not SU(2).
+            ValueError: If the chain has an odd number of sites, which has no singlet.
+        '''
+        if group.group_name != 'SU(2)':
+            raise NotImplementedError(
+                f'An invariant state needs SU(2) sectors, not {group.group_name}.')
+        if self.L % 2:
+            raise ValueError(f'An SU(2) singlet chain needs an even number of sites, not {self.L}.')
+        phys = Leg(group, ((self.physical_dim - 1,),), (0, self.physical_dim), qconj=1)
+        bonds = [Leg.trivial(1, group)]
+        for _ in range(self.L - 1):
+            bonds.append(bonds[-1].fuse(phys))
+        bonds.append(Leg.trivial(1, group))
+        tensors = [Tensor.rand((bonds[i].dim, phys.dim, bonds[i + 1].dim),
+                               legs=(bonds[i], phys, bonds[i + 1].conj()),
+                               qtotal=group.trivial_sector,
+                               dtype=self.dtype, device=self.device) for i in range(self.L)]
+        return tensors, [bond.dim for bond in bonds]
+
+    def _require_state(self) -> MPS:
+        '''The state of the engine, or a ValueError if it has none yet.'''
+        if self.state is None:
+            raise ValueError('The engine has no state yet; call initialize_state first.')
+        return self.state
 
     def to(self, device):
         '''
@@ -685,32 +804,45 @@ class Broomstick:
         '''
         self.device = device
         self.Hamiltonian.to(device)
-        self.state.to(device)
+        if self.state is not None:
+            self.state.to(device)
 
     def copy(self):
         '''
         Create a deep copy of the Broomstick instance.
         '''
-        new = Broomstick(self.state.copy(),
+        new = Broomstick(None if self.state is None else self.state.copy(),
                           self.Hamiltonian.copy(),
                           max_bond_dim=self.max_bond_dim,
                           svd_tol=self.svd_tol,
                           device=self.device,
-                          dtype=self.dtype)
+                          dtype=self.dtype,
+                          group=self.group)
         return new
 
     def cache_envs(self):
+        self._require_state()
         L = self.L
-        self.renv: list['Tensor'] = [None] * (L + 1)
-        self.lenv: list['Tensor'] = [None] * (L + 1)
+        self.renv = {}
+        self.lenv = {}
 
-        # Right boundary environment: MPO bond dim = Hamiltonian.bond_dim, final state (D-1) set to 1
-        self.renv[L] = torch.zeros(1, self.Hamiltonian.bond_dim, 1,
-                                   dtype=self.dtype, device=self.device)
-        self.renv[L][0, -1, 0] = 1.0
+        if self.group is not None and not self.group.is_abelian:
+            triv = Leg.trivial(1, self.group)
+            self.lenv[0] = Tensor.ones(1, 1, 1, legs=(triv, triv.conj(), triv.conj()),
+                                       qtotal=self.group.trivial_sector,
+                                       dtype=self.dtype, device=self.device)
+            self.renv[L] = Tensor.ones(1, 1, 1, legs=(triv.conj(), triv, triv),
+                                       qtotal=self.group.trivial_sector,
+                                       dtype=self.dtype, device=self.device)
+        else:
+            # Right boundary environment: MPO bond dim = Hamiltonian.bond_dim, final state (D-1) set to 1
+            self.renv[L] = Tensor.zeros(1, self.Hamiltonian.bond_dim, 1,
+                                        dtype=self.dtype, device=self.device)
+            self.renv[L][0, -1, 0] = 1.0
+            self.lenv[0] = Tensor.ones(1, 1, 1, dtype=self.dtype, device=self.device)
+
         for i in range(L - 1, 1, -1):
             self._cache_renv(i)
-        self.lenv[0] = torch.ones(1, 1, 1, dtype=self.dtype, device=self.device)
 
     def sweep(self, 
               num_sweeps: int = 5, 
@@ -733,6 +865,7 @@ class Broomstick:
             patience: Number of consecutive non-improving sweeps before stopping.
         '''
         self.cache_envs()
+        state = self._require_state()
         best_E = None
         stale = 0
 
@@ -740,12 +873,12 @@ class Broomstick:
             E, trunc = self.singlesweep()
             self._last_energy = E
             E_density = E / self.L
-            max_bond = max(self.state.bond_dim)
+            max_bond = max(state.bond_dim)
 
             print(f'Sweep {sweep + 1}/{num_sweeps}:  '
                   f'E/L = {E_density:.12f}  '
                   f'max_trunc_err = {trunc:.3e}  '
-                  f'bond_dim = {self.state.bond_dim}')
+                  f'bond_dim = {state.bond_dim} (max {max_bond})')
 
             # ── early stopping ──
             if best_E is None or E_density < best_E - energy_tol:
@@ -769,20 +902,22 @@ class Broomstick:
 
 
     def _cache_lenv(self,i:int):
+        state = self._require_state()
         self.lenv[i] = cached_einsum('aic,apb,cqd,ijpq->bjd',
                                         self.lenv[i-1], 
-                                        self.state.tensors[i-1].conj(), 
-                                        self.state.tensors[i-1],
+                                        state.tensors[i-1].conj(), 
+                                        state.tensors[i-1],
                                         self.Hamiltonian.tensors[i-1])
     
     def _cache_renv(self,i:int):
+        state = self._require_state()
         self.renv[i] = cached_einsum('apb,cqd,bjd,ijpq->aic',
-                                        self.state.tensors[i].conj(), 
-                                        self.state.tensors[i],
+                                        state.tensors[i].conj(), 
+                                        state.tensors[i],
                                         self.renv[i + 1],
                                         self.Hamiltonian.tensors[i])
 
-    @torch.no_grad()
+    @no_grad()
     def singlesweep(self):
         '''
         Perform a single sweep of the DMRG algorithm, optimizing the MPS tensors
@@ -801,6 +936,7 @@ class Broomstick:
         '''
         if not self.lenv or not self.renv:
             self.cache_envs()
+        state = self._require_state()
         max_trunc = torch.tensor(0.0, dtype=torch.float64, device=self.device)
 
         # ── right sweep ──
@@ -812,18 +948,16 @@ class Broomstick:
             self.center = i + 1
 
         # special handling for the last site: renormalize the last tensor to be right-isometric
-        s_norm = torch.linalg.norm(self.state.tensors[self.L - 1], dim=(1, 2))
+        s_norm = norm(state.tensors[self.L - 1], dim=(1, 2))
         s_norm = torch.clamp(s_norm, min=1e-30)
-        self.state.tensors[self.L - 1] = self.state.tensors[self.L - 1] / s_norm[:, None, None]
-        self.state.tensors[self.L - 2] = (
-            self.state.tensors[self.L - 2] * s_norm[None, None, :]
-        )
+        state.tensors[self.L - 1] = state.tensors[self.L - 1] / s_norm[:, None, None]
+        state.tensors[self.L - 2] = state.tensors[self.L - 2] * s_norm[None, None, :]
         self.center = self.L - 2
-        self.state.center = self.L - 2
+        state.center = self.L - 2
         self._cache_renv(self.L - 1)
         for i in range(self.L - 3, -1, -1):
             self.center = i
-            self.state.center = i
+            state.center = i
             E, trunc_err = self.update(direction='left')
             max_trunc = torch.maximum(max_trunc, trunc_err)
             if i > 0:
@@ -832,14 +966,14 @@ class Broomstick:
         # ── sync to CPU once at end of sweep ──
         return E.item(), max_trunc.item()
 
-    @torch.no_grad()
+    @no_grad()
     def _lanczos(self,
                  i: int,
                  v0: Tensor,
-                 n_iter: int = 8) -> tuple[Tensor, Tensor]:
-        v0 = v0 / torch.linalg.norm(v0)
+                 n_iter: int = 8) -> tuple[torch.Tensor, Tensor]:
+        v0 = v0 / norm(v0)
 
-        vecs = torch.zeros((n_iter + 1, *v0.shape), dtype=v0.dtype, device=v0.device)
+        vecs: list[Tensor] = []
         alphas = torch.zeros(n_iter, dtype=torch.float64, device=v0.device)
         betas = torch.zeros(n_iter, dtype=torch.float64, device=v0.device)
 
@@ -853,13 +987,13 @@ class Broomstick:
         def helper(v: Tensor) -> Tensor:
             return cached_einsum('abqij,cdqkl,bjld->aikc', lenv, renv, v)
     
-        vecs[0] = v0
+        vecs.append(v0)
 
         for k in range(n_iter):
             v_k = vecs[k]
             w = helper(v_k)
 
-            alpha = torch.sum(v_k.conj() * w).real
+            alpha = inner(v_k, w).real
             alphas[k] = alpha
 
             if k == 0:
@@ -867,28 +1001,39 @@ class Broomstick:
             else:
                 w = w - alpha * v_k - betas[k - 1] * vecs[k - 1]
 
-            beta = torch.linalg.norm(w).real
+            beta = norm(w).real
             betas[k] = beta
 
-            vecs[k + 1] = w / beta
-            vecs[k + 1][beta == 0] = 0
+            v_next = w / beta
+            v_next[beta == 0] = 0
+            vecs.append(v_next)
         # for performance reasons, we will NOT check for convergence and run
         # all n_iter iterations to avoid GPU→CPU syncs.  The caller can check
         # the eigenvalue convergence if desired.
 
-        T = torch.diag(alphas) + torch.diag(betas[:n_iter - 1], diagonal=1) \
-                               + torch.diag(betas[:n_iter - 1], diagonal=-1)
+        # A negligible beta closes the Krylov space: the vectors generated after it are
+        # round-off, and folding them into the tridiagonal mixes in directions that are not
+        # orthogonal to the ones already found, which loses the normalisation of the ground
+        # vector.  Keeping only the vectors up to the closing restores it.
+        closed = (betas < 1e-12).nonzero()
+        n_eff = n_iter if closed.numel() == 0 else min(n_iter, int(closed[0]) + 1)
+        T = torch.diag(alphas[:n_eff])
+        if n_eff > 1:
+            T = T + torch.diag(betas[:n_eff - 1], diagonal=1) \
+                  + torch.diag(betas[:n_eff - 1], diagonal=-1)
 
         eigvals, eigvecs_T = torch.linalg.eigh(T)
 
         E0 = eigvals[0]
-        v_ground = cached_einsum('a,aijkl->ijkl', 
-                                eigvecs_T[:n_iter, 0].to(dtype=vecs.dtype), 
-                                vecs[:n_iter,...])
+        coeffs = eigvecs_T[:n_eff, 0].to(dtype=v0.dtype)
+        v_ground = vecs[0] * coeffs[0]
+        for k in range(1, n_eff):
+            v_ground = v_ground + coeffs[k] * vecs[k]
 
         return E0, v_ground
 
-    def update(self, direction: Literal['left', 'right'], n_iter: int = 8) -> tuple['Tensor', 'Tensor']:
+    def update(self, direction: Literal['left', 'right'],
+               n_iter: int = 8) -> tuple[torch.Tensor, torch.Tensor]:
         '''
         Perform 2-site optimization of MPS with effective Hamiltonian.
         Returns (energy_tensor, truncation_error_tensor) — both are 0-d GPU
@@ -899,54 +1044,34 @@ class Broomstick:
             n_iter: Maximum number of Lanczos iterations for the effective Hamiltonian diagonalization.
         '''
         i = self.center
+        mps = self._require_state()
 
-        assert self.center == self.state.center, "Center site index mismatch between Broomstick and MPS."
+        assert self.center == mps.center, "Center site index mismatch between Broomstick and MPS."
 
-        state = cached_einsum('bjx,xld->bjld',self.state.tensors[i],
-                     self.state.tensors[i + 1])
+        state = cached_einsum('bjx,xld->bjld', mps.tensors[i], mps.tensors[i + 1])
         E, v = self._lanczos(i, state, n_iter=n_iter)
-        u, s, vh = torch.linalg.svd(
-            v.reshape(self.state.bond_dim[i] * self.state.phys_dim, 
-                      self.state.phys_dim * self.state.bond_dim[i + 2]), 
-                      full_matrices=False)
-
-        mask = (s > self.svd_tol)
-        s = s[mask]
-        u = u[:, mask]
-        vh = vh[mask, :]
-
-        new_bond = min(len(s), self.max_bond_dim)
-        s = s[:new_bond]
-        u = u[:, :new_bond]
-        vh = vh[:new_bond, :]
+        u, s, vh = svd(v,
+                       (0, 1),
+                       (2, 3),
+                       max_bond=self.max_bond_dim,
+                       tol=self.svd_tol,
+                       direction=direction)
 
         s2_kept = torch.sum(s*s).real
         trunc_err =  1.0 - s2_kept
-                              
 
         s /= torch.sqrt(s2_kept)
+        new_bond = u.shape[-1]  # kept leg dimension, not the number of kept singular values
         if direction == 'right':
-            self.state.tensors[i] = u.reshape(
-                self.state.bond_dim[i], 
-                self.state.phys_dim, 
-                new_bond) # M[i] = U,
-            self.state.tensors[i + 1] = (s.to(vh.dtype).unsqueeze(1) * vh).reshape(
-                new_bond, 
-                self.state.phys_dim, 
-                self.state.bond_dim[i + 2]) # M[i+1] = S Vh,
-            self.state.center = i + 1  # singular values absorbed into site i+1
+            mps.tensors[i] = u  # M[i] = U
+            mps.tensors[i + 1] = s.to(vh.dtype).view(-1, 1, 1) * vh  # M[i+1] = S Vh
+            mps.center = i + 1  # singular values absorbed into site i+1
 
         elif direction == 'left':
-            self.state.tensors[i] = (u * s.to(u.dtype).unsqueeze(0)).reshape(
-                self.state.bond_dim[i], 
-                self.state.phys_dim, 
-                new_bond)                   # M[i] = U S,
-            self.state.tensors[i + 1] = vh.reshape(
-                new_bond, 
-                self.state.phys_dim, 
-                self.state.bond_dim[i + 2]) # M[i] = Vh,
-            self.state.center = i  # singular values stay at site i
-        self.state.bond_dim[i + 1] = new_bond
+            mps.tensors[i] = u * s.to(u.dtype).view(1, 1, -1)  # M[i] = U S
+            mps.tensors[i + 1] = vh  # M[i+1] = Vh
+            mps.center = i  # singular values stay at site i
+        mps.bond_dim[i + 1] = new_bond
         return E.real, trunc_err
 
     @property
@@ -960,25 +1085,26 @@ class Broomstick:
         # Fallback: compute from environments (only used before any sweep)
         return self._compute_energy()
 
-    @torch.no_grad()
+    @no_grad()
     def _compute_energy(self) -> float:
+        state = self._require_state()
         lenv = cached_einsum('apc,pqij,aib,cjd->bqd',
                              self.lenv[self.center],
                          self.Hamiltonian.tensors[self.center],
-                         self.state.tensors[self.center].conj(),
-                         self.state.tensors[self.center])
+                         state.tensors[self.center].conj(),
+                         state.tensors[self.center])
         renv = cached_einsum('apc,qpij,bia,djc->bqd',self.renv[self.center + 2],
                          self.Hamiltonian.tensors[self.center + 1],
-                         self.state.tensors[self.center + 1].conj(),
-                         self.state.tensors[self.center + 1])
+                         state.tensors[self.center + 1].conj(),
+                         state.tensors[self.center + 1])
 
         return cached_einsum('bqd,bqd->', lenv, renv).item()
     
     def __sizeof__(self):
-        return (self.state.__sizeof__() +
+        return ((0 if self.state is None else self.state.__sizeof__()) +
                 self.Hamiltonian.__sizeof__() +
-                sum(t.numel() * t.element_size() for t in self.lenv if t is not None) +
-                sum(t.numel() * t.element_size() for t in self.renv if t is not None))
+                sum(t.numel() * t.element_size() for t in self.lenv.values()) +
+                sum(t.numel() * t.element_size() for t in self.renv.values()))
 
     def compute_variance(self) -> float:
         '''
@@ -986,8 +1112,9 @@ class Broomstick:
         Contracts <ψ|H²|ψ> directly without building the H² MPO explicitly,
         keeping memory O(B²·D²) instead of O(D⁴).
         '''
+        state = self._require_state()
         W = self.Hamiltonian.tensors
-        A = self.state.tensors
+        A = state.tensors
         lenv = cached_einsum('bpa,uwpr,vzrq,dqc->acwz',A[0].conj(), W[0], W[0], A[0])
         for i in range(1, self.L):
             lenv = cached_einsum('bdxy,bpa,xwpr,yzrq,dqc->acwz',
@@ -995,7 +1122,7 @@ class Broomstick:
         # lenv shape: (1, 1, D, D) → pick the final MPO states
         E2 = lenv[0, 0, -1, -1].real.item()
 
-        E = self.state.expectation(self.Hamiltonian)
+        E = state.expectation(self.Hamiltonian)
         var = (E2 - (E.real) ** 2)
         return max(var, 0.0)  # clamp numerical noise below zero
     

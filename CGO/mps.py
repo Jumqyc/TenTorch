@@ -96,14 +96,14 @@ def _boundary_envs(state: MPS,
 
     E = torch.ones(1, 1, 1, 1, dtype=state.dtype, device=state.device)
     for site in range(lend):
-        E = cached_einsum('acbd,bsx,dsy->acxy',
-                          E, state[site], state[site].conj())
+        T = state[site].to_torch()
+        E = cached_einsum('acbd,bsx,dsy->acxy', E, T, T.conj()).to_torch()
     left = E.reshape(D_l, D_l)
 
     E = torch.ones(1, 1, 1, 1, dtype=state.dtype, device=state.device)
     for site in range(state.L - 1, rend - 1, -1):
-        E = cached_einsum('asx,csy,xybd->acbd',
-                          state[site], state[site].conj(), E)
+        T = state[site].to_torch()
+        E = cached_einsum('asx,csy,xybd->acbd', T, T.conj(), E).to_torch()
     right = E.reshape(D_r, D_r)
     return left, right
 
@@ -192,13 +192,13 @@ def _product_matrix(state: MPS,
     identity elsewhere.  One contraction per site produces all
     (D_l*D_r)**2 matrix elements at once, instead of one per boundary pair.
     '''
-    T = state[lend]
+    T = state[lend].to_torch()
     lenv = cached_einsum('kpc,qp,lqd->klcd', T, ops.get(lend, eye), T.conj())
     for site in range(lend + 1, rend):
-        T = state[site]
+        T = state[site].to_torch()
         lenv = cached_einsum('klcd,cpe,qp,dqf->klef',
                              lenv, T, ops.get(site, eye), T.conj())
-    return lenv.permute(0, 2, 1, 3)
+    return lenv.to_torch().permute(0, 2, 1, 3)
 
 
 def _mpo_commutator_matrix(state: MPS,
@@ -219,26 +219,26 @@ def _mpo_commutator_matrix(state: MPS,
     '''
     def local_operator(side: str, site: int) -> torch.Tensor:
         '''Local factor G[in, out, bra_phys, ket_phys] of H_L R or R H_L.'''
-        W = H_L.tensors[site - lend]
+        W = H_L.tensors[site - lend].to_torch()
         R = R_ops.get(site, eye)
         if side == 'right':                     # R acts on the ket leg
-            return cached_einsum('iost,tu->iosu', W, R)
+            return cached_einsum('iost,tu->iosu', W, R).to_torch()
         # R acts on the bra leg: its first index stays open and pairs with the
         # bra state.
-        return cached_einsum('sp,iopt->iost', R, W)
+        return cached_einsum('sp,iopt->iost', R, W).to_torch()
 
     def one_sided(side: str) -> torch.Tensor:
-        T = state[lend]
+        T = state[lend].to_torch()
         lenv = cached_einsum('kpc,oqp,lqd->klcdo', T,
                              local_operator(side, lend)[0], T.conj())
         for site in range(lend + 1, rend):
-            T = state[site]
+            T = state[site].to_torch()
             # the last index of lenv is the incoming MPO index, i.e. the first
             # leg of the local operator
             lenv = cached_einsum('klcds,cpe,soqp,dqf->klefo',
                                  lenv, T, local_operator(side, site), T.conj())
         # the MPO right boundary is the end state D-1
-        return lenv[..., -1].permute(0, 2, 1, 3)
+        return lenv.to_torch()[..., -1].permute(0, 2, 1, 3)
 
     return 1j * (one_sided('right') - one_sided('left'))
 
