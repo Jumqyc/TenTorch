@@ -1,0 +1,10 @@
+{
+  "include": ["base.py", "mpsdmrg"],
+  "exclude": ["tmp", ".venv", "**/__pycache__"],
+  "typeCheckingMode": "basic",
+  "pythonVersion": "3.14",
+  "venvPath": ".",
+  "venv": ".venv",
+  "reportMissingTypeStubs": false,
+  "useLibraryCodeForTypes": true
+}

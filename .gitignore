@@ -4,3 +4,6 @@ profiling/
 tmp/
 build/
 FreeFermion/cuda/build/
+.vscode/
+*h.gch
+test/

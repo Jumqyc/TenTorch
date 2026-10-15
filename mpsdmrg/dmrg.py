@@ -9,8 +9,11 @@ from numpy.typing import NDArray
 
 from base import COMPLEX, CUDA
 # ``_expr_cache`` is re-exported by name so a profiling script can clear it.
-from mpsdmrg.symmetry import (Group, Leg, Tensor, _expr_cache, cached_einsum, inner, no_grad,
-                              norm, qr, rq, svd, svdvals, trace)
+from mpsdmrg.symmetry import (Group, Leg, Sector, Tensor, _expr_cache, cached_einsum, inner,
+                              no_grad, no_symmetry, norm, qr, rq, svd, svdvals, trace)
+from mpsdmrg.symmetry.hamiltonian import build_mpo
+from mpsdmrg.symmetry.invariant import Bond, bond_channels
+from mpsdmrg.symmetry.state import initial_state
 
 
 from mpsdmrg.operators import SpinOperator
@@ -286,13 +289,6 @@ class MPS:
     def __sizeof__(self):
         return sum(t.numel() * t.element_size() for t in self.tensors)
 
-    @property
-    def shape(self)-> list[int]:
-        '''
-        Return the virtual bond dimensions of the MPS.
-        '''
-        return self.bond_dim
-
 class MPO:
     '''
     A class representing a Matrix Product Operator (MPO) in quantum physics and tensor networks.
@@ -354,8 +350,6 @@ class MPO:
         if self.tensors:
             new.tensors = [t.clone().detach() for t in self.tensors]
         new.bond_dim = self.bond_dim
-        if hasattr(self, 'state_idx'):
-            new.state_idx = self.state_idx.copy()
         return new
 
     def __repr__(self):
@@ -439,20 +433,24 @@ class MPO:
         '''
         Add new couplings to the MPO.
         Args:
-            operators (tuple[str]): A tuple of operator names (e.g., ('X', 'Y')).
+            operators (tuple[str]): A tuple of operator names (e.g., ('X', 'Y')).  A name of
+                several letters is the product of those mapping entries on one site, e.g.
+                ``'XY'`` is :math:`S_x S_y`.
             coeffs (complex): A complex coefficient for the coupling.
             locations (tuple[int]): A tuple of site indices where the operators act.
         Raises:
             ValueError: If the length of operators does not match the number of locations,
                         or if any site index is out of bounds for the MPO length,
-                        or if any operator is not defined in the mapping.
+                        or if any operator letter is not defined in the mapping.
         '''
         if len(operators) != len(locations):
             raise ValueError(f"Length of operators {len(operators)} does not match the number of locations {len(locations)}.")
         if any(loc < 0 or loc >= self.L for loc in locations):
             raise ValueError(f"Site indices {locations} are out of bounds for MPO of length {self.L}.")
-        if not all(op in self.mapping for op in operators):
+        if not all(op in self.mapping or all(letter in self.mapping for letter in op)
+                   for op in operators):
             raise ValueError(f"Operators {operators} are not defined in the mapping. Available operators: {list(self.mapping.keys())}.")
+        operators = tuple(self._register_merged_op(op) for op in operators)
 
         # Merge consecutive operators on the same site
         merged_ops = []
@@ -483,175 +481,54 @@ class MPO:
             self.mapping[op_string] = mat.to(dtype=self.dtype, device=self.device)
         return op_string
 
+    @staticmethod
+    def preprocess(group: Group,
+                   phys_dim: int,
+                   mapping: dict[str, torch.Tensor],
+                   couplings: list[tuple[tuple[str, ...], complex, tuple[int, ...]]],
+                   dtype = COMPLEX,
+                   device = CUDA,
+                   tol: float = 1e-10
+                   ) -> tuple[dict[int, torch.Tensor], dict[Sector, torch.Tensor],
+                              list[Bond]] | None:
+        r'''
+        Reduce nearest-neighbour couplings to the invariant channels of every bond.
+
+        A coupling names its operators by string; a name of several letters is the product of
+        the one-letter entries of the mapping, so a caller can write ``('XY', 'XY')`` as the
+        composite :math:`S_x S_y` without extending the mapping himself.  The group theory
+        lives in :mod:`mpsdmrg.symmetry.invariant`; this is the entry point of the Hamiltonian
+        into it.
+
+        Args:
+            group: the symmetry group of the Hamiltonian.
+            phys_dim: physical dimension of one site.
+            mapping: operator names to their dense matrices.
+            couplings: the terms :meth:`add_couplings` recorded.
+            dtype, device: data type and device of the operators.
+            tol: relative residual that still counts as invariant.
+        Returns:
+            ``(operators, channels, bonds)`` as :func:`mpsdmrg.symmetry.invariant.bond_channels`
+            returns them, or None when the couplings have no invariant realisation.
+        Raises:
+            ValueError: If a coupling names a letter that is not in the mapping.
+        '''
+        return bond_channels(group, phys_dim, mapping, couplings, dtype, device, tol)
+
     def build(self):
         '''
         Build the MPO tensors from the current couplings and mapping.
 
-        Intermediate states are identified by ``(op_str, rel_pos)`` pairs
-        where *op_str* is the operator just placed and *rel_pos* is the
-        distance (in sites) to the next operator.  Nearest-neighbour states
-        are shared across couplings; long-range states are kept unique per
-        coupling to avoid spurious paths.
-
-        A non-abelian group is delegated to :meth:`_build_invariant`, which builds the
-        isotropic nearest-neighbour SU(2) Heisenberg chain and refuses every other
-        coupling; the automaton below is the general path.
+        The bond automaton and every group question live in
+        :mod:`mpsdmrg.symmetry.hamiltonian`; an operator name of several letters is the
+        product of those mapping entries on one site.
         '''
-        group = self.group
-        if group is not None and not group.is_abelian:
-            self._build_invariant(group)
-            return
-        first_site_counts: dict[tuple, int] = {}
-        for c_idx, (ops, _, locs) in enumerate(self.couplings):
-            if len(ops) > 1 and locs[1] - locs[0] == 1:
-                key = (ops[0], 1, locs[0])  # (op_str, rel_pos=1, site)
-                first_site_counts[key] = first_site_counts.get(key, 0) + 1
-        state_ranges: dict[tuple, set[tuple[int, int]]] = {}
-        coupling_keys: list[list[tuple]] = [[] for _ in self.couplings]
-        for c_idx, (ops, _, locs) in enumerate(self.couplings):
-            for n in range(len(ops) - 1):
-                rel_pos = locs[n + 1] - locs[n]
-                if n == 0 and rel_pos == 1:
-                    site_key = (ops[0], 1, locs[0])
-                    if first_site_counts.get(site_key, 0) > 1:
-                        key = (c_idx, ops[n], rel_pos)  # unique per coupling
-                    else:
-                        key = (ops[n], rel_pos)          # shared
-                else:
-                    # long-range states stay unique per coupling, so no shared identity
-                    # segment can open a spurious path between two couplings
-                    key = (ops[n], rel_pos) if rel_pos == 1 else (c_idx, ops[n], rel_pos)
-                coupling_keys[c_idx].append(key)
-                state_ranges.setdefault(key, set()).add((locs[n], locs[n + 1]))
-
-        sorted_keys = sorted(state_ranges, key=lambda x: (len(x), x))
-        self.state_idx = {k: i + 1 for i, k in enumerate(sorted_keys)}
-        self.bond_dim = len(self.state_idx) + 2  # start (0) + end (D-1)
-
-        D = self.bond_dim
-        p = self.physical_dim
-        self.tensors = [Tensor.zeros((1, D, p, p), dtype=self.dtype, device=self.device)]
-        self.tensors += [Tensor.zeros((D, D, p, p), dtype=self.dtype, device=self.device)
-                         for _ in range(1, self.L)]
-        self.tensors += [Tensor.zeros((D, 1, p, p), dtype=self.dtype, device=self.device)]
-
-        eye = torch.eye(p, dtype=self.dtype, device=self.device)
-        self.tensors[0][0, 0] = eye                       # site-0 start
-        self.tensors[self.L][D - 1, 0] = eye               # right boundary
-        for i in range(1, self.L):
-            self.tensors[i][0, 0] = eye                    # bulk start
-            self.tensors[i][D - 1, D - 1] = eye            # bulk end
-
-        # identity on skipped sites for long-range couplings
-        for key, ranges in state_ranges.items():
-            rel_pos = key[-1]
-            if rel_pos <= 1:
-                continue
-            s = self.state_idx[key]
-            for from_site, to_site in ranges:
-                for k in range(from_site + 1, to_site):
-                    if 0 < k < self.L:
-                        self.tensors[k][s, s] = eye
-
-        # ── place operator matrices ──
-        for c_idx, (ops, coeff, locs) in enumerate(self.couplings):
-            keys = coupling_keys[c_idx]
-            for n, (op_str, site) in enumerate(zip(ops, locs)):
-                mat = self.mapping[op_str]
-                if n == 0:
-                    mat = coeff * mat
-
-                state_in = 0 if n == 0 else self.state_idx[keys[n - 1]]
-                state_out = D - 1 if n == len(ops) - 1 else self.state_idx[keys[n]]
-
-                if site == 0:
-                    self.tensors[0][0, state_out] += mat
-                elif site == self.L:
-                    self.tensors[self.L][state_in, 0] += mat
-                else:
-                    self.tensors[site][state_in, state_out] += mat
-
-    def _build_invariant(self, group: Group) -> None:
-        r'''
-        Build the tensors of an isotropic nearest-neighbour chain under SU(2).
-
-        Every site carries one invariant tensor on the legs
-        ``(bond_l, bond_r, bra_phys, ket_phys)``.  The bond is the direct sum of a
-        ``j = 0`` channel, whose two copies are the start and the end of an interaction,
-        and a ``j = 1`` channel carrying the spin operator of an interaction that has
-        started, so the only nonzero paths pair one nearest-neighbour bond with
-        :math:`\mathbf{S}_i \cdot \mathbf{S}_{i+1}`.
-
-        The gauge is fixed by the dense limit: the ``j = 0`` block is :math:`\sqrt{2}`,
-        which expands to the identity, and the opening and closing ``j = 1`` insertions
-        are :math:`\sqrt{3/2}` and :math:`-\sqrt{3/2}`, which expand to the spin operator.
-        A bond coupling :math:`J` is split as :math:`\sqrt{J}` on its opening and its
-        closing, so the pair picks up exactly :math:`J`.
-
-        Args:
-            group: the symmetry group of the chain.
-        Raises:
-            NotImplementedError: If the group is not SU(2), the physical leg is not
-                spin-1/2, or the couplings are not an isotropic nearest-neighbour
-                ``(X, X)``, ``(Y, Y)``, ``(Z, Z)`` triplet.
-        '''
-        if group.group_name != 'SU(2)' or self.physical_dim != 2:
-            raise NotImplementedError(
-                f'An invariant Hamiltonian needs SU(2) spin-1/2 sites, not {group.group_name} '
-                f'with physical dimension {self.physical_dim}.')
-        components: dict[int, dict[str, complex]] = {}
-        for ops, coeff, locs in self.couplings:
-            if len(ops) != 2 or ops[0] != ops[1] or ops[0] not in 'XYZ' or locs[1] != locs[0] + 1:
-                raise NotImplementedError(
-                    f'An invariant Hamiltonian needs nearest-neighbour (X, X), (Y, Y) and '
-                    f'(Z, Z) couplings, not {tuple(ops)} at {tuple(locs)}.')
-            components.setdefault(int(locs[0]), {})[ops[0]] = coeff
-        strength: dict[int, complex] = {}
-        for site, terms in components.items():
-            if set(terms) != set('XYZ') or max(abs(v - terms['X']) for v in terms.values()) > 1e-10:
-                raise NotImplementedError(
-                    f'The couplings at site {site} are not the isotropic Heisenberg '
-                    f'triplet: {terms}.')
-            strength[site] = complex(terms['X']) ** 0.5
-
-        triv = Leg.trivial(1, group)
-        phys = Leg(group, ((self.physical_dim - 1,),), (0, self.physical_dim), qconj=1)
-        # the bond of the nearest-neighbour automaton: a ``j = 0`` channel whose two copies
-        # are the start and the end of an interaction, and a ``j = 1`` channel carrying the
-        # spin operator of an interaction that is under way
-        link = Leg(group, ((0,), (2,)), (0, 2, 5), qconj=1)
-        identity, opening, closing = sqrt(2.0), sqrt(1.5), -sqrt(1.5)
-        self.tensors = []
-        for i in range(self.L):
-            if i == 0:
-                wl, wr, role = triv, link.conj(), 'left'
-            elif i == self.L - 1:
-                wl, wr, role = link, triv.conj(), 'right'
-            else:
-                wl, wr, role = link, link.conj(), 'bulk'
-            tensor = Tensor.zeros(wl.dim, wr.dim, self.physical_dim, self.physical_dim,
-                                  legs=(wl, wr, phys, phys.conj()), qtotal=group.trivial_sector,
-                                  dtype=self.dtype, device=self.device)
-            for block, q in zip(tensor.blocks, tensor.qdata):
-                if q[0] == 0 and q[1] == 0:
-                    if role == 'right':
-                        block[wl.multiplicity(0) - 1, 0, 0, 0] = identity
-                    else:
-                        block[0, 0, 0, 0] = identity
-                        if role == 'bulk':
-                            block[wl.multiplicity(0) - 1, wr.multiplicity(0) - 1, 0, 0] = identity
-                elif q[0] == 0 and q[1] == 1 and role != 'right':
-                    block[0, 0, 0, 0] = torch.tensor(opening * strength[i], dtype=block.dtype,
-                                                     device=block.device)
-                elif q[0] == 1 and q[1] == 0 and role != 'left':
-                    block[0, wr.multiplicity(0) - 1, 0, 0] = torch.tensor(
-                        closing * strength[i - 1], dtype=block.dtype, device=block.device)
-            self.tensors.append(tensor)
-        self.bond_dim = link.dim
+        self.tensors, self.bond_dim = build_mpo(self.group, self.L, self.physical_dim,
+                                                self.mapping, self.couplings, self.dtype,
+                                                self.device)
 
     def __sizeof__(self):
         return sum(t.numel() * t.element_size() for t in self.tensors)
-
 
 class Broomstick:
     '''
@@ -746,51 +623,21 @@ class Broomstick:
         '''
         Fill in the state to optimize, once the Hamiltonian is built.
 
-        With a group the state is built invariant: one singlet tensor per site, whose bond
-        legs carry every sector the physical legs to their left fuse to.
+        The symmetry layer provides the state whenever it has a default for the group: one
+        singlet tensor per site, whose bond legs carry every sector the physical legs to
+        their left fuse to. The arguments below apply to every other group.
 
         Args:
             bond_dims: bond dimensions of the state, as in ``MPS``; ``[1]``, the physical
-                dimension on the inner bonds and ``[1]`` if None. Ignored with a group.
-            init_state: the state tensors, as in ``MPS``; random if None. Ignored with a group.
+                dimension on the inner bonds and ``[1]`` if None.
+            init_state: the state tensors, as in ``MPS``; random if None.
         '''
-        if self.group is not None:
-            tensors, bond_dims = self._invariant_tensors(self.group)
-            init_state = tensors
+        built = initial_state(self.group, self.L, self.physical_dim, self.max_bond_dim,
+                              self.dtype, self.device)
+        if built is not None:
+            init_state, bond_dims = built
         self.state = MPS(self.L, self.physical_dim, bond_dims=bond_dims, init_state=init_state,
                          dtype=self.dtype, device=self.device)
-
-    def _invariant_tensors(self, group: Group) -> tuple[list[Tensor], list[int]]:
-        '''
-        One singlet tensor per site of a chain with a symmetry group.
-
-        The physical leg carries the sector of dimension ``phys_dim``, every tensor fuses
-        its two bond legs and the physical leg to the trivial sector, and each bond carries
-        every sector the physical legs to its left fuse to, so the state is a singlet.
-
-        Args:
-            group: the symmetry group of the chain.
-        Returns:
-            The tensors and the dimension of every bond, left boundary first.
-        Raises:
-            NotImplementedError: If the group is not SU(2).
-            ValueError: If the chain has an odd number of sites, which has no singlet.
-        '''
-        if group.group_name != 'SU(2)':
-            raise NotImplementedError(
-                f'An invariant state needs SU(2) sectors, not {group.group_name}.')
-        if self.L % 2:
-            raise ValueError(f'An SU(2) singlet chain needs an even number of sites, not {self.L}.')
-        phys = Leg(group, ((self.physical_dim - 1,),), (0, self.physical_dim), qconj=1)
-        bonds = [Leg.trivial(1, group)]
-        for _ in range(self.L - 1):
-            bonds.append(bonds[-1].fuse(phys))
-        bonds.append(Leg.trivial(1, group))
-        tensors = [Tensor.rand((bonds[i].dim, phys.dim, bonds[i + 1].dim),
-                               legs=(bonds[i], phys, bonds[i + 1].conj()),
-                               qtotal=group.trivial_sector,
-                               dtype=self.dtype, device=self.device) for i in range(self.L)]
-        return tensors, [bond.dim for bond in bonds]
 
     def _require_state(self) -> MPS:
         '''The state of the engine, or a ValueError if it has none yet.'''
@@ -821,18 +668,22 @@ class Broomstick:
         return new
 
     def cache_envs(self):
-        self._require_state()
+        state = self._require_state()
         L = self.L
         self.renv = {}
         self.lenv = {}
 
-        if self.group is not None and not self.group.is_abelian:
-            triv = Leg.trivial(1, self.group)
+        # A state whose tensor legs carry a group meets the Hamiltonian at the trivial
+        # charge; the ungrouped state of a dense or abelian chain meets it at the two edges
+        # of the MPO bond.
+        if state.tensors[0].group != no_symmetry:
+            group = state.tensors[0].group
+            triv = Leg.trivial(1, group)
             self.lenv[0] = Tensor.ones(1, 1, 1, legs=(triv, triv.conj(), triv.conj()),
-                                       qtotal=self.group.trivial_sector,
+                                       qtotal=group.trivial_sector,
                                        dtype=self.dtype, device=self.device)
             self.renv[L] = Tensor.ones(1, 1, 1, legs=(triv.conj(), triv, triv),
-                                       qtotal=self.group.trivial_sector,
+                                       qtotal=group.trivial_sector,
                                        dtype=self.dtype, device=self.device)
         else:
             # Right boundary environment: MPO bond dim = Hamiltonian.bond_dim, final state (D-1) set to 1
@@ -1083,10 +934,10 @@ class Broomstick:
         if self._last_energy is not None:
             return self._last_energy
         # Fallback: compute from environments (only used before any sweep)
-        return self._compute_energy()
+        return float(self._compute_energy().real)
 
     @no_grad()
-    def _compute_energy(self) -> float:
+    def _compute_energy(self) -> complex:
         state = self._require_state()
         lenv = cached_einsum('apc,pqij,aib,cjd->bqd',
                              self.lenv[self.center],
@@ -1120,10 +971,10 @@ class Broomstick:
             lenv = cached_einsum('bdxy,bpa,xwpr,yzrq,dqc->acwz',
                                  lenv, A[i].conj(), W[i], W[i], A[i])
         # lenv shape: (1, 1, D, D) → pick the final MPO states
-        E2 = lenv[0, 0, -1, -1].real.item()
+        E2 = float(lenv[0, 0, -1, -1].real.item().real)
 
         E = state.expectation(self.Hamiltonian)
-        var = (E2 - (E.real) ** 2)
+        var = float(E2) - float(E.real) ** 2
         return max(var, 0.0)  # clamp numerical noise below zero
     
     def save_as_pkl(self,filename: str | None = None):
