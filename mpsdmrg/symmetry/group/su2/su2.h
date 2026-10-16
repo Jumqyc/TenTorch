@@ -1,7 +1,7 @@
 // The SU(2) group, with its sectors labelled by twice the spin.
 #pragma once
 
-#include "group.h"
+#include "../group.h"
 
 namespace sym {
 
@@ -16,6 +16,7 @@ class SU2Symmetry : public Group {
                            const c10::Device& device, int64_t copy = 0) const override;
   Sector sector_of_dimension(int64_t dim) const override;
   double dual_sign(const Sector& sector) const override;
+  double dual_phase(const Sector& sector) const override;
   at::Tensor duality_matrix(const Sector& a, const c10::Device& device) const override;
   at::Tensor invariant_form(const Sector& a, const c10::Device& device) const override;
   int64_t reference_index(const Sector& a) const override;

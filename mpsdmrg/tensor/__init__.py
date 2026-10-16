@@ -1,23 +1,40 @@
 """The block-sparse tensor of ``mpsdmrg``.
 
 Exposes ``Tensor``, the symmetry-adapted container whose blocks carry the fusion trees of the
-group layer and the ``cached_einsum`` contraction over them.
-puts around every local update.
+group layer and the ``cached_einsum`` contraction over them.  The leg algebra a model
+layer needs -- the leg of a bare dimension, a bond leg, fusion and the cap -- is
+re-exported here, so nothing above the tensor layer names a leg type.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import opt_einsum
 import torch
 
-from mpsdmrg.ext import Tensor, _expr_cache  # noqa: F401
+from mpsdmrg.ext import _engine
+from mpsdmrg.ext import Tensor  # noqa: F401
+from mpsdmrg.ext import bond_leg, capped_leg, fuse_legs, site_leg  # noqa: F401
 from mpsdmrg.ext import cached_einsum as _engine_einsum
 
-# the guard the DMRG puts around every local update
-
-
 _PLANS: dict[tuple, list] = {}
+
+
+def _clear_caches() -> None:
+    '''
+    Drop every contraction plan this layer and the engine keep.
+    Args:
+      None.
+    Returns:
+      None.
+    '''
+    _PLANS.clear()
+    _engine.clear_caches()
+
+
+# the hook a profiling script calls to drop every cached contraction
+_expr_cache = SimpleNamespace(clear = _clear_caches)
 
 
 def _plan(spec: str, shapes: tuple[tuple[int, ...], ...]) -> list:

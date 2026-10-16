@@ -4,9 +4,9 @@
 #include <pybind11/stl.h>
 
 #include "../symmetry/group/group.h"
-#include "../symmetry/group/abelian.h"
-#include "../symmetry/group/su2.h"
-#include "../symmetry/group/su3.h"
+#include "../symmetry/group/abelian/abelian.h"
+#include "../symmetry/group/su2/su2.h"
+#include "../symmetry/group/su3/su3.h"
 #include "../linalg/linalg.h"
 #include "../tensor/tensor.h"
 

@@ -1,38 +1,48 @@
-'''
+"""
 The multiplet content of a group.
 
-One module per group that carries multiplets, each declaring the ``GROUP`` it answers for; the
-builder of an invariant Hamiltonian asks here for the content of its group, so a further group
-adds a module instead of a branch.
-'''
+One folder per group that carries multiplets, each holding its C++ core and the class that
+answers for it; the builder of an invariant Hamiltonian asks here for the content of its group,
+so a further group adds a folder instead of a branch.
+"""
 from __future__ import annotations
 
-from types import ModuleType
-
 from mpsdmrg.ext import (  # noqa: F401
-    SU2Symmetry, SU3Symmetry, U1Symmetry, ZNSymmetry, AbelianGroup, BraidingStyle,
-    FermionParity, FusionStyle, FusionTree, Group, Leg, NoSymmetry, Sector, dual_sign,
-    fermion_parity, fusion_trees, no_symmetry, stored_dense, su2_symmetry, su3_symmetry,
-    u1_symmetry, z2_symmetry, z3_symmetry, z4_symmetry, z5_symmetry, z6_symmetry,
-    z7_symmetry, z8_symmetry, z9_symmetry)
-from mpsdmrg.symmetry.group import su2, su3
+    BraidingStyle, FusionStyle, Group, Sector, ZNSymmetry,
+    fermion_parity, no_symmetry, su2_symmetry, su3_symmetry,
+    u1_symmetry, z2_symmetry)
+from mpsdmrg.symmetry.group.content import OperatorContent
+from mpsdmrg.symmetry.group.su2 import SU2Content
+from mpsdmrg.symmetry.group.su3 import SU3Content
 
-# the modules that carry a multiplet content, keyed by the type name of their group
-_MODULES = {module.GROUP: module for module in (su2, su3)}
+# the content that answers for a group, keyed by the type name of its group
+_CONTENTS: dict[str, OperatorContent] = {'SU2Symmetry': SU2Content(),
+                                         'SU3Symmetry': SU3Content()}
 
 
-def content(group: Group) -> ModuleType:
+def has_content(group: Group) -> bool:
     '''
-    The module that answers the multiplet questions of a group.
+    Whether the package implements the operator content of a group.
 
     Args:
         group: the symmetry group.
     Returns:
-        The module holding ``tensor_operators`` and ``channel_operators`` for that group.
-    Raises:
-        NotImplementedError: If no module claims the type of the group.
+        True if a content class answers for the type of the group.
     '''
-    module = _MODULES.get(group.type_name)
-    if module is None:
-        raise NotImplementedError(f'The multiplets of {group.group_name} have no module yet.')
-    return module
+    return group.type_name in _CONTENTS
+
+
+def content(group: Group) -> OperatorContent:
+    '''
+    The content that answers how a group acts on the operators of one site.
+
+    Args:
+        group: the symmetry group.
+    Returns:
+        The content holding ``tensor_operators``, ``channel`` and ``placement_phase``.
+    Raises:
+        NotImplementedError: If no content claims the type of the group.
+    '''
+    if not has_content(group):
+        raise NotImplementedError(f'The multiplets of {group.group_name} have no content yet.')
+    return _CONTENTS[group.type_name]

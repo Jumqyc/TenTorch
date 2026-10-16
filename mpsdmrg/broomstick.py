@@ -1,40 +1,31 @@
-"""
-The sweep engine that optimises a state against a Hamiltonian.
-"""
 from __future__ import annotations
 
 import pickle as pkl
-from math import sqrt
 from typing import Literal
 
-import numpy as np
 import torch
 from numpy.typing import NDArray
 
 from base import COMPLEX, CUDA
 from mpsdmrg import linalg
-from mpsdmrg.symmetry.group import Group, Leg, no_symmetry
-from mpsdmrg.tensor import Tensor, cached_einsum
+from mpsdmrg.symmetry.group import Group, no_symmetry
+from mpsdmrg.tensor import Tensor, cached_einsum, site_leg
 
 from mpsdmrg.mps import MPS
 from mpsdmrg.mpo import MPO
-from mpsdmrg.operators import SpinOperator
-
 
 class Broomstick:
     '''
     A 2-site DMRG engine: the Hamiltonian it minimises, the state it optimises, and the
     sweeps that do it.
 
-    The Hamiltonian is built through the engine and the state is filled in afterwards, so a
-    caller never constructs an ``MPO`` or an ``MPS``:
+    The Hamiltonian is built through the engine and the state is filled in by the first sweep,
+    so a caller never constructs an ``MPO`` or an ``MPS``:
 
         stick = Broomstick(L=8, phys_dim=2)
         for i in range(7):
-            stick.add_couplings(('Z', 'Z'), 1.0, (i, i + 1))
-        stick.build()
-        stick.initialize_state(bond_dims=[1] + [4] * 7 + [1])
-        stick.sweep()
+            stick.add_couplings('ZZ', 1.0, (i, i + 1))
+        stick.sweep(num_sweeps=4)
 
     A state or a Hamiltonian built elsewhere is still taken through ``mps`` and ``mpo``.
     '''
@@ -48,7 +39,7 @@ class Broomstick:
                  L: int | None = None,
                  phys_dim: int | None = None,
                  mapping: dict[str, Tensor] | None = None,
-                 group: Group | None = None):
+                 group: Group = no_symmetry):
         '''
         Args:
             mps: the state to optimize; filled in later by ``initialize_state`` if None.
@@ -60,11 +51,15 @@ class Broomstick:
             L: number of sites; from ``mps`` or ``mpo`` if None.
             phys_dim: physical dimension of one site; from ``mps`` or ``mpo`` if None.
             mapping: operator names to their dense tensors, for the Hamiltonian built here.
-            group: symmetry group of the state and of the Hamiltonian; no symmetry if None.
+            group: symmetry group of the state and of the Hamiltonian; ``no_symmetry`` by default.
         Raises:
             ValueError: If no source gives the number of sites or the physical dimension,
                 or if the sources disagree.
         '''
+        if mps is not None and not isinstance(mps, MPS):
+            raise TypeError(f'mps must be an MPS or None, not {type(mps).__name__}.')
+        if mpo is not None and not isinstance(mpo, MPO):
+            raise TypeError(f'mpo must be an MPO or None, not {type(mpo).__name__}.')
         lengths = [value for value in (
             L, None if mps is None else mps.L, None if mpo is None else mpo.L) if value is not None]
         dims = [value for value in (
@@ -86,8 +81,8 @@ class Broomstick:
         self.state: MPS | None = mps
         self.group = group
         self.Hamiltonian = mpo if mpo is not None else MPO(
-            self.L, self.physical_dim, mapping=mapping, dtype=self.dtype, device=self.device)
-        self.Hamiltonian.group = group
+            self.L, self.physical_dim, mapping=mapping, dtype=self.dtype, device=self.device,
+            group=group)
         self.max_bond_dim = max_bond_dim
         self.svd_tol = svd_tol
 
@@ -96,17 +91,38 @@ class Broomstick:
         self.lenv: dict[int, Tensor] = {}
         self._last_energy = None  # cached from the most recent sweep
 
-        if self.state is None and group is not None:
+        if self.state is None:
             self.initialize_state()
 
-    def add_couplings(self, operators: tuple[str, ...], coeff: complex,
-                      locations: NDArray[np.int64] | tuple[int, ...]) -> None:
-        '''Add one coupling to the Hamiltonian, as ``MPO.add_couplings`` does.'''
+    def add_couplings(self, operators: str | tuple[str, ...], coeff: complex,
+                      locations: int | NDArray | tuple[int, ...]) -> None:
+        '''
+        Add one coupling to the Hamiltonian, as ``MPO.add_couplings`` does.
+
+        Args:
+            operators: the operator names, one per location; a single name may be given as a
+                plain string, and a name of several letters is the product of those mapping
+                entries on one site.
+            coeff: the coefficient of the coupling.
+            locations: the site indices the operators act on; one integer for a single site.
+        '''
         self.Hamiltonian.add_couplings(operators, coeff, locations)
+        # the built tensors, the cached environments and the last energy describe the old
+        # Hamiltonian; drop them so the next sweep rebuilds
+        self._last_energy = None
+        self.lenv = {}
+        self.renv = {}
 
     def build(self) -> None:
         '''Build the Hamiltonian tensors from the couplings added so far.'''
         self.Hamiltonian.build()
+
+    def _ensure_built(self) -> None:
+        '''Build the Hamiltonian and fill in the state, so a sweep needs no setup calls.'''
+        if not self.Hamiltonian.tensors:
+            self.build()
+        if self.state is None:
+            self.initialize_state()
 
     def initialize_state(self,
                          bond_dims: list[int] | None = None,
@@ -114,16 +130,15 @@ class Broomstick:
         '''
         Fill in the state to optimize, once the Hamiltonian is built.
 
-        The symmetry layer provides the state whenever it has a default for the group: one
-        singlet tensor per site, whose bond legs carry every sector the physical legs to
-        their left fuse to. The arguments below apply to every other group.
+        A multiplet-carrying group builds its own start state inside ``MPS``; the arguments
+        below apply to every other group.
 
         Args:
             bond_dims: bond dimensions of the state, as in ``MPS``; ``[1]``, the physical
                 dimension on the inner bonds and ``[1]`` if None.
             init_state: the state tensors, as in ``MPS``; random if None.
         '''
-        self.state = MPS.initial(self.group, self.L, self.physical_dim, self.max_bond_dim,
+        self.state = MPS(self.L, self.physical_dim, group=self.group, max_bond_dim=self.max_bond_dim,
                                  bond_dims=bond_dims, init_state=init_state,
                                  dtype=self.dtype, device=self.device)
 
@@ -166,7 +181,7 @@ class Broomstick:
         # of the MPO bond.
         if state.tensors[0].group != no_symmetry:
             group = state.tensors[0].group
-            triv = Leg.trivial(1, group)
+            triv = site_leg(group, 1)
             self.lenv[0] = Tensor.ones(1, 1, 1, legs=(triv, triv.conj(), triv.conj()),
                                        qtotal=group.trivial_sector,
                                        dtype=self.dtype, device=self.device)
@@ -203,6 +218,9 @@ class Broomstick:
             energy_tol: Absolute tolerance on energy density for early stopping.
             patience: Number of consecutive non-improving sweeps before stopping.
         '''
+        if num_sweeps < 1:
+            raise ValueError(f'A sweep needs at least one pass, not {num_sweeps}.')
+        self._ensure_built()
         self.cache_envs()
         state = self._require_state()
         best_E = None
@@ -272,6 +290,7 @@ class Broomstick:
         site index is updated accordingly, and the MPS is left in a canonical
         form at the end of the sweep.
         '''
+        self._ensure_built()
         if not self.lenv or not self.renv:
             self.cache_envs()
         state = self._require_state()
@@ -416,9 +435,11 @@ class Broomstick:
         Energy of the current MPS state from the most recent sweep, or
         computed on-the-fly from the environments if no sweep has been run.
         '''
+        self._ensure_built()
         if self._last_energy is not None:
             return self._last_energy
-        # Fallback: compute from environments (only used before any sweep)
+        # before any sweep the environments are not cached yet; build them for this one read
+        self.cache_envs()
         return float(self._compute_energy().real)
 
     def _compute_energy(self) -> complex:
@@ -447,6 +468,7 @@ class Broomstick:
         Contracts <ψ|H²|ψ> directly without building the H² MPO explicitly,
         keeping memory O(B²·D²) instead of O(D⁴).
         '''
+        self._ensure_built()
         state = self._require_state()
         W = self.Hamiltonian.tensors
         A = state.tensors
@@ -461,6 +483,13 @@ class Broomstick:
         var = float(E2) - float(E.real) ** 2
         return max(var, 0.0)  # clamp numerical noise below zero
     
+    def __repr__(self) -> str:
+        '''A one-line summary: the chain, the bond cap, the group and the last energy.'''
+        group = self.group.group_name
+        energy = '' if self._last_energy is None else f', E = {self._last_energy:.12f}'
+        return (f'Broomstick(L = {self.L}, phys_dim = {self.physical_dim}, '
+                f'max_bond_dim = {self.max_bond_dim}, group = {group}{energy})')
+
     def save_as_pkl(self,filename: str | None = None):
         '''
         Save the current state of the DMRG engine, including the MPS and MPO, to a pickle file.

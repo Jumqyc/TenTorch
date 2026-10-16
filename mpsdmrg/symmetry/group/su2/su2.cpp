@@ -57,6 +57,11 @@ double SU2Symmetry::dual_sign(const Sector& sector) const {
   return dual_sector(sector) == sector && (sector_dim(sector) - 1) % 2 != 0 ? -1.0 : 1.0;
 }
 
+double SU2Symmetry::dual_phase(const Sector& sector) const {
+  // the phase the conjugate component carries: (-1)^spin
+  return (sector.at(0) / 2) % 2 == 0 ? 1.0 : -1.0;
+}
+
 Sector SU2Symmetry::sector_of_dimension(int64_t dim) const {
   if (dim < 1) {
     throw value_error("A spin multiplet has a positive dimension, not " + std::to_string(dim) +
@@ -99,13 +104,6 @@ at::Tensor SU2Symmetry::duality_matrix(const Sector& a, const c10::Device& devic
 }
 
 void bind_su2(py::module_& m) {
-  m.def("fusion_tensor", &sym::su2::fusion_tensor, "Clebsch-Gordan tensor of one SU(2) vertex",
-        py::arg("j1"), py::arg("j2"), py::arg("j3"), py::arg("device"));
-  m.def("fusion_table", &sym::su2::fusion_table, "Clebsch-Gordan tensors of one SU(2) pair",
-        py::arg("j1"), py::arg("j2"), py::arg("device"));
-  m.def("recoupling", &sym::su2::recoupling,
-        "the overlap of the two coupling schemes of three SU(2) spins",
-        py::arg("j1"), py::arg("j2"), py::arg("j3"), py::arg("j4"));
   py::class_<sym::SU2Symmetry, sym::Group, std::shared_ptr<sym::SU2Symmetry>>(
       m, "SU2Symmetry")
       .def(py::init<>());

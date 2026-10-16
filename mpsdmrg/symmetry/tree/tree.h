@@ -11,8 +11,8 @@
 #include <vector>
 
 #include "../group/group.h"
-#include "../group/abelian.h"
-#include "../group/su2.h"
+#include "../group/abelian/abelian.h"
+#include "../group/su2/su2.h"
 // The charge-adapted legs and fusion trees of the engine: the block structure of a leg, the
 // tree that fixes how its sectors fuse, and the dense Clebsch-Gordan expansion of a tree.
 #pragma once
@@ -184,6 +184,15 @@ std::string sector_repr(const Sector& sector);
 std::string sectors_repr(const std::vector<Sector>& sectors);
 
 // Bind the names of this module to python.
+// The shape algebra a model layer needs without naming a leg: the leg of a bare dimension,
+// a bond leg from (sector, dimension) entries, the fusion of two legs, and a leg capped to
+// the largest dimension that fits.
+Leg site_leg(const std::shared_ptr<Group>& group, int64_t dim, int64_t qconj = 1);
+Leg bond_leg(const std::shared_ptr<Group>& group,
+             std::vector<std::pair<Sector, int64_t>> entries, int64_t qconj = 1);
+Leg fuse_legs(const Leg& first, const Leg& second);
+Leg capped_leg(const Leg& leg, int64_t max_dim);
+
 void bind_tree(py::module_& m);
 
 }  // namespace sym

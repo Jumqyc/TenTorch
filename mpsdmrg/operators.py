@@ -11,6 +11,10 @@ class SpinOperator:
     '''
     The three spin components of one site, as one dense tensor of shape ``(3, d, d)``.
 
+    Entry 0, 1, 2 are :math:`S_x`, :math:`S_y`, :math:`S_z` with the spin normalization
+    :math:`S_z = \\mathrm{diag}(S, S - 1, \\ldots, -S)`, so a coupling built from these operators
+    is the spin Hamiltonian, not the Pauli one.
+
     Args:
         phys_dim: physical dimension of the site, :math:`2S + 1`.
         dtype, device: data type and device of the operators.
@@ -32,7 +36,8 @@ class SpinOperator:
         self.phys_dim = phys_dim
 
     def __repr__(self):
-        if self.phys_dim % 2 == 0:
-            return f"Spin {self.phys_dim//2} operator"
-        else:
-            return f"Spin {self.phys_dim}/2 operator"
+        '''Name the spin the operators describe, :math:`S = (d - 1) / 2`.'''
+        half = self.phys_dim - 1
+        if half % 2 == 0:
+            return f"Spin {half // 2} operator"
+        return f"Spin {half}/2 operator"

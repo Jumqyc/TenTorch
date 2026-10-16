@@ -51,6 +51,10 @@ double Group::dual_sign(const Sector&) const {
   return 1.0;
 }
 
+double Group::dual_phase(const Sector&) const {
+  return 1.0;
+}
+
 Sector Group::sector_of_dimension(int64_t) const {
   throw not_implemented_error("Group " + group_name_ + " does not name a sector by its dimension.");
 }
@@ -106,15 +110,7 @@ void bind_group(py::module_& m) {
       })
       .def_property_readonly("type_name", &sym::Group::type_name)
       .def_property_readonly("group_name", &sym::Group::group_name)
-      .def_property_readonly("num_sectors", [](const sym::Group& self) -> py::object {
-        if (std::isinf(self.num_sectors())) {
-          return py::float_(self.num_sectors());
-        }
-        return py::int_(static_cast<int64_t>(self.num_sectors()));
-      })
-      .def_property_readonly("sector_ind_len", &sym::Group::sector_ind_len)
       .def_property_readonly("is_abelian", &sym::Group::is_abelian)
-      .def("is_valid_sector", &sym::Group::is_valid_sector, py::arg("a"))
       .def("dual_sector", [](const sym::Group& self, const sym::Sector& a) {
         return sym::to_python(self.dual_sector(a));
       }, py::arg("a"))
@@ -123,7 +119,6 @@ void bind_group(py::module_& m) {
              return sym::to_python(self.fusion_outcomes(a, b));
            }, py::arg("a"), py::arg("b"))
       .def("sector_dim", &sym::Group::sector_dim, py::arg("a"))
-      .def("is_same_symmetry", &sym::Group::is_same_symmetry, py::arg("other"))
       .def("fuse", [](const sym::Group& self, py::args sectors) {
         std::vector<sym::Sector> parsed;
         parsed.reserve(sectors.size());
@@ -132,37 +127,27 @@ void bind_group(py::module_& m) {
         }
         return sym::to_python(self.fuse(parsed));
       })
-      .def("can_fuse_to", &sym::Group::can_fuse_to, py::arg("a"), py::arg("b"), py::arg("c"))
-      .def("n_symbol", &sym::Group::n_symbol, py::arg("a"), py::arg("b"), py::arg("c"))
       .def("fusion_tensor",
            [](const sym::Group& self, const sym::Sector& a, const sym::Sector& b,
               const sym::Sector& c, const c10::Device& device, int64_t copy) {
              return self.fusion_tensor(a, b, c, device, copy);
            }, py::arg("a"), py::arg("b"), py::arg("c"), py::arg("device"), py::arg("copy") = 0)
-      .def("all_sectors", [](const sym::Group& self) {
-        if (std::isinf(self.num_sectors())) {
-          throw sym::value_error("Group " + self.group_name() +
-                                     " has infinitely many sectors.");
-        }
-        return sym::to_python(self.all_sectors());
-      })
       .def("sector_of_dimension",
            [](const sym::Group& self, int64_t dim) {
              return sym::to_python(self.sector_of_dimension(dim));
            }, py::arg("dim"))
-      .def("fusion_dtype", [](const sym::Group& self) { return self.fusion_dtype(); })
-      .def("reference_index",
-           [](const sym::Group& self, const sym::Sector& sector) {
-             return self.reference_index(sector);
-           }, py::arg("sector"))
-      .def("duality_matrix",
-           [](const sym::Group& self, const sym::Sector& sector,
-              const c10::Device& device) { return self.duality_matrix(sector, device); },
-           py::arg("sector"), py::arg("device"))
       .def("invariant_form",
            [](const sym::Group& self, const sym::Sector& sector,
               const c10::Device& device) { return self.invariant_form(sector, device); },
            py::arg("sector"), py::arg("device"))
+      .def("dual_phase",
+           [](const sym::Group& self, const sym::Sector& sector) {
+             return self.dual_phase(sector);
+           }, py::arg("sector"))
+      .def("dual_sign",
+           [](const sym::Group& self, const sym::Sector& sector) {
+             return self.dual_sign(sector);
+           }, py::arg("sector"))
       .def("__eq__", [](const sym::Group& self, const py::object& other) -> py::object {
         if (!py::isinstance<sym::Group>(other)) {
           return py::reinterpret_borrow<py::object>(Py_NotImplemented);

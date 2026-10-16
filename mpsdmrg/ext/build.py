@@ -1,16 +1,3 @@
-'''
-Build the C++ symmetry engine of ``mpsdmrg``.
-
-    PYTHONPATH=. .venv/bin/python -u mpsdmrg/ext/build.py [--jobs 1] [--force]
-
-The compiled module is written to ``mpsdmrg/ext/build/symmetry_ext.so``, which
-``mpsdmrg/ext/__init__.py`` imports directly.  Ninja drives the build
-(``python -m pip install ninja``).  ``pch.h`` is precompiled first and every C++ unit includes
-it, which cuts a unit from ~22 s / 1.9 GiB to ~16 s / 1.8 GiB; the units are then compiled
-``--jobs`` at a time (one by default) and linked once.  A parallel build of these
-template-heavy units peaks near 13 GiB and has frozen this 7.6 GiB box, so the script refuses
-to start when the host memory is short and never exceeds two jobs.
-'''
 import argparse
 import glob
 import os
@@ -25,9 +12,9 @@ BUILD_DIR = os.path.join(HERE, 'build')
 LIBRARY = os.path.join(BUILD_DIR, 'symmetry_ext.so')
 SOURCES = (os.path.join(HERE, 'bindings.cpp'),
            os.path.join(HERE, '..', 'symmetry', 'group', 'group.cpp'),
-           os.path.join(HERE, '..', 'symmetry', 'group', 'abelian.cpp'),
-           os.path.join(HERE, '..', 'symmetry', 'group', 'su2.cpp'),
-           os.path.join(HERE, '..', 'symmetry', 'group', 'su3.cpp'),
+           os.path.join(HERE, '..', 'symmetry', 'group', 'abelian', 'abelian.cpp'),
+           os.path.join(HERE, '..', 'symmetry', 'group', 'su2', 'su2.cpp'),
+           os.path.join(HERE, '..', 'symmetry', 'group', 'su3', 'su3.cpp'),
            os.path.join(HERE, '..', 'symmetry', 'tree', 'tree.cpp'),
            os.path.join(HERE, '..', 'tensor', 'tensor.cpp'),
            os.path.join(HERE, '..', 'linalg', 'linalg.cpp'))
@@ -97,13 +84,16 @@ def main() -> int:
     parser.add_argument('--verbose', action='store_true', help='show the compiler output')
     parser.add_argument('--force', action='store_true', help='rebuild every unit')
     parser.add_argument('--jobs', type=int, default=1, help='units compiled at once, 1 or 2')
+    parser.add_argument('--gib-per-job', type=float, default=GIB_PER_JOB,
+                        help=f'host memory one unit may need, in GiB (default {GIB_PER_JOB})')
     arguments = parser.parse_args()
 
     free = available_gib()
-    needed = GIB_PER_JOB * arguments.jobs
+    needed = arguments.gib_per_job * arguments.jobs
     if free < needed:
         print(f'{free:.1f} GiB of host memory available but {arguments.jobs} job(s) need '
-              f'{needed:.1f} GiB; free some memory or lower --jobs', file=sys.stderr)
+              f'{needed:.1f} GiB; free some memory, lower --jobs or lower --gib-per-job',
+              file=sys.stderr)
         return 1
     if arguments.jobs > 2:
         print('at most 2 jobs: a unit peaks near 2.5 GiB', file=sys.stderr)
@@ -131,6 +121,8 @@ def main() -> int:
         extra_cflags = ['-O3', '-include', PCH],
         build_directory = BUILD_DIR,
         verbose = arguments.verbose)
+    # the loader treats this script as an input, so a successful build has to stamp the library
+    os.utime(LIBRARY)
     print('built:', module.__file__, flush=True)
     return 0
 

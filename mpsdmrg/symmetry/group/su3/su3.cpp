@@ -395,6 +395,11 @@ double SU3Symmetry::dual_sign(const Sector&) const {
   return 1.0;
 }
 
+double SU3Symmetry::dual_phase(const Sector& sector) const {
+  // the phase the conjugate component carries: (-1)^(p + q)
+  return (sector.at(0) + sector.at(1)) % 2 == 0 ? 1.0 : -1.0;
+}
+
 Sector SU3Symmetry::sector_of_dimension(int64_t dim) const {
   for (int64_t q = 0; q <= dim; ++q) {
     for (int64_t p = 0; p <= dim; ++p) {
@@ -420,40 +425,6 @@ void bind_su3(py::module_& m) {
       m, "SU3Symmetry")
       .def(py::init<>());
   m.attr("su3_symmetry") = py::cast(sym::su3_symmetry());
-  m.def("su3_dimension", [](const sym::Sector& sector) { return sym::su3::dimension(sector); },
-        "dimension of an SU(3) sector", py::arg("sector"));
-  m.def("su3_casimir", [](const sym::Sector& sector) { return sym::su3::casimir(sector); },
-        "quadratic Casimir of an SU(3) sector", py::arg("sector"));
-  m.def("su3_fusion",
-        [](const sym::Sector& first, const sym::Sector& second) {
-          // the keys are tuples so that Python can use them the way it uses a sector
-          py::dict outcomes;
-          for (const auto& [sector, multiplicity] : sym::su3::fusion(first, second)) {
-            outcomes[sym::to_python(sector)] = multiplicity;
-          }
-          return outcomes;
-        },
-        "Littlewood-Richardson outcomes of two SU(3) sectors", py::arg("first"), py::arg("second"));
-  m.def("su3_clebsch",
-        [](const sym::Sector& first, const sym::Sector& second,
-           const sym::Sector& third, const c10::Device& device) {
-          return sym::su3::clebsch(first, second, third, device);
-        },
-        "invariant coupling of three SU(3) sectors", py::arg("first"), py::arg("second"),
-        py::arg("third"), py::arg("device"));
-  m.def("su3_clebsch_copies",
-        [](const sym::Sector& first, const sym::Sector& second,
-           const sym::Sector& third, const c10::Device& device) {
-          return sym::su3::clebsch_copies(first, second, third, device);
-        },
-        "the invariant couplings of three SU(3) sectors, one per multiplicity",
-        py::arg("first"), py::arg("second"), py::arg("third"), py::arg("device"));
-  m.def("su3_metric",
-        [](const sym::Sector& sector, const c10::Device& device) {
-          return sym::su3::metric(sector, device);
-        },
-        "invariant form of an SU(3) sector with its conjugate", py::arg("sector"),
-        py::arg("device"));
 }
 
 }  // namespace sym

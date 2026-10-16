@@ -93,6 +93,7 @@ class Group {
   virtual Sector sector_of_dimension(int64_t dim) const;
   // The sign that conjugating a leg in this sector costs; it is the Frobenius-Schur indicator.
   virtual double dual_sign(const Sector& sector) const;
+  virtual double dual_phase(const Sector& sector) const;
   // The conjugate basis of a sector against its own basis: entry (row, column) maps the
   // column index of the leg onto the row index of the leg that stores its dual.
   virtual at::Tensor duality_matrix(const Sector& a, const c10::Device& device) const;
@@ -118,6 +119,17 @@ class AbelianGroup : public Group {
 
   // Every sector of an abelian group has quantum dimension one.
   int64_t sector_dim(const Sector& a) const override;
+
+  // The fusion of an abelian group has one outcome, so its Clebsch-Gordan vertex is one
+  // whenever the sectors fuse and does not exist otherwise.
+  at::Tensor fusion_tensor(const Sector& a, const Sector& b, const Sector& c,
+                           const c10::Device& device, int64_t copy = 0) const override;
+  c10::ScalarType fusion_dtype() const override;
+
+  // A one-dimensional sector needs no basis conversion, and its invariant form is the
+  // one-by-one identity: the abelian vertex already carries the pairing.
+  at::Tensor duality_matrix(const Sector& a, const c10::Device& device) const override;
+  at::Tensor invariant_form(const Sector& a, const c10::Device& device) const override;
 };
 
 const std::shared_ptr<Group>& no_symmetry();

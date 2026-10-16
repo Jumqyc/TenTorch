@@ -7,8 +7,8 @@
 #include <utility>
 
 
-#include "../group/abelian.h"
-#include "../group/su2.h"
+#include "../group/abelian/abelian.h"
+#include "../group/su2/su2.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -452,7 +452,42 @@ at::Tensor stored_dense(const std::vector<Leg>& legs, const FusionTree& tree,
 namespace sym {
 
 // Bind the ``tree`` names of this module to python.
+Leg site_leg(const std::shared_ptr<Group>& group, int64_t dim, int64_t qconj) {
+  // an abelian group has one charge, so a leg of dimension d is d copies of it; a non-abelian
+  // group names the sector whose multiplet is d-dimensional
+  if (group->is_abelian()) return Leg::trivial(dim, group, qconj);
+  return Leg(group, {group->sector_of_dimension(dim)}, {0, dim}, qconj);
+}
+
+Leg bond_leg(const std::shared_ptr<Group>& group, std::vector<std::pair<Sector, int64_t>> entries,
+             int64_t qconj) {
+  return Leg::from_blocks(group, std::move(entries), qconj).first;
+}
+
+Leg fuse_legs(const Leg& first, const Leg& second) { return first.fuse(second); }
+
+Leg capped_leg(const Leg& leg, int64_t max_dim) {
+  if (leg.dim() <= max_dim) return leg;
+  const std::shared_ptr<Group>& group = leg.group();
+  std::vector<std::pair<Sector, int64_t>> entries;
+  int64_t total = 0;
+  for (int64_t qi = 0; qi < leg.nblocks(); ++qi) {
+    const Sector& sector = leg.sectors().at(qi);
+    const int64_t room = (max_dim - total) / group->sector_dim(sector);
+    const int64_t keep = std::min(leg.multiplicity(qi), room);
+    if (keep > 0) {
+      entries.emplace_back(sector, keep * group->sector_dim(sector));
+      total += keep * group->sector_dim(sector);
+    }
+  }
+  return Leg::from_blocks(group, std::move(entries), leg.qconj()).first;
+}
+
 void bind_tree(py::module_& m) {
+    m.def("site_leg", &sym::site_leg, py::arg("group"), py::arg("dim"), py::arg("qconj") = 1);
+    m.def("bond_leg", &sym::bond_leg, py::arg("group"), py::arg("entries"), py::arg("qconj") = 1);
+    m.def("fuse_legs", &sym::fuse_legs, py::arg("first"), py::arg("second"));
+    m.def("capped_leg", &sym::capped_leg, py::arg("leg"), py::arg("max_dim"));
     py::class_<sym::Leg, std::shared_ptr<sym::Leg>>(m, "Leg")
         .def(py::init<std::shared_ptr<sym::Group>, std::vector<sym::Sector>,
                       std::vector<int64_t>, int64_t>(),
@@ -482,7 +517,6 @@ void bind_tree(py::module_& m) {
                return sym::to_python(leg.sector(qi, dual));
              },
              py::arg("qi"), py::arg("dual") = false)
-        .def("block_dim", &sym::Leg::block_dim, py::arg("qi"))
         .def("multiplicity", &sym::Leg::multiplicity, py::arg("qi"))
         .def("fuse", &sym::Leg::fuse, py::arg("other"))
         .def("conj", &sym::Leg::conj)
@@ -501,72 +535,6 @@ void bind_tree(py::module_& m) {
                                                py::cast(self.slices()), self.qconj()));
         }, "the constructor arguments, so that a leg survives a pickle round trip");
 
-    py::class_<sym::FusionTree, std::shared_ptr<sym::FusionTree>>(m, "FusionTree")
-        .def(py::init<std::shared_ptr<sym::Group>, std::vector<sym::Sector>,
-                      std::vector<sym::Sector>, sym::Sector>(),
-             py::arg("group"), py::arg("sectors"), py::arg("inner"), py::arg("coupled"))
-        .def_static(
-            "from_blocks",
-            [](const std::shared_ptr<sym::Group>& group, const std::vector<sym::Leg>& legs,
-               const py::tuple& qdata, const sym::Sector& qtotal) {
-              sym::BlockKey key;
-              const int64_t n = static_cast<int64_t>(legs.size());
-              const int64_t inner_count = n > 2 ? n - 2 : 0;
-              for (py::size_t i = 0; i < qdata.size(); ++i) {
-                const int64_t position = static_cast<int64_t>(i);
-                if (position < n) {
-                  key.legs.push_back(qdata[i].cast<int64_t>());
-                } else if (position < n + inner_count) {
-                  key.inner.push_back(qdata[i].cast<sym::Sector>());
-                } else {
-                  key.copies.push_back(qdata[i].cast<int64_t>());
-                }
-              }
-              return sym::FusionTree::from_blocks(group, legs, key, qtotal);
-            },
-            py::arg("group"), py::arg("legs"), py::arg("qdata"), py::arg("qtotal"))
-        .def_property_readonly("group", &sym::FusionTree::group)
-        .def_property_readonly("sectors", [](const sym::FusionTree& tree) {
-          return sym::to_python(tree.sectors());
-        })
-        .def_property_readonly("inner", [](const sym::FusionTree& tree) {
-          return sym::to_python(tree.inner());
-        })
-        .def_property_readonly("coupled", [](const sym::FusionTree& tree) {
-          return sym::to_python(tree.coupled());
-        })
-        .def_property_readonly("copies", [](const sym::FusionTree& tree) {
-          return py::tuple(py::cast(tree.copies()));
-        })
-        .def_property_readonly("chain", [](const sym::FusionTree& tree) {
-          return sym::to_python(tree.chain());
-        })
-        .def("to_dense_block", &sym::FusionTree::to_dense_block, py::arg("device"))
-        .def("__eq__",
-             [](const sym::FusionTree& tree, py::object other) -> py::object {
-               if (!py::isinstance<sym::FusionTree>(other)) {
-                 return py::reinterpret_borrow<py::object>(Py_NotImplemented);
-               }
-               return py::cast(tree == other.cast<const sym::FusionTree&>());
-             })
-        .def("__hash__", &sym::FusionTree::hash)
-        .def("__repr__", &sym::FusionTree::repr)
-        .def("__reduce__", [](const sym::FusionTree& self) {
-          return py::make_tuple(py::type::of<sym::FusionTree>(),
-                                py::make_tuple(self.group(), sym::to_python(self.sectors()),
-                                               sym::to_python(self.inner()),
-                                               sym::to_python(self.coupled())));
-        }, "the constructor arguments, so that a tree survives a pickle round trip");
-
-    m.def("fusion_trees",
-          [](const std::shared_ptr<sym::Group>& group,
-             const std::vector<sym::Sector>& sectors, const sym::Sector& coupled) {
-            return py::tuple(py::cast(sym::fusion_trees(group, sectors, coupled)));
-          },
-          py::arg("group"), py::arg("sectors"), py::arg("coupled"));
-    m.def("dual_sign", &sym::dual_sign, py::arg("group"), py::arg("sector"));
-    m.def("stored_dense", &sym::stored_dense, py::arg("legs"), py::arg("tree"),
-          py::arg("device"));
 }
 
 }  // namespace sym

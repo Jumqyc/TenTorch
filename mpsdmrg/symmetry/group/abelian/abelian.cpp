@@ -33,6 +33,26 @@ int64_t AbelianGroup::sector_dim(const Sector&) const {
   return 1;
 }
 
+at::Tensor AbelianGroup::fusion_tensor(const Sector& a, const Sector& b, const Sector& c,
+                                       const c10::Device& device, int64_t copy) const {
+  if (!can_fuse_to(a, b, c)) {
+    throw value_error("The sectors do not fuse to the requested one.");
+  }
+  return at::ones({1, 1, 1}, at::TensorOptions().dtype(fusion_dtype()).device(device));
+}
+
+at::Tensor AbelianGroup::duality_matrix(const Sector&, const c10::Device& device) const {
+  return at::ones({1, 1}, at::TensorOptions().dtype(fusion_dtype()).device(device));
+}
+
+at::Tensor AbelianGroup::invariant_form(const Sector&, const c10::Device& device) const {
+  return at::ones({1, 1}, at::TensorOptions().dtype(fusion_dtype()).device(device));
+}
+
+c10::ScalarType AbelianGroup::fusion_dtype() const {
+  return at::kDouble;
+}
+
 NoSymmetry::NoSymmetry() : AbelianGroup("NoSymmetry", {0}, "NoSymmetry", 1) {}
 
 bool NoSymmetry::is_valid_sector(const Sector& a) const {
@@ -167,18 +187,10 @@ void bind_abelian(py::module_& m) {
       .def(py::init<>());
   py::class_<sym::ZNSymmetry, sym::AbelianGroup, std::shared_ptr<sym::ZNSymmetry>>(
       m, "ZNSymmetry")
-      .def(py::init<int64_t>(), py::arg("N"))
-      .def_property_readonly("N", &sym::ZNSymmetry::modulus);
+      .def(py::init<int64_t>(), py::arg("N"));
   m.attr("no_symmetry") = py::cast(sym::no_symmetry());
   m.attr("u1_symmetry") = py::cast(sym::u1_symmetry());
   m.attr("z2_symmetry") = py::cast(sym::z_n_symmetry(2));
-  m.attr("z3_symmetry") = py::cast(sym::z_n_symmetry(3));
-  m.attr("z4_symmetry") = py::cast(sym::z_n_symmetry(4));
-  m.attr("z5_symmetry") = py::cast(sym::z_n_symmetry(5));
-  m.attr("z6_symmetry") = py::cast(sym::z_n_symmetry(6));
-  m.attr("z7_symmetry") = py::cast(sym::z_n_symmetry(7));
-  m.attr("z8_symmetry") = py::cast(sym::z_n_symmetry(8));
-  m.attr("z9_symmetry") = py::cast(sym::z_n_symmetry(9));
   m.attr("fermion_parity") = py::cast(sym::fermion_parity());
 }
 

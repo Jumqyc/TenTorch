@@ -1,9 +1,11 @@
 .venv/
+.vscode/
 __pycache__/
+
+test/
+audit/
+build/
 profiling/
 tmp/
-build/
-FreeFermion/cuda/build/
-.vscode/
+
 *h.gch
-test/

@@ -52,6 +52,8 @@ else:
         extra_cflags = ['-O3', '-include', PCH],
         build_directory = BUILD_DIR,
         verbose = False)
+    # this module is an input of its own freshness check, so a fresh build has to stamp the library
+    os.utime(LIBRARY)
 
 # the engine allocates a fresh block buffer with the project's device and dtype
 _extension.set_defaults(str(CUDA), str(COMPLEX))
@@ -59,61 +61,41 @@ _extension.set_defaults(str(CUDA), str(COMPLEX))
 # the engine classes are pickled by name, so the module around them has to stay importable
 sys.modules.setdefault('symmetry_ext', _extension)
 
-# the public names of the engine, re-exported so ``mpsdmrg.symmetry`` can import them
+# the raw extension: the engine's own layers and the contract checks reach the names that are
+# not part of the public surface through it, so the surface below stays what a user needs
+_engine = _extension
+
+# the public surface of the engine
 Sector = tuple[int, ...]
 """One sector label: one integer per conserved charge of the group."""
 
-AbelianGroup = _extension.AbelianGroup
 BraidingStyle = _extension.BraidingStyle
-FermionParity = _extension.FermionParity
 FusionStyle = _extension.FusionStyle
-FusionTree = _extension.FusionTree
 Group = _extension.Group
-Leg = _extension.Leg
-NoSymmetry = _extension.NoSymmetry
-SU2Symmetry = _extension.SU2Symmetry
-SU3Symmetry = _extension.SU3Symmetry
 Tensor = _extension.Tensor
-U1Symmetry = _extension.U1Symmetry
+bond_leg = _extension.bond_leg
+capped_leg = _extension.capped_leg
+fuse_legs = _extension.fuse_legs
+site_leg = _extension.site_leg
 ZNSymmetry = _extension.ZNSymmetry
 cached_einsum = _extension.cached_einsum
-clear_caches = _extension.clear_caches
-dual_sign = _extension.dual_sign
 fermion_parity = _extension.fermion_parity
-fusion_table = _extension.fusion_table
-fusion_tensor = _extension.fusion_tensor
-fusion_trees = _extension.fusion_trees
 inner = _extension.inner
 no_symmetry = _extension.no_symmetry
 norm = _extension.norm
 qr = _extension.qr
-recoupling = _extension.recoupling
 rq = _extension.rq
-stored_dense = _extension.stored_dense
 su2_symmetry = _extension.su2_symmetry
-su3_casimir = _extension.su3_casimir
-su3_clebsch = _extension.su3_clebsch
-su3_clebsch_copies = _extension.su3_clebsch_copies
-su3_dimension = _extension.su3_dimension
-su3_fusion = _extension.su3_fusion
-su3_metric = _extension.su3_metric
 su3_symmetry = _extension.su3_symmetry
 svd = _extension.svd
 svdvals = _extension.svdvals
 trace = _extension.trace
 u1_symmetry = _extension.u1_symmetry
 z2_symmetry = _extension.z2_symmetry
-z3_symmetry = _extension.z3_symmetry
-z4_symmetry = _extension.z4_symmetry
-z5_symmetry = _extension.z5_symmetry
-z6_symmetry = _extension.z6_symmetry
-z7_symmetry = _extension.z7_symmetry
-z8_symmetry = _extension.z8_symmetry
-z9_symmetry = _extension.z9_symmetry
 
 # ``mpsdmrg.tensor`` refers to ``_expr_cache`` by name to drop the contraction plans; the engine
 # keeps its plans inside the extension, so the name drops every cache the engine keeps.
-_expr_cache = SimpleNamespace(clear = clear_caches)
+_expr_cache = SimpleNamespace(clear = _extension.clear_caches)
 
 
 def _restore_group(group_name: str) -> Group:
@@ -129,6 +111,9 @@ def _restore_group(group_name: str) -> Group:
     '''
     if group_name.startswith('Z') and group_name[1:].isdigit():
         modulus = int(group_name[1:])
-        return globals().get(f'z{modulus}_symmetry') or ZNSymmetry(modulus)
-    return {'NoSymmetry': no_symmetry, 'U(1)': u1_symmetry, 'SU(2)': su2_symmetry,
-            'FermionParity': fermion_parity}[group_name]
+        return getattr(_extension, f'z{modulus}_symmetry', None) or ZNSymmetry(modulus)
+    singletons = {'NoSymmetry': no_symmetry, 'U(1)': u1_symmetry, 'SU(2)': su2_symmetry,
+                  'SU(3)': su3_symmetry, 'FermionParity': fermion_parity}
+    if group_name not in singletons:
+        raise ValueError(f'No group of the engine is named {group_name!r}.')
+    return singletons[group_name]

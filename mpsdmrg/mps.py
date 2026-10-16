@@ -11,105 +11,8 @@ import torch
 from base import COMPLEX, CUDA
 from mpsdmrg import linalg
 from mpsdmrg.mpo import MPO
-from mpsdmrg.symmetry.group import Group, Leg
-from mpsdmrg.tensor import Tensor, cached_einsum
-
-def cap_leg(group: Group, leg: Leg, max_dim: int) -> Leg:
-    '''
-    The leg cut down to at most ``max_dim`` states, keeping the lowest sectors.
-
-    Args:
-        group: the symmetry group of the leg.
-        leg: the leg to cap, as returned by ``Leg.fuse``; its sectors are ordered by
-            increasing charge, so the low-energy multiplets are the ones kept.
-        max_dim: the largest dimension to keep; a leg that already fits is returned.
-    Returns:
-        A leg with the sectors of ``leg`` in the same order, each keeping as many of its
-        copies as fit below ``max_dim``, and the same orientation.
-    '''
-    if leg.dim <= max_dim:
-        return leg
-    entries: list[tuple[tuple[int, ...], int]] = []
-    total = 0
-    for qi in range(leg.nblocks):
-        room = (max_dim - total) // group.sector_dim(leg.sectors[qi])
-        keep = min(leg.multiplicity(qi), room)
-        if keep:
-            size = keep * group.sector_dim(leg.sectors[qi])
-            entries.append((leg.sectors[qi], size))
-            total += size
-    return Leg.from_blocks(group, entries, leg.qconj)[0]
-
-
-def invariant_state(group: Group, length: int, phys_dim: int, max_bond_dim: int,
-                    dtype: torch.dtype = COMPLEX, device: torch.device = CUDA,
-                    ) -> tuple[list[Tensor], list[int]]:
-    '''
-    One singlet tensor per site of a chain with a symmetry group.
-
-    The physical leg carries the sector of dimension ``phys_dim``, every tensor fuses its
-    two bond legs and the physical leg to the trivial sector, and each bond carries every
-    sector the physical legs to its left fuse to, capped at ``max_bond_dim``, so the state
-    is a singlet and the sweep starts from a bond dimension it can afford.
-
-    Args:
-        group: the symmetry group of the chain.
-        length: number of sites.
-        phys_dim: dimension of one physical leg.
-        max_bond_dim: largest bond dimension of the initial state.
-        dtype: dtype of the tensors.
-        device: device of the tensors.
-    Returns:
-        The tensors and the dimension of every bond, left boundary first.
-    Raises:
-        ValueError: If the chain of physical legs cannot close to the trivial sector, which
-            is what an odd spin-1/2 chain and a spin-1 chain of a length that is not a
-            multiple of three do.
-    '''
-    phys = Leg(group, (group.sector_of_dimension(phys_dim),), (0, phys_dim), qconj=1)
-    bonds = [Leg.trivial(1, group)]
-    for _ in range(length - 1):
-        bonds.append(cap_leg(group, bonds[-1].fuse(phys), max_bond_dim))
-    if not any(tuple(group.trivial_sector) in group.fusion_outcomes(sector, phys.sectors[0])
-               for sector in bonds[-1].sectors):
-        raise ValueError(
-            f'A bond of {bonds[-1].dim} states cannot close {length} sites of dimension '
-            f'{phys_dim} to the trivial sector of {group.group_name}.')
-    bonds.append(Leg.trivial(1, group))
-    tensors = [Tensor.rand((bonds[i].dim, phys.dim, bonds[i + 1].dim),
-                           legs=(bonds[i], phys, bonds[i + 1].conj()),
-                           qtotal=group.trivial_sector,
-                           dtype=dtype, device=device) for i in range(length)]
-    return tensors, [bond.dim for bond in bonds]
-
-
-def initial_state(group: Group | None, length: int, phys_dim: int, max_bond_dim: int,
-                  dtype: torch.dtype = COMPLEX, device: torch.device = CUDA,
-                  ) -> tuple[list[Tensor], list[int]] | None:
-    '''
-    The default state of a chain, or None when the caller has to supply one.
-
-    A group whose charges fuse in more than one way gets the invariant singlet of
-    :func:`invariant_state`; an abelian group and no group at all get nothing, because the
-    bond charges of such a chain belong to the model rather than to the symmetry.
-
-    Args:
-        group: the symmetry group of the chain, or None for no symmetry.
-        length: number of sites.
-        phys_dim: dimension of one physical leg.
-        max_bond_dim: largest bond dimension of the initial state.
-        dtype: dtype of the tensors.
-        device: device of the tensors.
-    Returns:
-        ``(tensors, bond_dims)`` of one singlet tensor per site, or None when the group has
-        no default state.
-    Raises:
-        ValueError: If the chain of physical legs cannot close to the trivial sector.
-    '''
-    if group is None or group.is_abelian:
-        return None
-    return invariant_state(group, length, phys_dim, max_bond_dim, dtype, device)
-
+from mpsdmrg.symmetry.group import Group, has_content, no_symmetry
+from mpsdmrg.tensor import Tensor, cached_einsum, capped_leg, fuse_legs, site_leg
 
 class MPS:
     '''
@@ -121,7 +24,10 @@ class MPS:
                  bond_dims:list[int]|None = None,
                  init_state:list[Tensor]|None = None,
                  dtype = COMPLEX,
-                 device = CUDA):
+                 device = CUDA,
+                 *,
+                 group: Group = no_symmetry,
+                 max_bond_dim: int | None = None):
         '''
         Args:
             L (int): Length of the MPS (number of sites).
@@ -130,9 +36,40 @@ class MPS:
             init_state (list[Tensor] | None): Optional initial state for the MPS. If None, random tensors will be generated.
             dtype: data type of the MPS tensors (default: COMPLEX).
             device: device that stores the MPS tensors (default: CUDA).
+            group: the symmetry group of the chain, ``no_symmetry`` by default.  A group whose
+                operator content is
+                implemented builds its own start state -- one singlet tensor per site, whose
+                bond legs carry every sector the physical legs to their left fuse to, capped
+                at ``max_bond_dim`` -- and ignores ``bond_dims`` and ``init_state``.
+            init_state: kept as a copy of the caller's list; the tensors themselves are
+                canonicalized in place, so the caller's tensors are left as they were only
+                when the constructor does not rebuild them.
+            max_bond_dim: largest bond dimension of that invariant start state.
         Raises:
-            ValueError: If the length of bond_dims does not match L+1.
+            ValueError: If the length of bond_dims does not match L+1, or if a
+                multiplet-carrying group is given without a bond cap.
         '''
+        if init_state is None and has_content(group):
+            if max_bond_dim is None:
+                raise ValueError(f'{group.group_name} builds its own start state and needs a bond cap.')
+            # one singlet tensor per site: each bond carries every sector the physical legs to
+            # its left fuse to, capped at max_bond_dim, so the state is a singlet and the sweep
+            # starts from a bond dimension it can afford
+            phys = site_leg(group, phys_dim)
+            bonds = [site_leg(group, 1)]
+            for _ in range(L - 1):
+                bonds.append(capped_leg(fuse_legs(bonds[-1], phys), max_bond_dim))
+            if not any(tuple(group.trivial_sector) in group.fusion_outcomes(sector, phys.sectors[0])
+                       for sector in bonds[-1].sectors):
+                raise ValueError(
+                    f'A bond of {bonds[-1].dim} states cannot close {L} sites of dimension '
+                    f'{phys_dim} to the trivial sector of {group.group_name}.')
+            bonds.append(site_leg(group, 1))
+            init_state = [Tensor.rand((bonds[i].dim, phys.dim, bonds[i + 1].dim),
+                                      legs=(bonds[i], phys, bonds[i + 1].conj()),
+                                      qtotal=group.trivial_sector,
+                                      dtype=dtype, device=device) for i in range(L)]
+            bond_dims = [bond.dim for bond in bonds]
         if bond_dims is None:
             bond_dims = [1] + [phys_dim] * (L - 1) + [1]
         self.L = L
@@ -142,6 +79,7 @@ class MPS:
             raise ValueError(f"Bond dimension list length {len(bond_dims)} does not match the expected length of {L + 1}.")
         self.dtype = dtype
         self.device = device
+        self.group = group
         self.center = 0  # Center site index for canonical form
 
         # Initialize MPS tensors (left_bond_dim, phys_dim, right_bond_dim)
@@ -152,7 +90,8 @@ class MPS:
                         device=device) for i in range(L)
         ]
         else:
-            self.tensors = init_state
+            # a copy of the list, so the caller's sequence is left alone
+            self.tensors = list(init_state)
             if any(t.shape != (bond_dims[i], phys_dim, bond_dims[i + 1]) for i, t in enumerate(init_state)):
                 raise ValueError("Initial state tensors do not match the specified bond and physical dimensions.")
 
@@ -264,7 +203,9 @@ class MPS:
 
     def _full_env_contract(self, operators: dict[int, Tensor]):
         '''
-        Compute the expectation value of a list of operators on the MPS using the canonical form.
+        Compute the expectation value of a list of operators on the MPS.
+
+        The contraction is gauge independent, so the center is left where it is.
         '''
         if not operators: # If the operator list is empty, return the norm of the MPS.
             return self.norm(mode='env')
@@ -272,7 +213,6 @@ class MPS:
         leftmost = min(operators.keys())
         rightmost = max(operators.keys())
 
-        self.move_center_to(leftmost)
         lenv = cached_einsum('aic,ajd,ij->cd',
                                     self.tensors[leftmost].conj(),
                                     self.tensors[leftmost],
@@ -296,9 +236,12 @@ class MPS:
         '''
         if bond < 0 or bond >= self.L - 1:
             raise IndexError(f"Bond index {bond} is out of bounds for MPS of length {self.L}.")
+        # the Schmidt values live at the center, so the center moves to the bond and back
+        center = self.center
         self.move_center_to(bond)
         s = linalg.svdvals(self.tensors[bond], (0, 1), (2,))
         s = s[s > svd_tol]
+        self.move_center_to(center)
         if alpha is None:
             return -torch.sum(s**2 * torch.log(s**2)).item()
         else:
@@ -369,41 +312,11 @@ class MPS:
                       self.bond_dim.copy(),
                       [t.clone().detach() for t in self.tensors],
                       self.dtype,
-                      self.device)
+                      self.device,
+                      group=self.group)
     def __repr__(self):
-        return f"MPS(L={self.L}, phys_dim={self.phys_dim}, bond_dim={self.bond_dim}, center={self.center})"
+        return (f"MPS(L={self.L}, phys_dim={self.phys_dim}, bond_dim={self.bond_dim}, "
+            f"center={self.center}, group={self.group.group_name})")
     def __sizeof__(self):
         return sum(t.numel() * t.element_size() for t in self.tensors)
-
-    @classmethod
-    def initial(cls,
-                group,
-                length: int,
-                phys_dim: int,
-                max_bond_dim: int,
-                bond_dims: list[int] | None = None,
-                init_state: list[Tensor] | None = None,
-                dtype = COMPLEX,
-                device = CUDA) -> 'MPS':
-        """
-        The starting state of a chain.
-
-        A group that carries multiplets builds its invariant bonds, capped at ``max_bond_dim``;
-        every other group takes the given ``bond_dims`` and ``init_state``.
-
-        Args:
-            group: the symmetry group of the chain, or None.
-            length: number of sites.
-            phys_dim: physical dimension of one site.
-            max_bond_dim: largest bond dimension of an invariant bond.
-            bond_dims, init_state: the dense bond dimensions and tensors of the state.
-            dtype, device: data type and device of the tensors.
-        Returns:
-            The state.
-        """
-        built = initial_state(group, length, phys_dim, max_bond_dim, dtype, device)
-        if built is not None:
-            init_state, bond_dims = built
-        return cls(length, phys_dim, bond_dims=bond_dims, init_state=init_state,
-                   dtype=dtype, device=device)
 

@@ -1,7 +1,7 @@
 // The abelian groups: no symmetry, U(1), Z_N and fermion parity.
 #pragma once
 
-#include "group.h"
+#include "../group.h"
 
 namespace sym {
 

@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-#include "group.h"
+#include "../group.h"
 
 namespace sym::su3 {
 
@@ -62,6 +62,7 @@ class SU3Symmetry : public Group {
   c10::ScalarType fusion_dtype() const override;
   Sector sector_of_dimension(int64_t dim) const override;
   double dual_sign(const Sector& sector) const override;
+  double dual_phase(const Sector& sector) const override;
   bool is_same_symmetry(const Group& other) const override;
 };
 
