@@ -3,7 +3,7 @@
 
 #include "group.h"
 
-namespace mpsdmrg {
+namespace sym {
 
 class NoSymmetry : public AbelianGroup {
  public:
@@ -54,4 +54,4 @@ class FermionParity : public AbelianGroup {
 // Bind the abelian groups and their singletons.
 void bind_abelian(py::module_& m);
 
-}  // namespace mpsdmrg
+}  // namespace sym

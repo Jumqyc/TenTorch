@@ -16,7 +16,7 @@
 #include <numeric>
 #include <unordered_map>
 
-namespace mpsdmrg {
+namespace sym {
 
 namespace {
 
@@ -446,70 +446,70 @@ at::Tensor stored_dense(const std::vector<Leg>& legs, const FusionTree& tree,
   return out;
 }
 
-}  // namespace mpsdmrg
+}  // namespace sym
 
 
-namespace mpsdmrg {
+namespace sym {
 
 // Bind the ``tree`` names of this module to python.
 void bind_tree(py::module_& m) {
-    py::class_<mpsdmrg::Leg, std::shared_ptr<mpsdmrg::Leg>>(m, "Leg")
-        .def(py::init<std::shared_ptr<mpsdmrg::Group>, std::vector<mpsdmrg::Sector>,
+    py::class_<sym::Leg, std::shared_ptr<sym::Leg>>(m, "Leg")
+        .def(py::init<std::shared_ptr<sym::Group>, std::vector<sym::Sector>,
                       std::vector<int64_t>, int64_t>(),
              py::arg("group"), py::arg("sectors"), py::arg("slices"), py::arg("qconj") = 1)
-        .def_static("trivial", &mpsdmrg::Leg::trivial, py::arg("dim"), py::arg("group") = nullptr,
+        .def_static("trivial", &sym::Leg::trivial, py::arg("dim"), py::arg("group") = nullptr,
                     py::arg("qconj") = 1)
         .def_static(
             "from_blocks",
-            [](std::shared_ptr<mpsdmrg::Group> group,
-               const std::vector<std::pair<mpsdmrg::Sector, int64_t>>& entries, int64_t qconj) {
-              auto [leg, rank] = mpsdmrg::Leg::from_blocks(std::move(group), entries, qconj);
+            [](std::shared_ptr<sym::Group> group,
+               const std::vector<std::pair<sym::Sector, int64_t>>& entries, int64_t qconj) {
+              auto [leg, rank] = sym::Leg::from_blocks(std::move(group), entries, qconj);
               return py::make_tuple(py::cast(leg), py::tuple(py::cast(rank)));
             },
             py::arg("group"), py::arg("entries"), py::arg("qconj") = 1)
-        .def_property_readonly("group", &mpsdmrg::Leg::group)
-        .def_property_readonly("sectors", [](const mpsdmrg::Leg& leg) {
-          return mpsdmrg::to_python(leg.sectors());
+        .def_property_readonly("group", &sym::Leg::group)
+        .def_property_readonly("sectors", [](const sym::Leg& leg) {
+          return sym::to_python(leg.sectors());
         })
-        .def_property_readonly("slices", [](const mpsdmrg::Leg& leg) {
+        .def_property_readonly("slices", [](const sym::Leg& leg) {
           return py::tuple(py::cast(leg.slices()));
         })
-        .def_property_readonly("qconj", &mpsdmrg::Leg::qconj)
-        .def_property_readonly("dim", &mpsdmrg::Leg::dim)
-        .def_property_readonly("nblocks", &mpsdmrg::Leg::nblocks)
+        .def_property_readonly("qconj", &sym::Leg::qconj)
+        .def_property_readonly("dim", &sym::Leg::dim)
+        .def_property_readonly("nblocks", &sym::Leg::nblocks)
         .def("sector",
-             [](const mpsdmrg::Leg& leg, int64_t qi, bool dual) {
-               return mpsdmrg::to_python(leg.sector(qi, dual));
+             [](const sym::Leg& leg, int64_t qi, bool dual) {
+               return sym::to_python(leg.sector(qi, dual));
              },
              py::arg("qi"), py::arg("dual") = false)
-        .def("block_dim", &mpsdmrg::Leg::block_dim, py::arg("qi"))
-        .def("multiplicity", &mpsdmrg::Leg::multiplicity, py::arg("qi"))
-        .def("fuse", &mpsdmrg::Leg::fuse, py::arg("other"))
-        .def("conj", &mpsdmrg::Leg::conj)
+        .def("block_dim", &sym::Leg::block_dim, py::arg("qi"))
+        .def("multiplicity", &sym::Leg::multiplicity, py::arg("qi"))
+        .def("fuse", &sym::Leg::fuse, py::arg("other"))
+        .def("conj", &sym::Leg::conj)
         .def("__eq__",
-             [](const mpsdmrg::Leg& leg, py::object other) -> py::object {
-               if (!py::isinstance<mpsdmrg::Leg>(other)) {
+             [](const sym::Leg& leg, py::object other) -> py::object {
+               if (!py::isinstance<sym::Leg>(other)) {
                  return py::reinterpret_borrow<py::object>(Py_NotImplemented);
                }
-               return py::cast(leg == other.cast<const mpsdmrg::Leg&>());
+               return py::cast(leg == other.cast<const sym::Leg&>());
              })
-        .def("__hash__", &mpsdmrg::Leg::hash)
-        .def("__repr__", &mpsdmrg::Leg::repr)
-        .def("__reduce__", [](const mpsdmrg::Leg& self) {
-          return py::make_tuple(py::type::of<mpsdmrg::Leg>(),
-                                py::make_tuple(self.group(), mpsdmrg::to_python(self.sectors()),
+        .def("__hash__", &sym::Leg::hash)
+        .def("__repr__", &sym::Leg::repr)
+        .def("__reduce__", [](const sym::Leg& self) {
+          return py::make_tuple(py::type::of<sym::Leg>(),
+                                py::make_tuple(self.group(), sym::to_python(self.sectors()),
                                                py::cast(self.slices()), self.qconj()));
         }, "the constructor arguments, so that a leg survives a pickle round trip");
 
-    py::class_<mpsdmrg::FusionTree, std::shared_ptr<mpsdmrg::FusionTree>>(m, "FusionTree")
-        .def(py::init<std::shared_ptr<mpsdmrg::Group>, std::vector<mpsdmrg::Sector>,
-                      std::vector<mpsdmrg::Sector>, mpsdmrg::Sector>(),
+    py::class_<sym::FusionTree, std::shared_ptr<sym::FusionTree>>(m, "FusionTree")
+        .def(py::init<std::shared_ptr<sym::Group>, std::vector<sym::Sector>,
+                      std::vector<sym::Sector>, sym::Sector>(),
              py::arg("group"), py::arg("sectors"), py::arg("inner"), py::arg("coupled"))
         .def_static(
             "from_blocks",
-            [](const std::shared_ptr<mpsdmrg::Group>& group, const std::vector<mpsdmrg::Leg>& legs,
-               const py::tuple& qdata, const mpsdmrg::Sector& qtotal) {
-              mpsdmrg::BlockKey key;
+            [](const std::shared_ptr<sym::Group>& group, const std::vector<sym::Leg>& legs,
+               const py::tuple& qdata, const sym::Sector& qtotal) {
+              sym::BlockKey key;
               const int64_t n = static_cast<int64_t>(legs.size());
               const int64_t inner_count = n > 2 ? n - 2 : 0;
               for (py::size_t i = 0; i < qdata.size(); ++i) {
@@ -517,56 +517,56 @@ void bind_tree(py::module_& m) {
                 if (position < n) {
                   key.legs.push_back(qdata[i].cast<int64_t>());
                 } else if (position < n + inner_count) {
-                  key.inner.push_back(qdata[i].cast<mpsdmrg::Sector>());
+                  key.inner.push_back(qdata[i].cast<sym::Sector>());
                 } else {
                   key.copies.push_back(qdata[i].cast<int64_t>());
                 }
               }
-              return mpsdmrg::FusionTree::from_blocks(group, legs, key, qtotal);
+              return sym::FusionTree::from_blocks(group, legs, key, qtotal);
             },
             py::arg("group"), py::arg("legs"), py::arg("qdata"), py::arg("qtotal"))
-        .def_property_readonly("group", &mpsdmrg::FusionTree::group)
-        .def_property_readonly("sectors", [](const mpsdmrg::FusionTree& tree) {
-          return mpsdmrg::to_python(tree.sectors());
+        .def_property_readonly("group", &sym::FusionTree::group)
+        .def_property_readonly("sectors", [](const sym::FusionTree& tree) {
+          return sym::to_python(tree.sectors());
         })
-        .def_property_readonly("inner", [](const mpsdmrg::FusionTree& tree) {
-          return mpsdmrg::to_python(tree.inner());
+        .def_property_readonly("inner", [](const sym::FusionTree& tree) {
+          return sym::to_python(tree.inner());
         })
-        .def_property_readonly("coupled", [](const mpsdmrg::FusionTree& tree) {
-          return mpsdmrg::to_python(tree.coupled());
+        .def_property_readonly("coupled", [](const sym::FusionTree& tree) {
+          return sym::to_python(tree.coupled());
         })
-        .def_property_readonly("copies", [](const mpsdmrg::FusionTree& tree) {
+        .def_property_readonly("copies", [](const sym::FusionTree& tree) {
           return py::tuple(py::cast(tree.copies()));
         })
-        .def_property_readonly("chain", [](const mpsdmrg::FusionTree& tree) {
-          return mpsdmrg::to_python(tree.chain());
+        .def_property_readonly("chain", [](const sym::FusionTree& tree) {
+          return sym::to_python(tree.chain());
         })
-        .def("to_dense_block", &mpsdmrg::FusionTree::to_dense_block, py::arg("device"))
+        .def("to_dense_block", &sym::FusionTree::to_dense_block, py::arg("device"))
         .def("__eq__",
-             [](const mpsdmrg::FusionTree& tree, py::object other) -> py::object {
-               if (!py::isinstance<mpsdmrg::FusionTree>(other)) {
+             [](const sym::FusionTree& tree, py::object other) -> py::object {
+               if (!py::isinstance<sym::FusionTree>(other)) {
                  return py::reinterpret_borrow<py::object>(Py_NotImplemented);
                }
-               return py::cast(tree == other.cast<const mpsdmrg::FusionTree&>());
+               return py::cast(tree == other.cast<const sym::FusionTree&>());
              })
-        .def("__hash__", &mpsdmrg::FusionTree::hash)
-        .def("__repr__", &mpsdmrg::FusionTree::repr)
-        .def("__reduce__", [](const mpsdmrg::FusionTree& self) {
-          return py::make_tuple(py::type::of<mpsdmrg::FusionTree>(),
-                                py::make_tuple(self.group(), mpsdmrg::to_python(self.sectors()),
-                                               mpsdmrg::to_python(self.inner()),
-                                               mpsdmrg::to_python(self.coupled())));
+        .def("__hash__", &sym::FusionTree::hash)
+        .def("__repr__", &sym::FusionTree::repr)
+        .def("__reduce__", [](const sym::FusionTree& self) {
+          return py::make_tuple(py::type::of<sym::FusionTree>(),
+                                py::make_tuple(self.group(), sym::to_python(self.sectors()),
+                                               sym::to_python(self.inner()),
+                                               sym::to_python(self.coupled())));
         }, "the constructor arguments, so that a tree survives a pickle round trip");
 
     m.def("fusion_trees",
-          [](const std::shared_ptr<mpsdmrg::Group>& group,
-             const std::vector<mpsdmrg::Sector>& sectors, const mpsdmrg::Sector& coupled) {
-            return py::tuple(py::cast(mpsdmrg::fusion_trees(group, sectors, coupled)));
+          [](const std::shared_ptr<sym::Group>& group,
+             const std::vector<sym::Sector>& sectors, const sym::Sector& coupled) {
+            return py::tuple(py::cast(sym::fusion_trees(group, sectors, coupled)));
           },
           py::arg("group"), py::arg("sectors"), py::arg("coupled"));
-    m.def("dual_sign", &mpsdmrg::dual_sign, py::arg("group"), py::arg("sector"));
-    m.def("stored_dense", &mpsdmrg::stored_dense, py::arg("legs"), py::arg("tree"),
+    m.def("dual_sign", &sym::dual_sign, py::arg("group"), py::arg("sector"));
+    m.def("stored_dense", &sym::stored_dense, py::arg("legs"), py::arg("tree"),
           py::arg("device"));
 }
 
-}  // namespace mpsdmrg
+}  // namespace sym

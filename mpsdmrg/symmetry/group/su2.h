@@ -3,7 +3,7 @@
 
 #include "group.h"
 
-namespace mpsdmrg {
+namespace sym {
 
 class SU2Symmetry : public Group {
  public:
@@ -27,7 +27,7 @@ class SU2Symmetry : public Group {
 // Bind SU(2) and its Clebsch-Gordan tables.
 void bind_su2(py::module_& m);
 
-}  // namespace mpsdmrg
+}  // namespace sym
 
 // Clebsch-Gordan core of SU(2), labelled by twice the spin, shared by the symmetry engine
 // (mpsdmrg/ext/bindings.cpp) and the data shim (mpsdmrg/symmetry/data/su2data.py).
@@ -47,7 +47,7 @@ void bind_su2(py::module_& m);
 #include <tuple>
 #include <vector>
 
-namespace mpsdmrg {
+namespace sym {
 namespace su2 {
 
 // X of one pair (j1, j2) at fixed j3, in row-major (k1, k2, k3), and its flat index.
@@ -82,4 +82,4 @@ std::map<int64_t, at::Tensor> fusion_table(int64_t j1, int64_t j2, const torch::
 void clear_tables();
 
 }  // namespace su2
-}  // namespace mpsdmrg
+}  // namespace sym

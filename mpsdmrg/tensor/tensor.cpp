@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-namespace mpsdmrg {
+namespace sym {
 
 const std::string kLabels = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
@@ -1241,119 +1241,119 @@ Tensor cached_einsum(const std::string& spec, py::args tensors) {
   return Tensor::from_torch(reduce_blocks(raw, parsed.labels, parsed.out));
 }
 
-}  // namespace mpsdmrg
+}  // namespace sym
 
-namespace mpsdmrg {
+namespace sym {
 
 // Bind the ``tensor`` names of this module to python.
 void bind_tensor(py::module_& m) {
-    m.def("set_defaults", &mpsdmrg::set_defaults, py::arg("device"), py::arg("dtype"),
+    m.def("set_defaults", &sym::set_defaults, py::arg("device"), py::arg("dtype"),
           "the device and dtype every fresh block buffer takes");
-    m.def("cached_einsum", &mpsdmrg::cached_einsum,
+    m.def("cached_einsum", &sym::cached_einsum,
           "contract symmetry-adapted tensors, block by block over the shared sectors");
 
-    py::class_<mpsdmrg::Tensor>(m, "Tensor")
+    py::class_<sym::Tensor>(m, "Tensor")
         .def(py::init([](const py::object& blocks, const py::object& qdata, const py::object& legs,
                          const py::object& qtotal, const py::object& group) {
-               std::vector<mpsdmrg::Leg> parsed_legs = mpsdmrg::parse_legs(legs);
+               std::vector<sym::Leg> parsed_legs = sym::parse_legs(legs);
                std::vector<at::Tensor> parsed_blocks;
                for (auto item : py::reinterpret_borrow<py::iterable>(blocks)) {
                  parsed_blocks.push_back(item.cast<at::Tensor>());
                }
                // the keys are parsed before the move: argument evaluation has no order
-               std::vector<mpsdmrg::BlockKey> parsed_keys =
-                   mpsdmrg::parse_keys(qdata, parsed_legs);
-               std::optional<mpsdmrg::Sector> parsed_qtotal;
-               if (!qtotal.is_none()) parsed_qtotal = qtotal.cast<mpsdmrg::Sector>();
-               return mpsdmrg::Tensor(
+               std::vector<sym::BlockKey> parsed_keys =
+                   sym::parse_keys(qdata, parsed_legs);
+               std::optional<sym::Sector> parsed_qtotal;
+               if (!qtotal.is_none()) parsed_qtotal = qtotal.cast<sym::Sector>();
+               return sym::Tensor(
                    std::move(parsed_blocks), std::move(parsed_keys), std::move(parsed_legs),
                    parsed_qtotal,
-                   group.is_none() ? nullptr : group.cast<std::shared_ptr<mpsdmrg::Group>>());
+                   group.is_none() ? nullptr : group.cast<std::shared_ptr<sym::Group>>());
              }),
              py::arg("blocks"), py::arg("qdata"), py::arg("legs"), py::arg("qtotal") = py::none(),
              py::arg("group") = py::none())
         .def_static("from_torch",
                     [](const at::Tensor& data, const py::object& legs, const py::object& qtotal) {
-                      std::optional<std::vector<mpsdmrg::Leg>> parsed_legs;
-                      if (!legs.is_none()) parsed_legs = mpsdmrg::parse_legs(legs);
-                      std::optional<mpsdmrg::Sector> parsed_qtotal;
-                      if (!qtotal.is_none()) parsed_qtotal = qtotal.cast<mpsdmrg::Sector>();
-                      return mpsdmrg::Tensor::from_torch(data, parsed_legs, parsed_qtotal);
+                      std::optional<std::vector<sym::Leg>> parsed_legs;
+                      if (!legs.is_none()) parsed_legs = sym::parse_legs(legs);
+                      std::optional<sym::Sector> parsed_qtotal;
+                      if (!qtotal.is_none()) parsed_qtotal = qtotal.cast<sym::Sector>();
+                      return sym::Tensor::from_torch(data, parsed_legs, parsed_qtotal);
                     },
                     py::arg("data"), py::arg("legs") = py::none(), py::arg("qtotal") = py::none())
-        .def_static("rand", &mpsdmrg::Tensor::rand)
-        .def_static("ones", &mpsdmrg::Tensor::ones)
-        .def_static("zeros", &mpsdmrg::Tensor::zeros)
-        .def_property_readonly("blocks", &mpsdmrg::Tensor::blocks)
-        .def_property_readonly("qdata", [](const mpsdmrg::Tensor& self) {
+        .def_static("rand", &sym::Tensor::rand)
+        .def_static("ones", &sym::Tensor::ones)
+        .def_static("zeros", &sym::Tensor::zeros)
+        .def_property_readonly("blocks", &sym::Tensor::blocks)
+        .def_property_readonly("qdata", [](const sym::Tensor& self) {
           py::tuple out(self.qdata().size());
           for (std::size_t i = 0; i < self.qdata().size(); ++i) {
-            out[i] = mpsdmrg::key_to_python(self.qdata()[i]);
+            out[i] = sym::key_to_python(self.qdata()[i]);
           }
           return out;
         })
-        .def_property_readonly("legs", [](const mpsdmrg::Tensor& self) {
+        .def_property_readonly("legs", [](const sym::Tensor& self) {
           py::tuple out(self.legs().size());
           for (std::size_t i = 0; i < self.legs().size(); ++i) out[i] = py::cast(self.legs()[i]);
           return out;
         })
         .def_property_readonly("qtotal",
-                               [](const mpsdmrg::Tensor& self) { return mpsdmrg::to_python(self.qtotal()); })
-        .def_property_readonly("group", &mpsdmrg::Tensor::group)
-        .def_property_readonly("shape", [](const mpsdmrg::Tensor& self) {
-          return mpsdmrg::to_python(self.shape());
+                               [](const sym::Tensor& self) { return sym::to_python(self.qtotal()); })
+        .def_property_readonly("group", &sym::Tensor::group)
+        .def_property_readonly("shape", [](const sym::Tensor& self) {
+          return sym::to_python(self.shape());
         })
-        .def_property_readonly("dtype", &mpsdmrg::Tensor::dtype)
-        .def_property_readonly("device", &mpsdmrg::Tensor::device)
-        .def_property_readonly("is_dense", &mpsdmrg::Tensor::is_dense)
-        .def_property_readonly("real", &mpsdmrg::Tensor::real)
-        .def("numel", &mpsdmrg::Tensor::numel)
-        .def("element_size", &mpsdmrg::Tensor::element_size)
-        .def("to_torch", &mpsdmrg::Tensor::to_torch)
-        .def("item", &mpsdmrg::Tensor::item)
-        .def("clone", &mpsdmrg::Tensor::clone)
-        .def("detach", &mpsdmrg::Tensor::detach)
-        .def("conj", &mpsdmrg::Tensor::conj)
-        .def("to", &mpsdmrg::Tensor::to, py::arg("device") = py::none(),
+        .def_property_readonly("dtype", &sym::Tensor::dtype)
+        .def_property_readonly("device", &sym::Tensor::device)
+        .def_property_readonly("is_dense", &sym::Tensor::is_dense)
+        .def_property_readonly("real", &sym::Tensor::real)
+        .def("numel", &sym::Tensor::numel)
+        .def("element_size", &sym::Tensor::element_size)
+        .def("to_torch", &sym::Tensor::to_torch)
+        .def("item", &sym::Tensor::item)
+        .def("clone", &sym::Tensor::clone)
+        .def("detach", &sym::Tensor::detach)
+        .def("conj", &sym::Tensor::conj)
+        .def("to", &sym::Tensor::to, py::arg("device") = py::none(),
              py::arg("dtype") = py::none())
-        .def("combine_legs", &mpsdmrg::Tensor::combine_legs, py::arg("groups"))
-        .def("__getitem__", &mpsdmrg::Tensor::getitem)
-        .def("__setitem__", &mpsdmrg::Tensor::setitem)
-        .def("__neg__", &mpsdmrg::Tensor::operator-)
-        .def("__add__", &mpsdmrg::Tensor::add)
-        .def("__radd__", &mpsdmrg::Tensor::add)
-        .def("__sub__", &mpsdmrg::Tensor::sub)
-        .def("__mul__", [](const mpsdmrg::Tensor& self, const py::object& other) {
+        .def("combine_legs", &sym::Tensor::combine_legs, py::arg("groups"))
+        .def("__getitem__", &sym::Tensor::getitem)
+        .def("__setitem__", &sym::Tensor::setitem)
+        .def("__neg__", &sym::Tensor::operator-)
+        .def("__add__", &sym::Tensor::add)
+        .def("__radd__", &sym::Tensor::add)
+        .def("__sub__", &sym::Tensor::sub)
+        .def("__mul__", [](const sym::Tensor& self, const py::object& other) {
           return self.scale(other, false);
         })
-        .def("__rmul__", [](const mpsdmrg::Tensor& self, const py::object& other) {
+        .def("__rmul__", [](const sym::Tensor& self, const py::object& other) {
           return self.scale(other, false);
         })
-        .def("__truediv__", [](const mpsdmrg::Tensor& self, const py::object& other) {
+        .def("__truediv__", [](const sym::Tensor& self, const py::object& other) {
           return self.scale(other, true);
         })
-        .def("__iadd__", [](mpsdmrg::Tensor& self, const py::object& other) -> mpsdmrg::Tensor& {
+        .def("__iadd__", [](sym::Tensor& self, const py::object& other) -> sym::Tensor& {
           return self.iadd(other);
         }, py::return_value_policy::reference)
-        .def("__imul__", [](mpsdmrg::Tensor& self, const py::object& other) -> mpsdmrg::Tensor& {
+        .def("__imul__", [](sym::Tensor& self, const py::object& other) -> sym::Tensor& {
           return self.imul(other);
         }, py::return_value_policy::reference)
-        .def("__itruediv__", [](mpsdmrg::Tensor& self, const py::object& other) -> mpsdmrg::Tensor& {
+        .def("__itruediv__", [](sym::Tensor& self, const py::object& other) -> sym::Tensor& {
           return self.idiv(other);
         }, py::return_value_policy::reference)
-        .def("__reduce__", [](const mpsdmrg::Tensor& self) {
+        .def("__reduce__", [](const sym::Tensor& self) {
           py::list blocks;
           for (const at::Tensor& block : self.blocks()) blocks.append(py::cast(block));
           py::tuple keys(self.qdata().size());
           for (std::size_t i = 0; i < self.qdata().size(); ++i) {
-            keys[i] = mpsdmrg::key_to_python(self.qdata()[i]);
+            keys[i] = sym::key_to_python(self.qdata()[i]);
           }
           py::tuple legs(self.legs().size());
           for (std::size_t i = 0; i < self.legs().size(); ++i) legs[i] = py::cast(self.legs()[i]);
-          return py::make_tuple(py::type::of<mpsdmrg::Tensor>(),
+          return py::make_tuple(py::type::of<sym::Tensor>(),
                                 py::make_tuple(blocks, keys, legs,
-                                               mpsdmrg::to_python(self.qtotal()), self.group()));
+                                               sym::to_python(self.qtotal()), self.group()));
         }, "the constructor arguments, so that a tensor survives a pickle round trip");
 }
 
-}  // namespace mpsdmrg
+}  // namespace sym

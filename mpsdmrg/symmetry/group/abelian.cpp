@@ -4,7 +4,7 @@
 #include <map>
 #include <string>
 
-namespace mpsdmrg {
+namespace sym {
 
 namespace {
 
@@ -149,37 +149,37 @@ const std::shared_ptr<Group>& fermion_parity() {
 }
 
 
-}  // namespace mpsdmrg
+}  // namespace sym
 
-namespace mpsdmrg {
+namespace sym {
 
 void bind_abelian(py::module_& m) {
-  py::class_<mpsdmrg::AbelianGroup, mpsdmrg::Group, std::shared_ptr<mpsdmrg::AbelianGroup>>(
+  py::class_<sym::AbelianGroup, sym::Group, std::shared_ptr<sym::AbelianGroup>>(
       m, "AbelianGroup");
-  py::class_<mpsdmrg::NoSymmetry, mpsdmrg::AbelianGroup, std::shared_ptr<mpsdmrg::NoSymmetry>>(
+  py::class_<sym::NoSymmetry, sym::AbelianGroup, std::shared_ptr<sym::NoSymmetry>>(
       m, "NoSymmetry")
       .def(py::init<>());
-  py::class_<mpsdmrg::U1Symmetry, mpsdmrg::AbelianGroup, std::shared_ptr<mpsdmrg::U1Symmetry>>(
+  py::class_<sym::U1Symmetry, sym::AbelianGroup, std::shared_ptr<sym::U1Symmetry>>(
       m, "U1Symmetry")
       .def(py::init<>());
-  py::class_<mpsdmrg::FermionParity, mpsdmrg::AbelianGroup,
-             std::shared_ptr<mpsdmrg::FermionParity>>(m, "FermionParity")
+  py::class_<sym::FermionParity, sym::AbelianGroup,
+             std::shared_ptr<sym::FermionParity>>(m, "FermionParity")
       .def(py::init<>());
-  py::class_<mpsdmrg::ZNSymmetry, mpsdmrg::AbelianGroup, std::shared_ptr<mpsdmrg::ZNSymmetry>>(
+  py::class_<sym::ZNSymmetry, sym::AbelianGroup, std::shared_ptr<sym::ZNSymmetry>>(
       m, "ZNSymmetry")
       .def(py::init<int64_t>(), py::arg("N"))
-      .def_property_readonly("N", &mpsdmrg::ZNSymmetry::modulus);
-  m.attr("no_symmetry") = py::cast(mpsdmrg::no_symmetry());
-  m.attr("u1_symmetry") = py::cast(mpsdmrg::u1_symmetry());
-  m.attr("z2_symmetry") = py::cast(mpsdmrg::z_n_symmetry(2));
-  m.attr("z3_symmetry") = py::cast(mpsdmrg::z_n_symmetry(3));
-  m.attr("z4_symmetry") = py::cast(mpsdmrg::z_n_symmetry(4));
-  m.attr("z5_symmetry") = py::cast(mpsdmrg::z_n_symmetry(5));
-  m.attr("z6_symmetry") = py::cast(mpsdmrg::z_n_symmetry(6));
-  m.attr("z7_symmetry") = py::cast(mpsdmrg::z_n_symmetry(7));
-  m.attr("z8_symmetry") = py::cast(mpsdmrg::z_n_symmetry(8));
-  m.attr("z9_symmetry") = py::cast(mpsdmrg::z_n_symmetry(9));
-  m.attr("fermion_parity") = py::cast(mpsdmrg::fermion_parity());
+      .def_property_readonly("N", &sym::ZNSymmetry::modulus);
+  m.attr("no_symmetry") = py::cast(sym::no_symmetry());
+  m.attr("u1_symmetry") = py::cast(sym::u1_symmetry());
+  m.attr("z2_symmetry") = py::cast(sym::z_n_symmetry(2));
+  m.attr("z3_symmetry") = py::cast(sym::z_n_symmetry(3));
+  m.attr("z4_symmetry") = py::cast(sym::z_n_symmetry(4));
+  m.attr("z5_symmetry") = py::cast(sym::z_n_symmetry(5));
+  m.attr("z6_symmetry") = py::cast(sym::z_n_symmetry(6));
+  m.attr("z7_symmetry") = py::cast(sym::z_n_symmetry(7));
+  m.attr("z8_symmetry") = py::cast(sym::z_n_symmetry(8));
+  m.attr("z9_symmetry") = py::cast(sym::z_n_symmetry(9));
+  m.attr("fermion_parity") = py::cast(sym::fermion_parity());
 }
 
-}  // namespace mpsdmrg
+}  // namespace sym

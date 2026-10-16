@@ -75,7 +75,7 @@ def clear_stale_lock(verbose: bool) -> None:
 
     ``torch.utils.cpp_extension.load`` waits forever on ``build/lock``, so one interrupted build
     blocks every later one.  The lock is stale when it is older than half a minute and no
-    compiler is working on a source of this directory.
+    compiler is working on a source of the engine, which lives in four directories.
 
     Args:
       verbose: print when a stale lock is removed.
@@ -83,7 +83,8 @@ def clear_stale_lock(verbose: bool) -> None:
     path = os.path.join(BUILD_DIR, 'lock')
     if not os.path.exists(path) or time.time() - os.path.getmtime(path) < 30:
         return
-    running = subprocess.run(['pgrep', '-f', rf'{HERE}/\S+\.(cpp|cu)'], capture_output=True)
+    pattern = rf'{os.path.dirname(HERE)}/\S+\.(cpp|cu)'
+    running = subprocess.run(['pgrep', '-f', pattern], capture_output=True)
     if not running.stdout.strip():
         if verbose:
             print(f'removing the stale build lock {path}', flush=True)

@@ -16,8 +16,8 @@ from types import SimpleNamespace
 from typing import Any
 
 from base import COMPLEX, CUDA
-from mpsdmrg.ext.build import (BUILD_DIR, HEADERS, LIBRARY, PCH, SOURCES, build_pch,
-                                clear_stale_lock)
+from mpsdmrg.ext.build import (BUILD_DIR, GIB_PER_JOB, HEADERS, LIBRARY, PCH, SOURCES,
+                                available_gib, build_pch, clear_stale_lock)
 HERE = os.path.dirname(os.path.abspath(__file__))
 # the build script is an input as well: it holds the list of sources
 INPUTS = SOURCES + HEADERS + (os.path.join(HERE, 'build.py'),)
@@ -36,6 +36,13 @@ if os.path.exists(LIBRARY) and os.path.getmtime(LIBRARY) > max(
 else:
     # the build needs ninja on PATH, which a bare .venv/bin/python does not add
     os.environ['PATH'] = os.path.dirname(sys.executable) + os.pathsep + os.environ.get('PATH', '')
+    # a compile on a starved host is killed mid-build and leaves torch's lock behind
+    free = available_gib()
+    if free < GIB_PER_JOB:
+        raise RuntimeError(
+            f'{free:.1f} GiB of host memory is available but compiling the engine needs '
+            f'{GIB_PER_JOB:.1f} GiB; free some memory, then build with '
+            f'`PYTHONPATH=. .venv/bin/python -u mpsdmrg/ext/build.py --jobs 1`.')
     clear_stale_lock(verbose = False)
     build_pch(verbose = False)
     from torch.utils.cpp_extension import load

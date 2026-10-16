@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace mpsdmrg {
+namespace sym {
 
 namespace {
 
@@ -71,9 +71,9 @@ const std::shared_ptr<Group>& su2_symmetry() {
 }
 
 
-}  // namespace mpsdmrg
+}  // namespace sym
 
-namespace mpsdmrg {
+namespace sym {
 
 int64_t SU2Symmetry::reference_index(const Sector& a) const {
   return a.at(0) / 2;
@@ -99,20 +99,20 @@ at::Tensor SU2Symmetry::duality_matrix(const Sector& a, const c10::Device& devic
 }
 
 void bind_su2(py::module_& m) {
-  m.def("fusion_tensor", &mpsdmrg::su2::fusion_tensor, "Clebsch-Gordan tensor of one SU(2) vertex",
+  m.def("fusion_tensor", &sym::su2::fusion_tensor, "Clebsch-Gordan tensor of one SU(2) vertex",
         py::arg("j1"), py::arg("j2"), py::arg("j3"), py::arg("device"));
-  m.def("fusion_table", &mpsdmrg::su2::fusion_table, "Clebsch-Gordan tensors of one SU(2) pair",
+  m.def("fusion_table", &sym::su2::fusion_table, "Clebsch-Gordan tensors of one SU(2) pair",
         py::arg("j1"), py::arg("j2"), py::arg("device"));
-  m.def("recoupling", &mpsdmrg::su2::recoupling,
+  m.def("recoupling", &sym::su2::recoupling,
         "the overlap of the two coupling schemes of three SU(2) spins",
         py::arg("j1"), py::arg("j2"), py::arg("j3"), py::arg("j4"));
-  py::class_<mpsdmrg::SU2Symmetry, mpsdmrg::Group, std::shared_ptr<mpsdmrg::SU2Symmetry>>(
+  py::class_<sym::SU2Symmetry, sym::Group, std::shared_ptr<sym::SU2Symmetry>>(
       m, "SU2Symmetry")
       .def(py::init<>());
-  m.attr("su2_symmetry") = py::cast(mpsdmrg::su2_symmetry());
+  m.attr("su2_symmetry") = py::cast(sym::su2_symmetry());
 }
 
-}  // namespace mpsdmrg
+}  // namespace sym
 
 // The Clebsch-Gordan core of SU(2); cg.h states the construction and the API.
 
@@ -122,7 +122,7 @@ void bind_su2(py::module_& m) {
 #include <cstring>
 #include <string>
 
-namespace mpsdmrg {
+namespace sym {
 namespace su2 {
 
 namespace {
@@ -283,4 +283,4 @@ void clear_tables() {
 }
 
 }  // namespace su2
-}  // namespace mpsdmrg
+}  // namespace sym

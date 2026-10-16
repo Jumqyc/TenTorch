@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace mpsdmrg {
+namespace sym {
 
 using Sector = std::vector<int64_t>;
 
@@ -129,4 +129,4 @@ const std::shared_ptr<Group>& fermion_parity();
 // Bind the enums and the base group.
 void bind_group(py::module_& m);
 
-}  // namespace mpsdmrg
+}  // namespace sym

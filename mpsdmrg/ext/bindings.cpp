@@ -10,7 +10,7 @@
 #include "../linalg/linalg.h"
 #include "../tensor/tensor.h"
 
-namespace mpsdmrg {
+namespace sym {
 
 // Drop every table and cache the engine keeps. They are read-only, so this only costs a rebuild.
 void clear_caches() {
@@ -19,7 +19,7 @@ void clear_caches() {
   clear_tree_caches();
 }
 
-}  // namespace mpsdmrg
+}  // namespace sym
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   py::register_exception_translator([](std::exception_ptr failure) {
@@ -27,20 +27,20 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       if (failure) {
         std::rethrow_exception(failure);
       }
-    } catch (const mpsdmrg::value_error& error) {
+    } catch (const sym::value_error& error) {
       PyErr_SetString(PyExc_ValueError, error.what());
-    } catch (const mpsdmrg::not_implemented_error& error) {
+    } catch (const sym::not_implemented_error& error) {
       PyErr_SetString(PyExc_NotImplementedError, error.what());
     }
   });
 
-  m.def("clear_caches", &mpsdmrg::clear_caches, "drop every table and cache the engine keeps");
+  m.def("clear_caches", &sym::clear_caches, "drop every table and cache the engine keeps");
 
-  mpsdmrg::bind_group(m);
-  mpsdmrg::bind_abelian(m);
-  mpsdmrg::bind_su2(m);
-  mpsdmrg::bind_su3(m);
-  mpsdmrg::bind_tree(m);
-  mpsdmrg::bind_tensor(m);
-  mpsdmrg::bind_linalg(m);
+  sym::bind_group(m);
+  sym::bind_abelian(m);
+  sym::bind_su2(m);
+  sym::bind_su3(m);
+  sym::bind_tree(m);
+  sym::bind_tensor(m);
+  sym::bind_linalg(m);
 }

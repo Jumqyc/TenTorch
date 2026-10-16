@@ -13,7 +13,7 @@
 #include "../symmetry/tree/tree.h"
 #include "../tensor/tensor.h"
 
-namespace mpsdmrg {
+namespace sym {
 
 // One dense matrix per fused charge of the left legs.
 //
@@ -100,4 +100,4 @@ at::Tensor trace(const Tensor& t);
 // Bind the names of this module to python.
 void bind_linalg(py::module_& m);
 
-}  // namespace mpsdmrg
+}  // namespace sym

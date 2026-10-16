@@ -11,7 +11,7 @@
 
 #include "group.h"
 
-namespace mpsdmrg::su3 {
+namespace sym::su3 {
 
 /*
  * The SU(3) representation data: the Dynkin labels (p, q) of a sector, its weights, its
@@ -42,9 +42,9 @@ at::Tensor clebsch(const Sector& first, const Sector& second, const Sector& thir
 // The invariant form of the sector with its conjugate in the shape (d, d).
 at::Tensor metric(const Sector& sector, const c10::Device& device);
 
-}  // namespace mpsdmrg::su3
+}  // namespace sym::su3
 
-namespace mpsdmrg {
+namespace sym {
 
 class SU3Symmetry : public Group {
  public:
@@ -71,4 +71,4 @@ const std::shared_ptr<Group>& su3_symmetry();
 // Bind the SU(3) representation data.
 void bind_su3(py::module_& m);
 
-}  // namespace mpsdmrg
+}  // namespace sym

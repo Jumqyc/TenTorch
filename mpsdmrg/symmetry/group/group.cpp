@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-namespace mpsdmrg {
+namespace sym {
 
 Group::Group(std::string type_name, FusionStyle fusion_style, BraidingStyle braiding_style,
              Sector trivial_sector, std::string group_name, double num_sectors)
@@ -71,18 +71,18 @@ at::Tensor Group::duality_matrix(const Sector&, const c10::Device&) const {
   throw not_implemented_error("Group " + group_name_ + " does not define its conjugate basis.");
 }
 
-}  // namespace mpsdmrg
+}  // namespace sym
 
-namespace mpsdmrg {
+namespace sym {
 
 void bind_group(py::module_& m) {
-  py::enum_<mpsdmrg::FusionStyle> fusion_style(m, "FusionStyle");
-  fusion_style.value("single", mpsdmrg::FusionStyle::single)
-      .value("multiple_unique", mpsdmrg::FusionStyle::multiple_unique)
-      .value("general", mpsdmrg::FusionStyle::general);
-  py::enum_<mpsdmrg::BraidingStyle> braiding_style(m, "BraidingStyle");
-  braiding_style.value("bosonic", mpsdmrg::BraidingStyle::bosonic)
-      .value("fermionic", mpsdmrg::BraidingStyle::fermionic);
+  py::enum_<sym::FusionStyle> fusion_style(m, "FusionStyle");
+  fusion_style.value("single", sym::FusionStyle::single)
+      .value("multiple_unique", sym::FusionStyle::multiple_unique)
+      .value("general", sym::FusionStyle::general);
+  py::enum_<sym::BraidingStyle> braiding_style(m, "BraidingStyle");
+  braiding_style.value("bosonic", sym::BraidingStyle::bosonic)
+      .value("fermionic", sym::BraidingStyle::fermionic);
 
   // Hand back the registered members, not a fresh instance of the same value, so that the
   // ``is`` comparisons of the checks hold.
@@ -92,91 +92,91 @@ void bind_group(py::module_& m) {
   const py::object bosonic = braiding_style.attr("bosonic");
   const py::object fermionic = braiding_style.attr("fermionic");
 
-  py::class_<mpsdmrg::Group, std::shared_ptr<mpsdmrg::Group>>(m, "Group")
-      .def_property_readonly("fusion_style", [single, multiple_unique, general](const mpsdmrg::Group& self) {
-        const mpsdmrg::FusionStyle style = self.fusion_style();
-        return style == mpsdmrg::FusionStyle::single ? single
-             : (style == mpsdmrg::FusionStyle::multiple_unique ? multiple_unique : general);
+  py::class_<sym::Group, std::shared_ptr<sym::Group>>(m, "Group")
+      .def_property_readonly("fusion_style", [single, multiple_unique, general](const sym::Group& self) {
+        const sym::FusionStyle style = self.fusion_style();
+        return style == sym::FusionStyle::single ? single
+             : (style == sym::FusionStyle::multiple_unique ? multiple_unique : general);
       })
-      .def_property_readonly("braiding_style", [bosonic, fermionic](const mpsdmrg::Group& self) {
-        return self.braiding_style() == mpsdmrg::BraidingStyle::bosonic ? bosonic : fermionic;
+      .def_property_readonly("braiding_style", [bosonic, fermionic](const sym::Group& self) {
+        return self.braiding_style() == sym::BraidingStyle::bosonic ? bosonic : fermionic;
       })
-      .def_property_readonly("trivial_sector", [](const mpsdmrg::Group& self) {
-        return mpsdmrg::to_python(self.trivial_sector());
+      .def_property_readonly("trivial_sector", [](const sym::Group& self) {
+        return sym::to_python(self.trivial_sector());
       })
-      .def_property_readonly("type_name", &mpsdmrg::Group::type_name)
-      .def_property_readonly("group_name", &mpsdmrg::Group::group_name)
-      .def_property_readonly("num_sectors", [](const mpsdmrg::Group& self) -> py::object {
+      .def_property_readonly("type_name", &sym::Group::type_name)
+      .def_property_readonly("group_name", &sym::Group::group_name)
+      .def_property_readonly("num_sectors", [](const sym::Group& self) -> py::object {
         if (std::isinf(self.num_sectors())) {
           return py::float_(self.num_sectors());
         }
         return py::int_(static_cast<int64_t>(self.num_sectors()));
       })
-      .def_property_readonly("sector_ind_len", &mpsdmrg::Group::sector_ind_len)
-      .def_property_readonly("is_abelian", &mpsdmrg::Group::is_abelian)
-      .def("is_valid_sector", &mpsdmrg::Group::is_valid_sector, py::arg("a"))
-      .def("dual_sector", [](const mpsdmrg::Group& self, const mpsdmrg::Sector& a) {
-        return mpsdmrg::to_python(self.dual_sector(a));
+      .def_property_readonly("sector_ind_len", &sym::Group::sector_ind_len)
+      .def_property_readonly("is_abelian", &sym::Group::is_abelian)
+      .def("is_valid_sector", &sym::Group::is_valid_sector, py::arg("a"))
+      .def("dual_sector", [](const sym::Group& self, const sym::Sector& a) {
+        return sym::to_python(self.dual_sector(a));
       }, py::arg("a"))
       .def("fusion_outcomes",
-           [](const mpsdmrg::Group& self, const mpsdmrg::Sector& a, const mpsdmrg::Sector& b) {
-             return mpsdmrg::to_python(self.fusion_outcomes(a, b));
+           [](const sym::Group& self, const sym::Sector& a, const sym::Sector& b) {
+             return sym::to_python(self.fusion_outcomes(a, b));
            }, py::arg("a"), py::arg("b"))
-      .def("sector_dim", &mpsdmrg::Group::sector_dim, py::arg("a"))
-      .def("is_same_symmetry", &mpsdmrg::Group::is_same_symmetry, py::arg("other"))
-      .def("fuse", [](const mpsdmrg::Group& self, py::args sectors) {
-        std::vector<mpsdmrg::Sector> parsed;
+      .def("sector_dim", &sym::Group::sector_dim, py::arg("a"))
+      .def("is_same_symmetry", &sym::Group::is_same_symmetry, py::arg("other"))
+      .def("fuse", [](const sym::Group& self, py::args sectors) {
+        std::vector<sym::Sector> parsed;
         parsed.reserve(sectors.size());
         for (const py::handle& sector : sectors) {
-          parsed.push_back(sector.cast<mpsdmrg::Sector>());
+          parsed.push_back(sector.cast<sym::Sector>());
         }
-        return mpsdmrg::to_python(self.fuse(parsed));
+        return sym::to_python(self.fuse(parsed));
       })
-      .def("can_fuse_to", &mpsdmrg::Group::can_fuse_to, py::arg("a"), py::arg("b"), py::arg("c"))
-      .def("n_symbol", &mpsdmrg::Group::n_symbol, py::arg("a"), py::arg("b"), py::arg("c"))
+      .def("can_fuse_to", &sym::Group::can_fuse_to, py::arg("a"), py::arg("b"), py::arg("c"))
+      .def("n_symbol", &sym::Group::n_symbol, py::arg("a"), py::arg("b"), py::arg("c"))
       .def("fusion_tensor",
-           [](const mpsdmrg::Group& self, const mpsdmrg::Sector& a, const mpsdmrg::Sector& b,
-              const mpsdmrg::Sector& c, const c10::Device& device, int64_t copy) {
+           [](const sym::Group& self, const sym::Sector& a, const sym::Sector& b,
+              const sym::Sector& c, const c10::Device& device, int64_t copy) {
              return self.fusion_tensor(a, b, c, device, copy);
            }, py::arg("a"), py::arg("b"), py::arg("c"), py::arg("device"), py::arg("copy") = 0)
-      .def("all_sectors", [](const mpsdmrg::Group& self) {
+      .def("all_sectors", [](const sym::Group& self) {
         if (std::isinf(self.num_sectors())) {
-          throw mpsdmrg::value_error("Group " + self.group_name() +
+          throw sym::value_error("Group " + self.group_name() +
                                      " has infinitely many sectors.");
         }
-        return mpsdmrg::to_python(self.all_sectors());
+        return sym::to_python(self.all_sectors());
       })
       .def("sector_of_dimension",
-           [](const mpsdmrg::Group& self, int64_t dim) {
-             return mpsdmrg::to_python(self.sector_of_dimension(dim));
+           [](const sym::Group& self, int64_t dim) {
+             return sym::to_python(self.sector_of_dimension(dim));
            }, py::arg("dim"))
-      .def("fusion_dtype", [](const mpsdmrg::Group& self) { return self.fusion_dtype(); })
+      .def("fusion_dtype", [](const sym::Group& self) { return self.fusion_dtype(); })
       .def("reference_index",
-           [](const mpsdmrg::Group& self, const mpsdmrg::Sector& sector) {
+           [](const sym::Group& self, const sym::Sector& sector) {
              return self.reference_index(sector);
            }, py::arg("sector"))
       .def("duality_matrix",
-           [](const mpsdmrg::Group& self, const mpsdmrg::Sector& sector,
+           [](const sym::Group& self, const sym::Sector& sector,
               const c10::Device& device) { return self.duality_matrix(sector, device); },
            py::arg("sector"), py::arg("device"))
       .def("invariant_form",
-           [](const mpsdmrg::Group& self, const mpsdmrg::Sector& sector,
+           [](const sym::Group& self, const sym::Sector& sector,
               const c10::Device& device) { return self.invariant_form(sector, device); },
            py::arg("sector"), py::arg("device"))
-      .def("__eq__", [](const mpsdmrg::Group& self, const py::object& other) -> py::object {
-        if (!py::isinstance<mpsdmrg::Group>(other)) {
+      .def("__eq__", [](const sym::Group& self, const py::object& other) -> py::object {
+        if (!py::isinstance<sym::Group>(other)) {
           return py::reinterpret_borrow<py::object>(Py_NotImplemented);
         }
-        return py::bool_(self.is_same_symmetry(other.cast<const mpsdmrg::Group&>()));
+        return py::bool_(self.is_same_symmetry(other.cast<const sym::Group&>()));
       })
-      .def("__hash__", [](const mpsdmrg::Group& self) {
+      .def("__hash__", [](const sym::Group& self) {
         return py::hash(py::make_tuple(self.type_name(), self.group_name()));
       })
-      .def("__repr__", &mpsdmrg::Group::group_name)
-      .def("__reduce__", [](const mpsdmrg::Group& self) {
+      .def("__repr__", &sym::Group::group_name)
+      .def("__reduce__", [](const sym::Group& self) {
         return py::make_tuple(py::module_::import("mpsdmrg.ext").attr("_restore_group"),
                               py::make_tuple(self.group_name()));
       }, "the name of the singleton group, so that a group survives a pickle round trip");
 }
 
-}  // namespace mpsdmrg
+}  // namespace sym

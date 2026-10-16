@@ -27,7 +27,7 @@
 #include <vector>
 
 
-namespace mpsdmrg {
+namespace sym {
 
 // Charge-block key of one block: the block index on every leg, then the coupled sector of
 // every inner vertex of the block's fusion tree.
@@ -186,4 +186,4 @@ std::string sectors_repr(const std::vector<Sector>& sectors);
 // Bind the names of this module to python.
 void bind_tree(py::module_& m);
 
-}  // namespace mpsdmrg
+}  // namespace sym

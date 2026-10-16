@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-namespace mpsdmrg {
+namespace sym {
 namespace {
 
 // The running start of every block dimension: the slice of each state of a charge.
@@ -446,27 +446,27 @@ at::Tensor trace(const Tensor& t) {
   return total;
 }
 
-}  // namespace mpsdmrg
+}  // namespace sym
 
-namespace mpsdmrg {
+namespace sym {
 
 // Bind the ``linalg`` names of this module to python.
 void bind_linalg(py::module_& m) {
-    m.def("svd", &mpsdmrg::svd, py::arg("t"), py::arg("left"), py::arg("right"),
+    m.def("svd", &sym::svd, py::arg("t"), py::arg("left"), py::arg("right"),
           py::arg("max_bond") = py::none(), py::arg("tol") = 0.0,
           py::arg("direction") = "right",
           "split a tensor as u s vh, one fused charge at a time");
-    m.def("qr", &mpsdmrg::qr, py::arg("t"), py::arg("left"), py::arg("right"),
+    m.def("qr", &sym::qr, py::arg("t"), py::arg("left"), py::arg("right"),
           "split a tensor as q r with the isometry on the left");
-    m.def("rq", &mpsdmrg::rq, py::arg("t"), py::arg("left"), py::arg("right"),
+    m.def("rq", &sym::rq, py::arg("t"), py::arg("left"), py::arg("right"),
           "split a tensor as r q with the isometry on the right");
-    m.def("svdvals", &mpsdmrg::svdvals, py::arg("t"), py::arg("left"), py::arg("right"),
+    m.def("svdvals", &sym::svdvals, py::arg("t"), py::arg("left"), py::arg("right"),
           "the singular values of a partition, by fused charge");
-    m.def("norm", &mpsdmrg::norm, py::arg("t"), py::arg("dim") = py::none(),
+    m.def("norm", &sym::norm, py::arg("t"), py::arg("dim") = py::none(),
           "the Frobenius norm of a tensor, reduced over dim");
-    m.def("inner", &mpsdmrg::inner, py::arg("a"), py::arg("b"),
+    m.def("inner", &sym::inner, py::arg("a"), py::arg("b"),
           "the inner product of two tensors over all legs");
-    m.def("trace", &mpsdmrg::trace, py::arg("t"), "the trace of a two-leg tensor");
+    m.def("trace", &sym::trace, py::arg("t"), "the trace of a two-leg tensor");
 }
 
-}  // namespace mpsdmrg
+}  // namespace sym

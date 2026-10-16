@@ -14,7 +14,7 @@
 
 #include "../symmetry/tree/tree.h"
 
-namespace mpsdmrg {
+namespace sym {
 
 // The shape of a tensor: one dimension per leg.
 using Shape = std::vector<int64_t>;
@@ -177,4 +177,4 @@ Tensor blocked_einsum(const std::string& spec, const std::vector<Tensor>& tensor
 // Bind the names of this module to python.
 void bind_tensor(py::module_& m);
 
-}  // namespace mpsdmrg
+}  // namespace sym
