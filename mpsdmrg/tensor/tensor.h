@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-#include "algebra.h"
+#include "../symmetry/tree/tree.h"
 
 namespace mpsdmrg {
 
@@ -69,7 +69,7 @@ py::tuple key_to_python(const BlockKey& key);
 
 // The block keys of a Python ``qdata`` argument; the first ``legs`` entries of an entry are
 // the leg blocks, the rest the coupled sectors.
-std::vector<BlockKey> parse_keys(const py::object& qdata, int64_t legs);
+std::vector<BlockKey> parse_keys(const py::object& qdata, const std::vector<Leg>& legs);
 
 // The legs of a Python sequence of legs.
 std::vector<Leg> parse_legs(const py::object& legs);
@@ -173,5 +173,8 @@ Tensor cached_einsum(const std::string& spec, py::args tensors);
 
 // The block-by-block einsum.
 Tensor blocked_einsum(const std::string& spec, const std::vector<Tensor>& tensors);
+
+// Bind the names of this module to python.
+void bind_tensor(py::module_& m);
 
 }  // namespace mpsdmrg

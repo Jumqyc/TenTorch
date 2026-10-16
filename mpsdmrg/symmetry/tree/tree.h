@@ -1,5 +1,5 @@
-// The symmetry groups of the engine: the sector labels, their duality, fusion and quantum
-// dimensions, and the singletons a tensor defaults to.
+// The charge-adapted legs and fusion trees of the engine: the block structure of a leg, the
+// tree that fixes how its sectors fuse, and the dense Clebsch-Gordan expansion of a tree.
 #pragma once
 
 #include <ATen/ATen.h>
@@ -10,9 +10,9 @@
 #include <string>
 #include <vector>
 
-#include "groups/group.h"
-#include "groups/abelian.h"
-#include "groups/su2.h"
+#include "../group/group.h"
+#include "../group/abelian.h"
+#include "../group/su2.h"
 // The charge-adapted legs and fusion trees of the engine: the block structure of a leg, the
 // tree that fixes how its sectors fuse, and the dense Clebsch-Gordan expansion of a tree.
 #pragma once
@@ -34,13 +34,17 @@ namespace mpsdmrg {
 struct BlockKey {
   std::vector<int64_t> legs;
   std::vector<Sector> inner;
+  // The realized copy of every fusion vertex, one entry per vertex, empty when the key
+  // predates the copies or the group couples every vertex at most once.
+  std::vector<int64_t> copies;
 
   bool operator==(const BlockKey& other) const {
-    return legs == other.legs && inner == other.inner;
+    return legs == other.legs && inner == other.inner && copies == other.copies;
   }
   bool operator!=(const BlockKey& other) const { return !(*this == other); }
   bool operator<(const BlockKey& other) const {
-    return legs != other.legs ? legs < other.legs : inner < other.inner;
+    return legs != other.legs ? legs < other.legs
+                              : (inner != other.inner ? inner < other.inner : copies < other.copies);
   }
 };
 
@@ -122,7 +126,7 @@ class FusionTree {
   //   inner: the coupled sector of every inner vertex, len(sectors) - 2 of them.
   //   coupled: the sector every leg fuses to.
   FusionTree(std::shared_ptr<Group> group, std::vector<Sector> sectors,
-             std::vector<Sector> inner, Sector coupled);
+             std::vector<Sector> inner, Sector coupled, std::vector<int64_t> copies = {});
 
   // The tree stored in one charge-block key: one sector per leg, dualised where the leg
   // carries duals, and the couplings that follow the leg indices in the key.
@@ -134,6 +138,7 @@ class FusionTree {
   const std::vector<Sector>& sectors() const { return sectors_; }
   const std::vector<Sector>& inner() const { return inner_; }
   const Sector& coupled() const { return coupled_; }
+  const std::vector<int64_t>& copies() const { return copies_; }
 
   // The couplings ``c_0, ..., c_{n-1}``, where ``c_k`` couples legs 0 to k.
   std::vector<Sector> chain() const;
@@ -152,6 +157,7 @@ class FusionTree {
   std::vector<Sector> sectors_;
   std::vector<Sector> inner_;
   Sector coupled_;
+  std::vector<int64_t> copies_;
 };
 
 // Every left-nested fusion of `sectors` into `coupled`, one tree per allowed combination of
@@ -177,5 +183,7 @@ void clear_stored_dense();
 std::string sector_repr(const Sector& sector);
 std::string sectors_repr(const std::vector<Sector>& sectors);
 
-}  // namespace mpsdmrg
+// Bind the names of this module to python.
+void bind_tree(py::module_& m);
 
+}  // namespace mpsdmrg

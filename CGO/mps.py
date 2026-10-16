@@ -5,7 +5,7 @@ import torch
 
 from base import COMPLEX
 from mpsdmrg import MPO, MPS, Broomstick
-from mpsdmrg.dmrg import cached_einsum
+from mpsdmrg.tensor import cached_einsum
 
 from CGO.sdp import extremal
 from CGO.ext_register import extends_Broomstick

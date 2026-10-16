@@ -4,33 +4,35 @@ from math import sqrt
 import torch
 
 from base import COMPLEX, CUDA
+from mpsdmrg.tensor import Tensor
 
 
 class SpinOperator:
     '''
-    A tensor representing spin operators (Sx, Sy, Sz) for a given physical dimension.
+    The three spin components of one site, as one dense tensor of shape ``(3, d, d)``.
+
+    Args:
+        phys_dim: physical dimension of the site, :math:`2S + 1`.
+        dtype, device: data type and device of the operators.
     '''
     def __init__(self, phys_dim:int, dtype = COMPLEX, device = CUDA):
-        self.data = torch.zeros((3, phys_dim, phys_dim),
-                                 dtype=dtype,
-                                 device=device,
-                                 requires_grad=False)
+        buffer = torch.zeros((3, phys_dim, phys_dim), dtype=dtype, device=device)
         # Sz
         s = (phys_dim - 1) / 2
         for i in range(phys_dim):
-            self.data[2, i, i] = s - i
+            buffer[2, i, i] = s - i
             m = s - i
             if i == phys_dim - 1:
                 break
-            self.data[0, i   ,i+1] = sqrt(s * (s + 1) - m * (m - 1)) # S+
-            self.data[1, i + 1, i] = sqrt(s * (s + 1) - m * (m - 1)) # S-
+            buffer[0, i   ,i+1] = sqrt(s * (s + 1) - m * (m - 1)) # S+
+            buffer[1, i + 1, i] = sqrt(s * (s + 1) - m * (m - 1)) # S-
+        buffer[0], buffer[1] = 0.5 * (buffer[0] + buffer[1]), -0.5j * (buffer[0] - buffer[1]) # Sx, Sy
 
-        self.data[0],self.data[1] = 0.5 * (self.data[0] + self.data[1]), -0.5j * (self.data[0] - self.data[1])# Sx, Sy
-
+        self.data = Tensor.from_torch(buffer)
         self.phys_dim = phys_dim
 
     def __repr__(self):
-        if self.phys_dim %2 == 0:
-            return f"Spin {self.phys_dim//2} operator \n {self.data}"
+        if self.phys_dim % 2 == 0:
+            return f"Spin {self.phys_dim//2} operator"
         else:
-            return f"Spin {self.phys_dim}/2 operator \n {self.data}"
+            return f"Spin {self.phys_dim}/2 operator"

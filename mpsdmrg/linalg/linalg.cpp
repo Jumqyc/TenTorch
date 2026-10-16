@@ -105,6 +105,7 @@ FactorBlocks factor_blocks(const Tensor& t, const std::vector<int64_t>& left,
     for (std::size_t i = 0; i < left.size(); ++i) key.legs.push_back(combo.legs[i]);
     key.legs.push_back(rank);
     key.inner = combo.inner;
+    key.copies = combo.copies;
     out.first_qdata.push_back(key);
   }
   for (std::size_t rc = 0; rc < part.right.size(); ++rc) {
@@ -121,6 +122,7 @@ FactorBlocks factor_blocks(const Tensor& t, const std::vector<int64_t>& left,
     // The conjugated new leg carries its charge un-dualled, so the first coupling of the
     // right factor is the one that follows the left legs in the chain of the split tensor.
     key.inner = combo.inner;
+    key.copies = combo.copies;
     out.second_qdata.push_back(key);
   }
   return out;
@@ -169,6 +171,15 @@ std::vector<SectorMatrix> sector_matrices(const Tensor& t, const std::vector<int
         left_state.inner.push_back(q.inner[i]);
       }
       for (std::size_t i = cut; i < q.inner.size(); ++i) right_state.inner.push_back(q.inner[i]);
+      // A group with multiplicity labels a state by the fusion copy of every vertex; the new
+      // vertex of the first factor couples the cut charge with its own dual, so it is unique.
+      for (std::size_t i = 0; i < cut && i < q.copies.size(); ++i) {
+        left_state.copies.push_back(q.copies[i]);
+      }
+      if (!q.copies.empty()) left_state.copies.push_back(0);
+      for (std::size_t i = cut; i < q.copies.size(); ++i) {
+        right_state.copies.push_back(q.copies[i]);
+      }
       states[bi] = {left_state, right_state};
       if (left_at.find(left_state) == left_at.end()) {
         left_at[left_state] = static_cast<int64_t>(left_states.size());
@@ -433,6 +444,29 @@ at::Tensor trace(const Tensor& t) {
     if (block.size(0) == block.size(1)) total = total + at::einsum("aa->", {block});
   }
   return total;
+}
+
+}  // namespace mpsdmrg
+
+namespace mpsdmrg {
+
+// Bind the ``linalg`` names of this module to python.
+void bind_linalg(py::module_& m) {
+    m.def("svd", &mpsdmrg::svd, py::arg("t"), py::arg("left"), py::arg("right"),
+          py::arg("max_bond") = py::none(), py::arg("tol") = 0.0,
+          py::arg("direction") = "right",
+          "split a tensor as u s vh, one fused charge at a time");
+    m.def("qr", &mpsdmrg::qr, py::arg("t"), py::arg("left"), py::arg("right"),
+          "split a tensor as q r with the isometry on the left");
+    m.def("rq", &mpsdmrg::rq, py::arg("t"), py::arg("left"), py::arg("right"),
+          "split a tensor as r q with the isometry on the right");
+    m.def("svdvals", &mpsdmrg::svdvals, py::arg("t"), py::arg("left"), py::arg("right"),
+          "the singular values of a partition, by fused charge");
+    m.def("norm", &mpsdmrg::norm, py::arg("t"), py::arg("dim") = py::none(),
+          "the Frobenius norm of a tensor, reduced over dim");
+    m.def("inner", &mpsdmrg::inner, py::arg("a"), py::arg("b"),
+          "the inner product of two tensors over all legs");
+    m.def("trace", &mpsdmrg::trace, py::arg("t"), "the trace of a two-leg tensor");
 }
 
 }  // namespace mpsdmrg

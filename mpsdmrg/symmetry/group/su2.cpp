@@ -40,7 +40,7 @@ int64_t SU2Symmetry::sector_dim(const Sector& a) const {
 }
 
 at::Tensor SU2Symmetry::fusion_tensor(const Sector& a, const Sector& b, const Sector& c,
-                                      const c10::Device& device) const {
+                                      const c10::Device& device, int64_t) const {
   const std::vector<Sector> outcomes = fusion_outcomes(a, b);
   if (std::find(outcomes.begin(), outcomes.end(), c) == outcomes.end()) {
     throw value_error("Spins " + half_label(a.at(0)) + " and " + half_label(b.at(0)) +
@@ -51,6 +51,10 @@ at::Tensor SU2Symmetry::fusion_tensor(const Sector& a, const Sector& b, const Se
 
 bool SU2Symmetry::is_same_symmetry(const Group& other) const {
   return other.type_name() == "SU2Symmetry";
+}
+
+double SU2Symmetry::dual_sign(const Sector& sector) const {
+  return dual_sector(sector) == sector && (sector_dim(sector) - 1) % 2 != 0 ? -1.0 : 1.0;
 }
 
 Sector SU2Symmetry::sector_of_dimension(int64_t dim) const {
@@ -77,6 +81,11 @@ int64_t SU2Symmetry::reference_index(const Sector& a) const {
 
 c10::ScalarType SU2Symmetry::fusion_dtype() const {
   return at::kDouble;
+}
+
+at::Tensor SU2Symmetry::invariant_form(const Sector& a, const c10::Device& device) const {
+  // the invariant pairing of two multiplets is the same flip and phase as the dual leg
+  return duality_matrix(a, device);
 }
 
 at::Tensor SU2Symmetry::duality_matrix(const Sector& a, const c10::Device& device) const {

@@ -1,10 +1,10 @@
 '''
 Build the C++ symmetry engine of ``mpsdmrg``.
 
-    PYTHONPATH=. .venv/bin/python -u mpsdmrg/symmetry/cpp/build.py [--jobs 1] [--force]
+    PYTHONPATH=. .venv/bin/python -u mpsdmrg/ext/build.py [--jobs 1] [--force]
 
-The compiled module is written to ``mpsdmrg/symmetry/cpp/build/symmetry_ext.so``, which
-``mpsdmrg/symmetry/cpp/__init__.py`` imports directly.  Ninja drives the build
+The compiled module is written to ``mpsdmrg/ext/build/symmetry_ext.so``, which
+``mpsdmrg/ext/__init__.py`` imports directly.  Ninja drives the build
 (``python -m pip install ninja``).  ``pch.h`` is precompiled first and every C++ unit includes
 it, which cuts a unit from ~22 s / 1.9 GiB to ~16 s / 1.8 GiB; the units are then compiled
 ``--jobs`` at a time (one by default) and linked once.  A parallel build of these
@@ -23,12 +23,15 @@ from typing import Any
 HERE = os.path.dirname(os.path.abspath(__file__))
 BUILD_DIR = os.path.join(HERE, 'build')
 LIBRARY = os.path.join(BUILD_DIR, 'symmetry_ext.so')
-SOURCES = (os.path.join(HERE, 'bindings.cpp'), os.path.join(HERE, 'algebra.cpp'),
-           os.path.join(HERE, 'groups', 'group.cpp'), os.path.join(HERE, 'groups', 'abelian.cpp'), os.path.join(HERE, 'groups', 'su2.cpp'),
-           os.path.join(HERE, 'groups', 'su3.cpp'),
-
-           os.path.join(HERE, 'tensor.cpp'), os.path.join(HERE, 'linalg.cpp'))
-HEADERS = tuple(sorted(glob.glob(os.path.join(HERE, '*.h')) + glob.glob(os.path.join(HERE, 'groups', '*.h'))))
+SOURCES = (os.path.join(HERE, 'bindings.cpp'),
+           os.path.join(HERE, '..', 'symmetry', 'group', 'group.cpp'),
+           os.path.join(HERE, '..', 'symmetry', 'group', 'abelian.cpp'),
+           os.path.join(HERE, '..', 'symmetry', 'group', 'su2.cpp'),
+           os.path.join(HERE, '..', 'symmetry', 'group', 'su3.cpp'),
+           os.path.join(HERE, '..', 'symmetry', 'tree', 'tree.cpp'),
+           os.path.join(HERE, '..', 'tensor', 'tensor.cpp'),
+           os.path.join(HERE, '..', 'linalg', 'linalg.cpp'))
+HEADERS = tuple(sorted(glob.glob(os.path.join(HERE, '..', '**', '*.h'), recursive=True)))
 PCH = os.path.join(HERE, 'pch.h')
 PCH_OUTPUT = PCH + '.gch'
 GIB_PER_JOB = 2.5

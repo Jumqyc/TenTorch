@@ -1,12 +1,12 @@
 """Type stubs of the C++ symmetry engine (``symmetry_ext``).
 
 The engine is a pybind11 extension, so this file is the only description of its Python API.
-It mirrors what ``mpsdmrg/symmetry/cpp/__init__.py`` re-exports.
+It mirrors what ``mpsdmrg/ext/__init__.py`` re-exports.
 """
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import torch
 
@@ -15,6 +15,7 @@ Sector = tuple[int, ...]
 class FusionStyle(Enum):
     single = 0
     multiple_unique = 10
+    general = 20
 
 class BraidingStyle(Enum):
     bosonic = 0
@@ -42,6 +43,7 @@ class Group:
     def all_sectors(self) -> tuple[Sector, ...]: ...
     def sector_of_dimension(self, dim: int) -> Sector: ...
     def duality_matrix(self, sector: Sector, device: torch.device) -> torch.Tensor: ...
+    def invariant_form(self, sector: Sector, device: torch.device) -> torch.Tensor: ...
     def is_same_symmetry(self, other: Group) -> bool: ...
 
 class AbelianGroup(Group):
@@ -175,6 +177,7 @@ no_symmetry: NoSymmetry
 u1_symmetry: U1Symmetry
 su2_symmetry: SU2Symmetry
 su3_symmetry: SU3Symmetry
+su3_clebsch_copies: Callable[[Sector, Sector, Sector, torch.device], torch.Tensor]
 fermion_parity: FermionParity
 z2_symmetry: ZNSymmetry
 z3_symmetry: ZNSymmetry

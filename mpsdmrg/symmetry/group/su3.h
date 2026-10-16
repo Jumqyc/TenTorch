@@ -33,6 +33,9 @@ std::map<Sector, int64_t> fusion(const Sector& first, const Sector& second);
 
 // The invariant coupling of first (x) second -> third, in the shape (d1, d2, d3) with the
 // third factor in its conjugate basis; an empty tensor when the triple does not fuse.
+at::Tensor clebsch_copies(const Sector& first, const Sector& second, const Sector& third,
+                          const c10::Device& device);
+
 at::Tensor clebsch(const Sector& first, const Sector& second, const Sector& third,
                    const c10::Device& device);
 
@@ -51,11 +54,14 @@ class SU3Symmetry : public Group {
   std::vector<Sector> fusion_outcomes(const Sector& a, const Sector& b) const override;
   int64_t sector_dim(const Sector& a) const override;
   at::Tensor fusion_tensor(const Sector& a, const Sector& b, const Sector& c,
-                           const c10::Device& device) const override;
+                           const c10::Device& device, int64_t copy = 0) const override;
+  int64_t n_symbol(const Sector& a, const Sector& b, const Sector& c) const override;
   at::Tensor duality_matrix(const Sector& a, const c10::Device& device) const override;
+  at::Tensor invariant_form(const Sector& a, const c10::Device& device) const override;
   int64_t reference_index(const Sector& a) const override;
   c10::ScalarType fusion_dtype() const override;
   Sector sector_of_dimension(int64_t dim) const override;
+  double dual_sign(const Sector& sector) const override;
   bool is_same_symmetry(const Group& other) const override;
 };
 

@@ -3,8 +3,8 @@ The C++ symmetry engine of ``mpsdmrg``.
 
 Exposes the charge groups with their legs and fusion trees, the block-sparse ``Tensor`` with
 ``cached_einsum``, and the ``svd``/``qr``/``rq``/``svdvals``/``norm``/``inner``/``trace``
-splittings.  The engine is compiled by ``mpsdmrg/symmetry/cpp/build.py`` into
-``mpsdmrg/symmetry/cpp/build/symmetry_ext.so``; an import recompiles it when the shared object
+splittings.  The engine is compiled by ``mpsdmrg/ext/build.py`` into
+``mpsdmrg/ext/build/symmetry_ext.so``; an import recompiles it when the shared object
 is missing or older than one of the sources, the headers or the build script.
 '''
 from __future__ import annotations
@@ -12,16 +12,15 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
-from glob import glob
 from types import SimpleNamespace
 from typing import Any
 
 from base import COMPLEX, CUDA
-from mpsdmrg.symmetry.cpp.build import (BUILD_DIR, LIBRARY, PCH, SOURCES, build_pch,
-                                        clear_stale_lock)
+from mpsdmrg.ext.build import (BUILD_DIR, HEADERS, LIBRARY, PCH, SOURCES, build_pch,
+                                clear_stale_lock)
 HERE = os.path.dirname(os.path.abspath(__file__))
 # the build script is an input as well: it holds the list of sources
-INPUTS = SOURCES + tuple(sorted(glob(os.path.join(HERE, '*.h')))) + (os.path.join(HERE, 'build.py'),)
+INPUTS = SOURCES + HEADERS + (os.path.join(HERE, 'build.py'),)
 
 os.environ.setdefault('TORCH_EXTENSIONS_DIR', BUILD_DIR)
 os.makedirs(BUILD_DIR, exist_ok=True)
@@ -87,6 +86,7 @@ stored_dense = _extension.stored_dense
 su2_symmetry = _extension.su2_symmetry
 su3_casimir = _extension.su3_casimir
 su3_clebsch = _extension.su3_clebsch
+su3_clebsch_copies = _extension.su3_clebsch_copies
 su3_dimension = _extension.su3_dimension
 su3_fusion = _extension.su3_fusion
 su3_metric = _extension.su3_metric
@@ -104,7 +104,7 @@ z7_symmetry = _extension.z7_symmetry
 z8_symmetry = _extension.z8_symmetry
 z9_symmetry = _extension.z9_symmetry
 
-# ``mpsdmrg.dmrg`` refers to ``_expr_cache`` by name to drop the contraction plans; the engine
+# ``mpsdmrg.tensor`` refers to ``_expr_cache`` by name to drop the contraction plans; the engine
 # keeps its plans inside the extension, so the name drops every cache the engine keeps.
 _expr_cache = SimpleNamespace(clear = clear_caches)
 

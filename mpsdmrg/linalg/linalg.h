@@ -10,8 +10,8 @@
 #include <utility>
 #include <vector>
 
-#include "algebra.h"
-#include "tensor.h"
+#include "../symmetry/tree/tree.h"
+#include "../tensor/tensor.h"
 
 namespace mpsdmrg {
 
@@ -96,5 +96,8 @@ at::Tensor inner(const Tensor& a, const Tensor& b);
 // Raises:
 //   NotImplementedError: If the two legs do not share their block boundaries.
 at::Tensor trace(const Tensor& t);
+
+// Bind the names of this module to python.
+void bind_linalg(py::module_& m);
 
 }  // namespace mpsdmrg

@@ -253,6 +253,9 @@ void append_tree(std::vector<int64_t>& key, const std::vector<Leg>& legs, const 
   }
   key.push_back(-1);
   for (int64_t entry : tree.coupled()) key.push_back(entry);
+  // Two trees of a group with multiplicity share their path but differ in the realized copy.
+  key.push_back(-1);
+  for (int64_t copy : tree.copies()) key.push_back(copy);
   key.push_back(-1);
 }
 
@@ -338,7 +341,8 @@ std::vector<BlockKey> combos(const std::vector<Leg>& legs, const Sector& qtotal)
     for (const FusionTree& tree : fusion_trees(group, sectors, qtotal)) {
       BlockKey filled = key;
       filled.inner = tree.inner();
-      out.push_back(filled);
+      if (group->carries_multiplicity()) filled.copies = tree.copies();
+      out.push_back(std::move(filled));
     }
   });
   return out;
@@ -398,28 +402,36 @@ std::string label_string(const std::vector<int64_t>& labels) {
 }
 
 py::tuple key_to_python(const BlockKey& key) {
-  py::tuple out(key.legs.size() + key.inner.size());
-  for (std::size_t i = 0; i < key.legs.size(); ++i) out[i] = py::int_(key.legs[i]);
-  for (std::size_t i = 0; i < key.inner.size(); ++i) {
-    out[key.legs.size() + i] = to_python(key.inner[i]);
-  }
+  py::tuple out(key.legs.size() + key.inner.size() + key.copies.size());
+  std::size_t position = 0;
+  for (std::size_t i = 0; i < key.legs.size(); ++i) out[position++] = py::int_(key.legs[i]);
+  for (std::size_t i = 0; i < key.inner.size(); ++i) out[position++] = to_python(key.inner[i]);
+  for (std::size_t i = 0; i < key.copies.size(); ++i) out[position++] = py::int_(key.copies[i]);
   return out;
 }
 
-std::vector<BlockKey> parse_keys(const py::object& qdata, int64_t legs) {
+std::vector<BlockKey> parse_keys(const py::object& qdata, const std::vector<Leg>& legs) {
+  const int64_t n = static_cast<int64_t>(legs.size());
+  const bool multiplicity =
+      !legs.empty() && legs.front().group()->carries_multiplicity() && n >= 2;
+  const int64_t inner_count = n > 2 ? n - 2 : 0;
   std::vector<BlockKey> out;
   for (auto item : py::reinterpret_borrow<py::iterable>(qdata)) {
     BlockKey key;
     int64_t position = 0;
     for (auto entry : py::reinterpret_borrow<py::iterable>(item)) {
-      if (position < legs) {
+      if (position < n) {
         key.legs.push_back(py::cast<int64_t>(entry));
-      } else {
+      } else if (position < n + inner_count) {
         key.inner.push_back(sector_of(py::reinterpret_borrow<py::object>(entry)));
+      } else if (multiplicity) {
+        key.copies.push_back(py::cast<int64_t>(entry));
+      } else {
+        assertion_failed("Block indices carry more entries than the legs of the tensor.");
       }
       ++position;
     }
-    out.push_back(key);
+    out.push_back(std::move(key));
   }
   return out;
 }
@@ -477,12 +489,17 @@ void Tensor::canonicalize() {
   for (std::size_t i = 1; i < qdata_.size(); ++i) {
     if (qdata_[i] == qdata_[i - 1]) assertion_failed("Charge-block indices repeat a block.");
   }
-  const int64_t key_length = static_cast<int64_t>(n + (n > 2 ? n - 2 : 0));
+  // A group that can couple a vertex in several ways stores the realized copy with the path.
+  const bool multiplicity = group_->carries_multiplicity() && n >= 2;
+  const int64_t key_length =
+      static_cast<int64_t>(n + (n > 2 ? n - 2 : 0) + (multiplicity ? n - 1 : 0));
   for (std::size_t i = 0; i < blocks_.size(); ++i) {
     const BlockKey& key = qdata_[i];
-    if (static_cast<int64_t>(key.legs.size() + key.inner.size()) != key_length) {
+    const int64_t entries =
+        static_cast<int64_t>(key.legs.size() + key.inner.size() + key.copies.size());
+    if (entries != key_length) {
       assertion_failed("Block indices need " + std::to_string(key_length) + " entries, not " +
-                       std::to_string(key.legs.size() + key.inner.size()) + ".");
+                       std::to_string(entries) + ".");
     }
     for (std::size_t k = 0; k < n; ++k) {
       if (key.legs[k] < 0 || key.legs[k] >= legs_[k].nblocks()) {
@@ -598,11 +615,12 @@ Shape Tensor::shape() const {
 }
 
 py::object Tensor::dtype() const {
-  return py::cast(at::empty({}, blocks_.front().options())).attr("dtype");
+  const at::TensorOptions options = blocks_.empty() ? block_options() : blocks_.front().options();
+  return py::cast(at::empty({}, options)).attr("dtype");
 }
 
 py::object Tensor::device() const {
-  return py::cast(blocks_.front().device());
+  return py::cast(blocks_.empty() ? default_device() : blocks_.front().device());
 }
 
 bool Tensor::is_dense() const {
@@ -621,11 +639,17 @@ int64_t Tensor::numel() const {
   return total;
 }
 
-int64_t Tensor::element_size() const { return blocks_.front().element_size(); }
+int64_t Tensor::element_size() const {
+  return blocks_.empty() ? static_cast<int64_t>(block_options().dtype().itemsize())
+                          : blocks_.front().element_size();
+}
 
 at::Tensor Tensor::to_torch() const {
   if (is_dense()) return blocks_.front();
-  at::Tensor out = at::zeros(shape(), blocks_.front().options());
+  // A contraction that vanishes by symmetry carries no block at all: its dense form is zero.
+  const at::TensorOptions options = blocks_.empty() ? block_options() : blocks_.front().options();
+  at::Tensor out = at::zeros(shape(), options);
+  if (blocks_.empty()) return out;
   if (legs_.empty()) {
     out.fill_(blocks_.front());
     return out;
@@ -696,7 +720,7 @@ Tensor Tensor::conj() const {
     at::Tensor block = blocks_[i].conj();
     for (std::size_t k = 0; k < legs_.size(); ++k) {
       if (legs_[k].qconj() == -1) {
-        block = block * dual_sign(*group_, legs_[k].sectors().at(qdata_[i].legs[k]));
+        block = block * group_->dual_sign(legs_[k].sectors().at(qdata_[i].legs[k]));
       }
     }
     blocks.push_back(block);
@@ -713,6 +737,13 @@ Tensor Tensor::to(const py::object& device, const py::object& dtype) const {
 }
 
 Tensor Tensor::combine_legs(const std::vector<std::vector<int64_t>>& groups) const {
+  // For a non-abelian group the charge a group of legs fuses to is read off each block's own
+  // fusion chain, but the merged block is not a reshape of the old one: its multiplet is the
+  // coupled one, so the data would have to be projected with the group's Clebsch-Gordan
+  // tensors first. Until that projection exists, the fusion of several legs is refused.
+  if (!group_->is_abelian()) {
+    throw not_implemented_error("Combining the legs of a non-abelian tensor is not supported.");
+  }
   std::vector<int64_t> flat;
   for (const std::vector<int64_t>& group : groups) {
     for (int64_t i : group) flat.push_back(i);
@@ -773,6 +804,7 @@ Tensor Tensor::combine_legs(const std::vector<std::vector<int64_t>>& groups) con
     const std::vector<FusionTree> trees = fusion_trees(group_, sectors, qtotal_);
     if (trees.empty()) throw value_error("The combined legs do not fuse to the total charge.");
     key.inner = trees.front().inner();
+    if (group_->carries_multiplicity()) key.copies = trees.front().copies();
     keys.push_back(key);
   }
   return Tensor(blocks, keys, new_legs, qtotal_, group_);
@@ -1031,6 +1063,10 @@ Tensor blocked_einsum(const std::string& spec, const std::vector<Tensor>& tensor
   std::vector<Sector> totals;
   for (const Tensor& t : tensors) totals.push_back(t.qtotal());
   const Sector qtotal = fused_qtotal(group, totals);
+  // A block-less operand is the zero tensor, so the contraction vanishes.
+  bool zeroth = false;
+  for (const Tensor& t : tensors) zeroth = zeroth || t.blocks().empty();
+  if (zeroth) return Tensor({}, {}, out_legs, qtotal, group);
   const c10::Device device = tensors.front().blocks().front().device();
   // One block combination: the operands to contract, the output key it lands in and, for a
   // non-abelian group, the weight of every fusion tree its value is spread over.
@@ -1039,6 +1075,7 @@ Tensor blocked_einsum(const std::string& spec, const std::vector<Tensor>& tensor
     std::vector<int64_t> key_legs;
     std::vector<Sector> out_sectors;
     std::vector<std::vector<Sector>> inners;
+    std::vector<std::vector<int64_t>> copies;
     std::vector<at::Tensor> weights;
   };
   std::vector<Combo> combinations;
@@ -1077,6 +1114,8 @@ Tensor blocked_einsum(const std::string& spec, const std::vector<Tensor>& tensor
       if (group->is_abelian()) {
         for (const FusionTree& tree : fusion_trees(group, combo.out_sectors, qtotal)) {
           combo.inners.push_back(tree.inner());
+          combo.copies.push_back(group->carries_multiplicity() ? tree.copies()
+                                                               : std::vector<int64_t>{});
         }
       } else {
         std::vector<at::Tensor> operands;
@@ -1096,6 +1135,8 @@ Tensor blocked_einsum(const std::string& spec, const std::vector<Tensor>& tensor
           std::vector<int64_t> weight_key = tree_key;
           append_tree(weight_key, out_legs, tree, device);
           combo.inners.push_back(tree.inner());
+          combo.copies.push_back(group->carries_multiplicity() ? tree.copies()
+                                                               : std::vector<int64_t>{});
           combo.weights.push_back(cached_weight(weight_key, output, folded, out, folded_labels));
         }
       }
@@ -1149,12 +1190,18 @@ Tensor blocked_einsum(const std::string& spec, const std::vector<Tensor>& tensor
                                    ? batched.select(0, static_cast<int64_t>(position))
                                    : reduce_blocks(combo.raw, labels, out);
       for (std::size_t t = 0; t < combo.inners.size(); ++t) {
-        const BlockKey key{combo.key_legs, combo.inners[t]};
-        // The first term seeds the output block; later terms accumulate into it.
-        const at::Tensor term = combo.weights.empty() ? value : value * combo.weights[t];
+        BlockKey key{combo.key_legs, combo.inners[t]};
+        key.copies = combo.copies[t];
+        // The first term seeds the output block; later terms accumulate into it, and a
+        // weighted term fuses the multiply and the add into the one kernel of addcmul_.
         const auto found = blocks.find(key);
-        if (found == blocks.end()) blocks.emplace(key, term);
-        else found->second.add_(term);
+        if (found == blocks.end()) {
+          blocks.emplace(key, combo.weights.empty() ? value : value * combo.weights[t]);
+        } else if (combo.weights.empty()) {
+          found->second.add_(value);
+        } else {
+          found->second.addcmul_(value, combo.weights[t]);
+        }
       }
     }
   }
@@ -1192,6 +1239,121 @@ Tensor cached_einsum(const std::string& spec, py::args tensors) {
   for (const Tensor& tensor : operands) raw.push_back(tensor.blocks().front());
   const EinsumSpec parsed = parse_einsum(spec, raw.size());
   return Tensor::from_torch(reduce_blocks(raw, parsed.labels, parsed.out));
+}
+
+}  // namespace mpsdmrg
+
+namespace mpsdmrg {
+
+// Bind the ``tensor`` names of this module to python.
+void bind_tensor(py::module_& m) {
+    m.def("set_defaults", &mpsdmrg::set_defaults, py::arg("device"), py::arg("dtype"),
+          "the device and dtype every fresh block buffer takes");
+    m.def("cached_einsum", &mpsdmrg::cached_einsum,
+          "contract symmetry-adapted tensors, block by block over the shared sectors");
+
+    py::class_<mpsdmrg::Tensor>(m, "Tensor")
+        .def(py::init([](const py::object& blocks, const py::object& qdata, const py::object& legs,
+                         const py::object& qtotal, const py::object& group) {
+               std::vector<mpsdmrg::Leg> parsed_legs = mpsdmrg::parse_legs(legs);
+               std::vector<at::Tensor> parsed_blocks;
+               for (auto item : py::reinterpret_borrow<py::iterable>(blocks)) {
+                 parsed_blocks.push_back(item.cast<at::Tensor>());
+               }
+               // the keys are parsed before the move: argument evaluation has no order
+               std::vector<mpsdmrg::BlockKey> parsed_keys =
+                   mpsdmrg::parse_keys(qdata, parsed_legs);
+               std::optional<mpsdmrg::Sector> parsed_qtotal;
+               if (!qtotal.is_none()) parsed_qtotal = qtotal.cast<mpsdmrg::Sector>();
+               return mpsdmrg::Tensor(
+                   std::move(parsed_blocks), std::move(parsed_keys), std::move(parsed_legs),
+                   parsed_qtotal,
+                   group.is_none() ? nullptr : group.cast<std::shared_ptr<mpsdmrg::Group>>());
+             }),
+             py::arg("blocks"), py::arg("qdata"), py::arg("legs"), py::arg("qtotal") = py::none(),
+             py::arg("group") = py::none())
+        .def_static("from_torch",
+                    [](const at::Tensor& data, const py::object& legs, const py::object& qtotal) {
+                      std::optional<std::vector<mpsdmrg::Leg>> parsed_legs;
+                      if (!legs.is_none()) parsed_legs = mpsdmrg::parse_legs(legs);
+                      std::optional<mpsdmrg::Sector> parsed_qtotal;
+                      if (!qtotal.is_none()) parsed_qtotal = qtotal.cast<mpsdmrg::Sector>();
+                      return mpsdmrg::Tensor::from_torch(data, parsed_legs, parsed_qtotal);
+                    },
+                    py::arg("data"), py::arg("legs") = py::none(), py::arg("qtotal") = py::none())
+        .def_static("rand", &mpsdmrg::Tensor::rand)
+        .def_static("ones", &mpsdmrg::Tensor::ones)
+        .def_static("zeros", &mpsdmrg::Tensor::zeros)
+        .def_property_readonly("blocks", &mpsdmrg::Tensor::blocks)
+        .def_property_readonly("qdata", [](const mpsdmrg::Tensor& self) {
+          py::tuple out(self.qdata().size());
+          for (std::size_t i = 0; i < self.qdata().size(); ++i) {
+            out[i] = mpsdmrg::key_to_python(self.qdata()[i]);
+          }
+          return out;
+        })
+        .def_property_readonly("legs", [](const mpsdmrg::Tensor& self) {
+          py::tuple out(self.legs().size());
+          for (std::size_t i = 0; i < self.legs().size(); ++i) out[i] = py::cast(self.legs()[i]);
+          return out;
+        })
+        .def_property_readonly("qtotal",
+                               [](const mpsdmrg::Tensor& self) { return mpsdmrg::to_python(self.qtotal()); })
+        .def_property_readonly("group", &mpsdmrg::Tensor::group)
+        .def_property_readonly("shape", [](const mpsdmrg::Tensor& self) {
+          return mpsdmrg::to_python(self.shape());
+        })
+        .def_property_readonly("dtype", &mpsdmrg::Tensor::dtype)
+        .def_property_readonly("device", &mpsdmrg::Tensor::device)
+        .def_property_readonly("is_dense", &mpsdmrg::Tensor::is_dense)
+        .def_property_readonly("real", &mpsdmrg::Tensor::real)
+        .def("numel", &mpsdmrg::Tensor::numel)
+        .def("element_size", &mpsdmrg::Tensor::element_size)
+        .def("to_torch", &mpsdmrg::Tensor::to_torch)
+        .def("item", &mpsdmrg::Tensor::item)
+        .def("clone", &mpsdmrg::Tensor::clone)
+        .def("detach", &mpsdmrg::Tensor::detach)
+        .def("conj", &mpsdmrg::Tensor::conj)
+        .def("to", &mpsdmrg::Tensor::to, py::arg("device") = py::none(),
+             py::arg("dtype") = py::none())
+        .def("combine_legs", &mpsdmrg::Tensor::combine_legs, py::arg("groups"))
+        .def("__getitem__", &mpsdmrg::Tensor::getitem)
+        .def("__setitem__", &mpsdmrg::Tensor::setitem)
+        .def("__neg__", &mpsdmrg::Tensor::operator-)
+        .def("__add__", &mpsdmrg::Tensor::add)
+        .def("__radd__", &mpsdmrg::Tensor::add)
+        .def("__sub__", &mpsdmrg::Tensor::sub)
+        .def("__mul__", [](const mpsdmrg::Tensor& self, const py::object& other) {
+          return self.scale(other, false);
+        })
+        .def("__rmul__", [](const mpsdmrg::Tensor& self, const py::object& other) {
+          return self.scale(other, false);
+        })
+        .def("__truediv__", [](const mpsdmrg::Tensor& self, const py::object& other) {
+          return self.scale(other, true);
+        })
+        .def("__iadd__", [](mpsdmrg::Tensor& self, const py::object& other) -> mpsdmrg::Tensor& {
+          return self.iadd(other);
+        }, py::return_value_policy::reference)
+        .def("__imul__", [](mpsdmrg::Tensor& self, const py::object& other) -> mpsdmrg::Tensor& {
+          return self.imul(other);
+        }, py::return_value_policy::reference)
+        .def("__itruediv__", [](mpsdmrg::Tensor& self, const py::object& other) -> mpsdmrg::Tensor& {
+          return self.idiv(other);
+        }, py::return_value_policy::reference)
+        .def("__reduce__", [](const mpsdmrg::Tensor& self) {
+          py::list blocks;
+          for (const at::Tensor& block : self.blocks()) blocks.append(py::cast(block));
+          py::tuple keys(self.qdata().size());
+          for (std::size_t i = 0; i < self.qdata().size(); ++i) {
+            keys[i] = mpsdmrg::key_to_python(self.qdata()[i]);
+          }
+          py::tuple legs(self.legs().size());
+          for (std::size_t i = 0; i < self.legs().size(); ++i) legs[i] = py::cast(self.legs()[i]);
+          return py::make_tuple(py::type::of<mpsdmrg::Tensor>(),
+                                py::make_tuple(blocks, keys, legs,
+                                               mpsdmrg::to_python(self.qtotal()), self.group()));
+        }, "the constructor arguments, so that a tensor survives a pickle round trip");
 }
 
 }  // namespace mpsdmrg

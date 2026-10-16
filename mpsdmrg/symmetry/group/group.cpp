@@ -39,12 +39,16 @@ int64_t Group::n_symbol(const Sector& a, const Sector& b, const Sector& c) const
 }
 
 at::Tensor Group::fusion_tensor(const Sector&, const Sector&, const Sector&,
-                                const c10::Device&) const {
+                                const c10::Device&, int64_t) const {
   throw not_implemented_error("Group " + group_name_ + " has no Clebsch-Gordan tensor.");
 }
 
 std::vector<Sector> Group::all_sectors() const {
   throw not_implemented_error("Group " + group_name_ + " does not list its sectors.");
+}
+
+double Group::dual_sign(const Sector&) const {
+  return 1.0;
 }
 
 Sector Group::sector_of_dimension(int64_t) const {
@@ -59,6 +63,10 @@ c10::ScalarType Group::fusion_dtype() const {
   throw not_implemented_error("Group " + group_name_ + " does not define a fusion tensor.");
 }
 
+at::Tensor Group::invariant_form(const Sector&, const c10::Device&) const {
+  throw not_implemented_error("Group " + group_name_ + " does not define an invariant form.");
+}
+
 at::Tensor Group::duality_matrix(const Sector&, const c10::Device&) const {
   throw not_implemented_error("Group " + group_name_ + " does not define its conjugate basis.");
 }
@@ -70,7 +78,8 @@ namespace mpsdmrg {
 void bind_group(py::module_& m) {
   py::enum_<mpsdmrg::FusionStyle> fusion_style(m, "FusionStyle");
   fusion_style.value("single", mpsdmrg::FusionStyle::single)
-      .value("multiple_unique", mpsdmrg::FusionStyle::multiple_unique);
+      .value("multiple_unique", mpsdmrg::FusionStyle::multiple_unique)
+      .value("general", mpsdmrg::FusionStyle::general);
   py::enum_<mpsdmrg::BraidingStyle> braiding_style(m, "BraidingStyle");
   braiding_style.value("bosonic", mpsdmrg::BraidingStyle::bosonic)
       .value("fermionic", mpsdmrg::BraidingStyle::fermionic);
@@ -79,12 +88,15 @@ void bind_group(py::module_& m) {
   // ``is`` comparisons of the checks hold.
   const py::object single = fusion_style.attr("single");
   const py::object multiple_unique = fusion_style.attr("multiple_unique");
+  const py::object general = fusion_style.attr("general");
   const py::object bosonic = braiding_style.attr("bosonic");
   const py::object fermionic = braiding_style.attr("fermionic");
 
   py::class_<mpsdmrg::Group, std::shared_ptr<mpsdmrg::Group>>(m, "Group")
-      .def_property_readonly("fusion_style", [single, multiple_unique](const mpsdmrg::Group& self) {
-        return self.fusion_style() == mpsdmrg::FusionStyle::single ? single : multiple_unique;
+      .def_property_readonly("fusion_style", [single, multiple_unique, general](const mpsdmrg::Group& self) {
+        const mpsdmrg::FusionStyle style = self.fusion_style();
+        return style == mpsdmrg::FusionStyle::single ? single
+             : (style == mpsdmrg::FusionStyle::multiple_unique ? multiple_unique : general);
       })
       .def_property_readonly("braiding_style", [bosonic, fermionic](const mpsdmrg::Group& self) {
         return self.braiding_style() == mpsdmrg::BraidingStyle::bosonic ? bosonic : fermionic;
@@ -124,9 +136,9 @@ void bind_group(py::module_& m) {
       .def("n_symbol", &mpsdmrg::Group::n_symbol, py::arg("a"), py::arg("b"), py::arg("c"))
       .def("fusion_tensor",
            [](const mpsdmrg::Group& self, const mpsdmrg::Sector& a, const mpsdmrg::Sector& b,
-              const mpsdmrg::Sector& c, const c10::Device& device) {
-             return self.fusion_tensor(a, b, c, device);
-           }, py::arg("a"), py::arg("b"), py::arg("c"), py::arg("device"))
+              const mpsdmrg::Sector& c, const c10::Device& device, int64_t copy) {
+             return self.fusion_tensor(a, b, c, device, copy);
+           }, py::arg("a"), py::arg("b"), py::arg("c"), py::arg("device"), py::arg("copy") = 0)
       .def("all_sectors", [](const mpsdmrg::Group& self) {
         if (std::isinf(self.num_sectors())) {
           throw mpsdmrg::value_error("Group " + self.group_name() +
@@ -147,6 +159,10 @@ void bind_group(py::module_& m) {
            [](const mpsdmrg::Group& self, const mpsdmrg::Sector& sector,
               const c10::Device& device) { return self.duality_matrix(sector, device); },
            py::arg("sector"), py::arg("device"))
+      .def("invariant_form",
+           [](const mpsdmrg::Group& self, const mpsdmrg::Sector& sector,
+              const c10::Device& device) { return self.invariant_form(sector, device); },
+           py::arg("sector"), py::arg("device"))
       .def("__eq__", [](const mpsdmrg::Group& self, const py::object& other) -> py::object {
         if (!py::isinstance<mpsdmrg::Group>(other)) {
           return py::reinterpret_borrow<py::object>(Py_NotImplemented);
@@ -158,7 +174,7 @@ void bind_group(py::module_& m) {
       })
       .def("__repr__", &mpsdmrg::Group::group_name)
       .def("__reduce__", [](const mpsdmrg::Group& self) {
-        return py::make_tuple(py::module_::import("mpsdmrg.symmetry.cpp").attr("_restore_group"),
+        return py::make_tuple(py::module_::import("mpsdmrg.ext").attr("_restore_group"),
                               py::make_tuple(self.group_name()));
       }, "the name of the singleton group, so that a group survives a pickle round trip");
 }

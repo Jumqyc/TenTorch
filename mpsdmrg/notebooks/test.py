@@ -1,6 +1,7 @@
 import sys
 
 from mpsdmrg import Broomstick, MPO, MPS, SpinOperator
+from mpsdmrg.tensor import Tensor
 import numpy as np
 import torch
 
@@ -70,7 +71,7 @@ def aklt():
 
     S1 = SpinOperator(phys_dim).data  # [Sx, Sy, Sz]
     Sx, Sy, Sz = S1[0], S1[1], S1[2]
-    I3 = torch.eye(phys_dim, dtype=torch.complex128, device='cuda')
+    I3 = Tensor.from_torch(torch.eye(phys_dim, dtype=torch.complex128, device='cuda'))
 
     # Build mapping with all product operators needed for (S·S)²
     mapping = {'X': Sx, 'Y': Sy, 'Z': Sz, 'I': I3}
@@ -78,7 +79,7 @@ def aklt():
     op_names = ['X', 'Y', 'Z']
     for i, a_name in enumerate(op_names):
         for j, b_name in enumerate(op_names):
-            mapping[f'{a_name}{b_name}'] = op_list[i] @ op_list[j]
+            mapping[f'{a_name}{b_name}'] = Tensor.from_torch(op_list[i].to_torch() @ op_list[j].to_torch())
 
     aklt_mpo = MPO(L, phys_dim=phys_dim, mapping=mapping)
 
@@ -107,7 +108,7 @@ def uls():
     phys_dim = 3
     S1 = SpinOperator(phys_dim).data  # [Sx, Sy, Sz]
     Sx, Sy, Sz = S1[0], S1[1], S1[2]
-    I3 = torch.eye(phys_dim, dtype=torch.complex128, device='cuda')
+    I3 = Tensor.from_torch(torch.eye(phys_dim, dtype=torch.complex128, device='cuda'))
 
     # Build mapping with all product operators needed for (S·S)²
     mapping = {'X': Sx, 'Y': Sy, 'Z': Sz, 'I': I3}
@@ -115,7 +116,7 @@ def uls():
     op_names = ['X', 'Y', 'Z']
     for i, a_name in enumerate(op_names):
         for j, b_name in enumerate(op_names):
-            mapping[f'{a_name}{b_name}'] = op_list[i] @ op_list[j]
+            mapping[f'{a_name}{b_name}'] = Tensor.from_torch(op_list[i].to_torch() @ op_list[j].to_torch())
 
     uls_h = MPO(L, phys_dim=phys_dim, mapping=mapping)
 

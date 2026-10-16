@@ -15,7 +15,7 @@ namespace mpsdmrg {
 using Sector = std::vector<int64_t>;
 
 // How many outcomes the fusion of two sectors has.
-enum class FusionStyle { single = 0, multiple_unique = 10 };
+enum class FusionStyle { single = 0, multiple_unique = 10, general = 20 };
 
 // How sectors behave when two legs carrying them are exchanged.
 enum class BraidingStyle { bosonic = 0, fermionic = 10 };
@@ -59,6 +59,9 @@ class Group {
   // Whether the fusion of two sectors has a single outcome.
   bool is_abelian() const { return fusion_style_ == FusionStyle::single; }
 
+  // Whether a fusion vertex can be realized in more than one way.
+  bool carries_multiplicity() const { return fusion_style_ == FusionStyle::general; }
+
   const std::string& type_name() const { return type_name_; }
   const std::string& group_name() const { return group_name_; }
   double num_sectors() const { return num_sectors_; }
@@ -78,18 +81,22 @@ class Group {
   // Whether `a` and `b` can fuse to `c`.
   bool can_fuse_to(const Sector& a, const Sector& b, const Sector& c) const;
   // Multiplicity of the fusion of `a` and `b` to `c`.
-  int64_t n_symbol(const Sector& a, const Sector& b, const Sector& c) const;
-  // The structural tensor of one fusion vertex, one block per channel.
+  virtual int64_t n_symbol(const Sector& a, const Sector& b, const Sector& c) const;
+  // The structural tensor of one fusion vertex, one block per channel.  `copy` selects the
+  // coupling when the vertex couples more than once.
   virtual at::Tensor fusion_tensor(const Sector& a, const Sector& b, const Sector& c,
-                                   const c10::Device& device) const;
+                                   const c10::Device& device, int64_t copy = 0) const;
   // Every sector of a group that enumerates them, in order.
   virtual std::vector<Sector> all_sectors() const;
   // The sector of the multiplet of dimension `dim`, for a group whose multiplets are told
   // apart by their dimension alone.
   virtual Sector sector_of_dimension(int64_t dim) const;
+  // The sign that conjugating a leg in this sector costs; it is the Frobenius-Schur indicator.
+  virtual double dual_sign(const Sector& sector) const;
   // The conjugate basis of a sector against its own basis: entry (row, column) maps the
   // column index of the leg onto the row index of the leg that stores its dual.
   virtual at::Tensor duality_matrix(const Sector& a, const c10::Device& device) const;
+  virtual at::Tensor invariant_form(const Sector& a, const c10::Device& device) const;
   /// The component of a coupled multiplet the reduced blocks are stored at.
   virtual int64_t reference_index(const Sector& a) const;
   /// The dtype of the fusion tensors of this group.

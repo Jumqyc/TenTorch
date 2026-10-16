@@ -2,19 +2,20 @@
 The SU(2) multiplet content of an invariant Hamiltonian.
 
 The tensor operators of one site and the invariant two-site channels they generate; the
-builder that places them lives in :mod:`mpsdmrg.symmetry.invariant` and asks here for the
+builder that places them lives in :mod:`mpsdmrg.mpo` and asks here for the
 content of a site.
 '''
 from __future__ import annotations
 
 import torch
 
-from mpsdmrg.symmetry import Group, Sector
+from mpsdmrg.ext import Group, Sector
 # the type name of the group whose multiplets this module carries
 GROUP = "SU2Symmetry"
 
 
-def tensor_operators(group: Group, spins: torch.Tensor) -> dict[int, torch.Tensor]:
+def tensor_operators(group: Group, mapping: dict[str, torch.Tensor], dim: int,
+                     dtype: torch.dtype, device: torch.device) -> dict[int, torch.Tensor]:
     r'''
     The rank-k tensor operators of one site, from the adjoint action of the spin algebra.
 
@@ -24,17 +25,26 @@ def tensor_operators(group: Group, spins: torch.Tensor) -> dict[int, torch.Tenso
 
     Args:
         group: the symmetry group; it needs a Clebsch-Gordan tensor, so it must be non-abelian.
-        spins: the three spin matrices in shape (3, d, d); Hermitian.
+        mapping: operator names to their dense matrices; the spin components ``X``, ``Y`` and
+            ``Z`` must be in it.
+        dim: physical dimension of one site.
+        dtype, device: data type and device of the matrices.
     Returns:
         dict rank -> tensor in shape (2k + 1, d, d), the :math:`T^{(k)}_m` for m from k down to
         -k, normalized by ``ad_+ T_m = sqrt((k - m)(k + m + 1)) T_{m + 1}``.
     Raises:
+        ValueError: If a spin component is missing from the mapping.
         NotImplementedError: If the group is abelian, so it carries no multiplet structure.
     '''
     if group.is_abelian:
         raise NotImplementedError(
             f'The tensor operators need a group with a multiplet structure, not {group.group_name}.')
-    dim = spins.shape[-1]
+    missing = [name for name in ('X', 'Y', 'Z') if name not in mapping]
+    if missing:
+        raise ValueError(f'The SU(2) tensor operators need the spin components {missing} '
+                         f'in the mapping.')
+    spins = torch.stack([mapping[name].to(dtype=dtype, device=device).contiguous()
+                         for name in ('X', 'Y', 'Z')])
     eye = torch.eye(dim, dtype=spins.dtype, device=spins.device)
     # row-major vectorization of a commutator: ad_a(X) = a X - X a -> a x I - I x a^T
     adjoint = [torch.kron(a.contiguous(), eye) - torch.kron(eye, a.mT.contiguous()) for a in spins]

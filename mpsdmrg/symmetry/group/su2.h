@@ -13,9 +13,11 @@ class SU2Symmetry : public Group {
   std::vector<Sector> fusion_outcomes(const Sector& a, const Sector& b) const override;
   int64_t sector_dim(const Sector& a) const override;
   at::Tensor fusion_tensor(const Sector& a, const Sector& b, const Sector& c,
-                           const c10::Device& device) const override;
+                           const c10::Device& device, int64_t copy = 0) const override;
   Sector sector_of_dimension(int64_t dim) const override;
+  double dual_sign(const Sector& sector) const override;
   at::Tensor duality_matrix(const Sector& a, const c10::Device& device) const override;
+  at::Tensor invariant_form(const Sector& a, const c10::Device& device) const override;
   int64_t reference_index(const Sector& a) const override;
   c10::ScalarType fusion_dtype() const override;
   bool is_same_symmetry(const Group& other) const override;
@@ -28,7 +30,7 @@ void bind_su2(py::module_& m);
 }  // namespace mpsdmrg
 
 // Clebsch-Gordan core of SU(2), labelled by twice the spin, shared by the symmetry engine
-// (mpsdmrg/symmetry/cpp/engine.cpp) and the data bindings (mpsdmrg/symmetry/data/su2data.cpp).
+// (mpsdmrg/ext/bindings.cpp) and the data shim (mpsdmrg/symmetry/data/su2data.py).
 //
 // A spin pair (j1, j2) is built level by level, from M = j1 + j2 down to -(j1 + j2) in
 // steps of two.  The states already at a level are lowered by J_-, and the one state

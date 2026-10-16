@@ -9,8 +9,13 @@ from __future__ import annotations
 
 from types import ModuleType
 
-from mpsdmrg.symmetry import Group
-from mpsdmrg.symmetry.multiplet import su2, su3
+from mpsdmrg.ext import (  # noqa: F401
+    SU2Symmetry, SU3Symmetry, U1Symmetry, ZNSymmetry, AbelianGroup, BraidingStyle,
+    FermionParity, FusionStyle, FusionTree, Group, Leg, NoSymmetry, Sector, dual_sign,
+    fermion_parity, fusion_trees, no_symmetry, stored_dense, su2_symmetry, su3_symmetry,
+    u1_symmetry, z2_symmetry, z3_symmetry, z4_symmetry, z5_symmetry, z6_symmetry,
+    z7_symmetry, z8_symmetry, z9_symmetry)
+from mpsdmrg.symmetry.group import su2, su3
 
 # the modules that carry a multiplet content, keyed by the type name of their group
 _MODULES = {module.GROUP: module for module in (su2, su3)}
