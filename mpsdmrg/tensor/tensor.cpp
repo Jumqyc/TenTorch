@@ -396,6 +396,47 @@ namespace sym
     return fused;
   }
 
+  // The total charges a leg set can carry: one sector per leg, fused along the legs.
+  std::vector<Sector> leg_totals(const std::shared_ptr<Group> &group, const std::vector<Leg> &legs)
+  {
+    std::vector<Sector> totals{group->trivial_sector()};
+    for (const Leg &leg : legs)
+    {
+      std::vector<Sector> next;
+      for (const Sector &total : totals)
+        for (int64_t qi = 0; qi < leg.nblocks(); ++qi)
+          for (const Sector &outcome : group->fusion_outcomes(total, leg.sector(qi, true)))
+            if (std::find(next.begin(), next.end(), outcome) == next.end())
+              next.push_back(outcome);
+      totals = std::move(next);
+    }
+    return totals;
+  }
+
+  // The total charges a contraction can carry: the operands fix them up to the fusion outcomes,
+  // the output legs fix them up to the sectors they carry, and only the charges in both survive.
+  std::vector<Sector> contracted_candidates(const std::shared_ptr<Group> &group,
+                                            const std::vector<Sector> &totals,
+                                            const std::vector<Leg> &legs)
+  {
+    const std::vector<Sector> reachable = leg_totals(group, legs);
+    std::vector<Sector> folded{group->trivial_sector()};
+    for (const Sector &sector : totals)
+    {
+      std::vector<Sector> next;
+      for (const Sector &total : folded)
+        for (const Sector &outcome : group->fusion_outcomes(total, sector))
+          next.push_back(outcome);
+      folded = std::move(next);
+    }
+    std::vector<Sector> shared;
+    for (const Sector &total : folded)
+      if (std::find(reachable.begin(), reachable.end(), total) != reachable.end() &&
+          std::find(shared.begin(), shared.end(), total) == shared.end())
+        shared.push_back(total);
+    return shared;
+  }
+
   Sector fused_qtotal(const std::shared_ptr<Group> &group, const std::vector<Sector> &sectors)
   {
     if (sectors.empty())
@@ -423,6 +464,25 @@ namespace sym
     std::vector<std::size_t> sizes;
     for (const Leg &leg : legs)
       sizes.push_back(static_cast<std::size_t>(leg.nblocks()));
+    // a fully resolved tensor stores the dense block of its charge window: two leg blocks pair
+    // whenever their sectors can fuse to the total, and no fusion path has to be enumerated
+    if (std::all_of(legs.begin(), legs.end(), [](const Leg &leg) { return leg.resolved(); }))
+    {
+      std::vector<BlockKey> resolved_keys;
+      for_each_combination(sizes, [&](const std::vector<std::size_t> &index)
+                           {
+        std::vector<Sector> resolved_sectors;
+        for (std::size_t i = 0; i < index.size(); ++i)
+          resolved_sectors.push_back(legs[i].sector(static_cast<int64_t>(index[i]), true));
+        if (fusion_trees(group, resolved_sectors, qtotal).empty())
+          return;
+        BlockKey resolved_key;
+        for (std::size_t i = 0; i < index.size(); ++i)
+          resolved_key.legs.push_back(static_cast<int64_t>(index[i]));
+        resolved_keys.push_back(resolved_key);
+      });
+      return resolved_keys;
+    }
     std::vector<BlockKey> out;
     for_each_combination(sizes, [&](const std::vector<std::size_t> &index)
                          {
@@ -443,7 +503,7 @@ namespace sym
   {
     Shape out;
     for (std::size_t i = 0; i < legs.size(); ++i)
-      out.push_back(legs[i].multiplicity(key.legs.at(i)));
+      out.push_back(legs[i].data_dim(key.legs.at(i)));
     return out;
   }
 
@@ -454,7 +514,7 @@ namespace sym
     {
       std::vector<int64_t> running{0};
       for (int64_t qi = 0; qi < leg.nblocks(); ++qi)
-        running.push_back(running.back() + leg.multiplicity(qi));
+        running.push_back(running.back() + leg.data_dim(qi));
       offsets.push_back(running);
     }
     return offsets;
@@ -598,12 +658,23 @@ namespace sym
 
   Tensor::Tensor(std::vector<at::Tensor> blocks, std::vector<BlockKey> qdata,
                  std::vector<Leg> legs, std::optional<Sector> qtotal,
-                 std::shared_ptr<Group> group)
-      : blocks_(std::move(blocks)), qdata_(std::move(qdata)), legs_(std::move(legs))
+                 std::shared_ptr<Group> group, bool homogeneous)
+      : blocks_(std::move(blocks)), qdata_(std::move(qdata)), legs_(std::move(legs)),
+        homogeneous_(homogeneous)
   {
     group_ = legs_.empty() ? (group ? std::move(group) : no_symmetry()) : legs_.front().group();
     qtotal_ = qtotal ? *qtotal : group_->trivial_sector();
     canonicalize();
+  }
+
+  // A sum of several total charges has no single one to report.
+  const Sector &Tensor::qtotal() const
+  {
+    if (!homogeneous_)
+    {
+      throw not_implemented_error("This tensor sums several total charges; ask its blocks.");
+    }
+    return qtotal_;
   }
 
   void Tensor::canonicalize()
@@ -643,8 +714,13 @@ namespace sym
     }
     // A group that can couple a vertex in several ways stores the realized copy with the path.
     const bool multiplicity = group_->carries_multiplicity() && n >= 2;
+    // a fully resolved tensor stores the dense block of its charge window, so its key is the
+    // bare list of leg blocks: no fusion path and no copy has to be named
+    const bool all_resolved = std::all_of(legs_.begin(), legs_.end(),
+                                          [](const Leg &leg) { return leg.resolved(); });
     const int64_t key_length =
-        static_cast<int64_t>(n + (n > 2 ? n - 2 : 0) + (multiplicity ? n - 1 : 0));
+        all_resolved ? static_cast<int64_t>(n)
+                     : static_cast<int64_t>(n + (n > 2 ? n - 2 : 0) + (multiplicity ? n - 1 : 0));
     for (std::size_t i = 0; i < blocks_.size(); ++i)
     {
       const BlockKey &key = qdata_[i];
@@ -668,12 +744,13 @@ namespace sym
       {
         assertion_failed("Block shape does not match the legs of the tensor.");
       }
-      // Every block stores its fusion path and that path must reach the total charge.
-      if (n >= 2)
+      // Every block stores its fusion path; a tensor that sums several total charges keeps
+      // each block's own coupled charge instead of comparing it to one total.
+      if (homogeneous_ && n >= 2)
       {
-        FusionTree::from_blocks(group_, legs_, key, qtotal_);
+        if (!all_resolved) FusionTree::from_blocks(group_, legs_, key, qtotal_);
       }
-      else if (n == 1 && legs_.front().sector(key.legs.front(), true) != qtotal_)
+      else if (homogeneous_ && n == 1 && legs_.front().sector(key.legs.front(), true) != qtotal_)
       {
         assertion_failed("A block carries another charge than the total charge of the tensor.");
       }
@@ -874,10 +951,34 @@ namespace sym
       }
       return out;
     }
-    if (qtotal_ != group_->trivial_sector())
+    const bool resolved_all = std::all_of(legs_.begin(), legs_.end(),
+                                          [](const Leg &leg) { return leg.resolved(); });
+    if (qtotal_ != group_->trivial_sector() && !resolved_all)
     {
       throw not_implemented_error("Expanding the multiplet of charge " + sector_repr(qtotal_) +
-                                  " needs one component per entry.");
+                                  " needs one component per entry; resolve the legs to store "
+                                  "the components.");
+    }
+    if (resolved_all)
+    {
+      // every leg stores its own dense index, so a block is the dense block of its charge window
+      for (std::size_t i = 0; i < blocks_.size(); ++i)
+      {
+        at::Tensor view = out;
+        for (std::size_t k = 0; k < legs_.size(); ++k)
+          view = view.slice(k, legs_[k].slices().at(qdata_[i].legs[k]),
+                            legs_[k].slices().at(qdata_[i].legs[k] + 1));
+        view.add_(blocks_[i].reshape(view.sizes()));
+      }
+      return out;
+    }
+    const bool partly_resolved = std::any_of(legs_.begin(), legs_.end(),
+                                             [](const Leg &leg) { return leg.resolved(); });
+    if (partly_resolved)
+    {
+      throw not_implemented_error(
+          "Expanding a tensor that resolves only some of its legs needs the pairing of the "
+          "block data with the vertex axis of every resolved leg; resolve every leg or none.");
     }
     for (std::size_t i = 0; i < blocks_.size(); ++i)
     {
@@ -892,17 +993,85 @@ namespace sym
       for_each_combination(sizes, [&](const std::vector<std::size_t> &index)
                            {
       at::Tensor view = out;
+      at::Tensor value = x;
       std::vector<int64_t> point;
+      bool any_resolved = false;
       for (std::size_t k = 0; k < legs_.size(); ++k) {
         const int64_t step = group_->sector_dim(tree.sectors().at(k));
         const int64_t first = legs_[k].slices().at(qdata_[i].legs[k]) +
                               static_cast<int64_t>(index[k]) * step;
         view = view.slice(k, first, first + step);
         point.push_back(static_cast<int64_t>(index[k]));
+        if (legs_[k].resolved()) {
+          // a resolved leg stores one entry per vertex component: the whole step is read
+          any_resolved = true;
+          value = value * blocks_[i].narrow(static_cast<int64_t>(k),
+                                            static_cast<int64_t>(index[k]) * step, step);
+        }
       }
-      view.add_(x * scalar_at(blocks_[i], point)); });
+      view.add_(any_resolved ? value : x * scalar_at(blocks_[i], point)); });
     }
     return out;
+  }
+
+  Tensor Tensor::resolve() const
+  {
+    if (std::all_of(legs_.begin(), legs_.end(), [](const Leg &leg) { return leg.resolved(); }))
+    {
+      return *this;
+    }
+    std::vector<Leg> resolved;
+    for (const Leg &leg : legs_)
+    {
+      resolved.push_back(Leg(leg.group(), leg.sectors(), leg.slices(), leg.qconj(), true));
+    }
+    return from_torch(to_torch(), resolved, qtotal_);
+  }
+
+  Tensor Tensor::unresolve() const
+  {
+    if (std::none_of(legs_.begin(), legs_.end(), [](const Leg &leg) { return leg.resolved(); }))
+    {
+      return *this;
+    }
+    std::vector<Leg> plain;
+    for (const Leg &leg : legs_)
+    {
+      plain.push_back(Leg(leg.group(), leg.sectors(), leg.slices(), leg.qconj(), false));
+    }
+    const at::Tensor dense = to_torch();
+    std::vector<at::Tensor> blocks;
+    std::vector<BlockKey> qdata;
+    for (const BlockKey &key : combos(plain, qtotal_))
+    {
+      const FusionTree tree = FusionTree::from_blocks(group_, plain, key, qtotal_);
+      const at::Tensor vertex = take_last(stored_dense(plain, tree, dense.device()),
+                                          group_->reference_index(tree.coupled()));
+      const at::Tensor scale = at::sum(at::real(vertex.conj() * vertex));
+      std::vector<std::size_t> sizes;
+      for (std::size_t i = 0; i < plain.size(); ++i)
+      {
+        sizes.push_back(static_cast<std::size_t>(plain[i].multiplicity(key.legs.at(i))));
+      }
+      // A resolved leg stores the whole vertex window of every copy of its sector; the reduced
+      // block stores one entry per copy, so the copies are projected onto the vertex one by one.
+      at::Tensor block = at::zeros(Shape(sizes.begin(), sizes.end()), dense.options());
+      for_each_combination(sizes, [&](const std::vector<std::size_t> &index)
+                           {
+        at::Tensor window = dense;
+        int64_t point = 0;
+        for (std::size_t i = 0; i < plain.size(); ++i) {
+          const int64_t step = group_->sector_dim(tree.sectors().at(i));
+          const int64_t first = plain[i].slices().at(static_cast<std::size_t>(key.legs.at(i))) +
+                                static_cast<int64_t>(index[i]) * step;
+          window = window.narrow(static_cast<int64_t>(i), first, step);
+          point = point * static_cast<int64_t>(sizes[i]) + static_cast<int64_t>(index[i]);
+        }
+        block.reshape({-1}).index_put_({point}, at::sum(window * vertex.conj()) / scale); });
+      blocks.push_back(block);
+      qdata.push_back(key);
+    }
+    return Tensor(blocks, qdata, plain, qtotal_, group_);
   }
 
   py::object Tensor::item() const { return py::cast(to_torch().item()); }
@@ -928,6 +1097,15 @@ namespace sym
     std::vector<Leg> legs;
     for (const Leg &leg : legs_)
       legs.push_back(leg.conj());
+    // A fully resolved tensor stores its charge in the legs, so conjugating it is the
+    // elementwise conjugate of every block; no coupling of a fusion path has to be dualised.
+    if (std::all_of(legs_.begin(), legs_.end(), [](const Leg &leg) { return leg.resolved(); }))
+    {
+      std::vector<at::Tensor> plain;
+      for (const at::Tensor &block : blocks_)
+        plain.push_back(block.conj());
+      return Tensor(plain, qdata_, legs, qtotal_, group_, homogeneous_);
+    }
     std::vector<BlockKey> qdata = qdata_;
     // Dualising the legs dualises every coupling of a block's fusion path.
     for (BlockKey &key : qdata)
@@ -1298,11 +1476,11 @@ namespace sym
     }
     for (int64_t l : summed)
     {
-      if (counts[l] != 2)
+      if (counts[l] != 2 && counts[l] != 1)
       {
         throw not_implemented_error("Subscript '" + std::string(1, kLabels.at(l)) + "' is contracted " +
                                     std::to_string(counts[l]) +
-                                    " times; only a pair of operands is supported.");
+                                    " times; only a pair of operands, or a single one, is supported.");
       }
     }
     std::vector<std::map<int64_t, int64_t>> axes(n_operands);
@@ -1326,6 +1504,23 @@ namespace sym
         }
       }
       const Leg &first_leg = tensors[first].legs()[axes[first][l]];
+      if (second == n_operands)
+      {
+        // The label is summed over its own leg, a leg of the boundary of a state or of an
+        // operator.  Every block of it must carry the trivial sector, otherwise the blocks
+        // fusing their other legs to different total charges are added together and the result
+        // is no longer one charged tensor.
+        for (const Sector &sector : first_leg.sectors())
+        {
+          if (sector != tensors[first].group()->trivial_sector())
+          {
+            throw not_implemented_error(
+                "Subscript '" + std::string(1, kLabels.at(l)) +
+                "' appears once on a leg of a non-trivial sector; summing it would mix total charges.");
+          }
+        }
+        continue;
+      }
       const Leg &second_leg = tensors[second].legs()[axes[second][l]];
       if (first_leg.sectors() != second_leg.sectors() || first_leg.slices() != second_leg.slices() ||
           first_leg.qconj() != -second_leg.qconj())
@@ -1385,15 +1580,40 @@ namespace sym
     const std::shared_ptr<Group> &group = tensors.front().group();
     std::vector<Sector> totals;
     for (const Tensor &t : tensors)
-      totals.push_back(t.qtotal());
-    const Sector qtotal = fused_qtotal(group, totals);
+      // a tensor that sums several total charges carries them in its legs, so its own total
+      // contributes nothing to the fold
+      totals.push_back(t.homogeneous() ? t.qtotal() : group->trivial_sector());
+    // A tensor's total charge follows from its own legs; the operands only narrow it down.
+    // When they leave several charges, a tree is built for every candidate and the charge of the
+    // contraction is the one whose blocks actually appear; that costs nothing in the usual case.
+    std::vector<Sector> tree_totals;
+    try
+    {
+      tree_totals.push_back(fused_qtotal(group, totals));
+    }
+    catch (const std::exception &)
+    {
+      tree_totals = contracted_candidates(group, totals, out_legs);
+      if (tree_totals.empty())
+        throw not_implemented_error(
+            "The contracted tensor carries no total charge the operands and the output legs share.");
+    }
     // A block-less operand is the zero tensor, so the contraction vanishes.
     bool zeroth = false;
     for (const Tensor &t : tensors)
       zeroth = zeroth || t.blocks().empty();
     if (zeroth)
-      return Tensor({}, {}, out_legs, qtotal, group);
+      return Tensor({}, {}, out_legs, tree_totals.front(), group);
     const c10::Device device = tensors.front().blocks().front().device();
+    // A resolved operand keeps the dense index of its charge window in its blocks, so the
+    // contraction below is plain dense work when every operand is resolved.
+    const bool resolved_all =
+        std::all_of(tensors.begin(), tensors.end(),
+                    [](const Tensor &tensor)
+                    {
+                      return std::all_of(tensor.legs().begin(), tensor.legs().end(),
+                                         [](const Leg &leg) { return leg.resolved(); });
+                    });
     // One block combination: the operands to contract, the output key it lands in and, for a
     // non-abelian group, the weight of every fusion tree its value is spread over.
     struct Combo
@@ -1402,6 +1622,7 @@ namespace sym
       std::vector<int64_t> key_legs;
       std::vector<Sector> out_sectors;
       std::vector<std::vector<Sector>> inners;
+      std::vector<Sector> totals;
       std::vector<std::vector<int64_t>> copies;
       std::vector<at::Tensor> weights;
     };
@@ -1440,11 +1661,27 @@ namespace sym
       }
       // An abelian group has no Clebsch-Gordan tensor: its every tree couples the blocks
       // with weight one, so the reduced block is the block of the contracted tensor.
-      if (group->is_abelian()) {
-        for (const FusionTree& tree : fusion_trees(group, combo.out_sectors, qtotal)) {
-          combo.inners.push_back(tree.inner());
-          combo.copies.push_back(group->carries_multiplicity() ? tree.copies()
-                                                               : std::vector<int64_t>{});
+      if (resolved_all) {
+        // A resolved operand stores the dense index of its charge window, so its block already is
+        // the object to contract: the plain dense product enters once, no Clebsch-Gordan factor
+        // and no candidate charge is enumerated per tree.
+        combo.inners.emplace_back();
+        combo.totals.push_back(group->trivial_sector());
+        // A multiplicity-carrying group keys every vertex by its copy as well; a resolved block
+        // holds its component data directly, so the first copy of each vertex is the one it
+        // realizes.
+        if (group->carries_multiplicity())
+          combo.copies.emplace_back(static_cast<std::size_t>(std::max<int64_t>(out.size() - 1, 0)), 0);
+        else
+          combo.copies.emplace_back();
+      } else if (group->is_abelian()) {
+        for (const Sector& candidate : tree_totals) {
+          for (const FusionTree& tree : fusion_trees(group, combo.out_sectors, candidate)) {
+            combo.inners.push_back(tree.inner());
+            combo.totals.push_back(candidate);
+            combo.copies.push_back(group->carries_multiplicity() ? tree.copies()
+                                                                 : std::vector<int64_t>{});
+          }
         }
       } else {
         std::vector<at::Tensor> operands;
@@ -1458,15 +1695,18 @@ namespace sym
           append_tree(tree_key, tensors[o].legs(), tree, device);
         }
         const auto& [folded, folded_labels] = cached_fold(tree_key, operands, labels, out);
-        for (const FusionTree& tree : fusion_trees(group, combo.out_sectors, qtotal)) {
-          const at::Tensor output = take_last(stored_dense(out_legs, tree, device),
-                                              group->reference_index(tree.coupled()));
-          std::vector<int64_t> weight_key = tree_key;
-          append_tree(weight_key, out_legs, tree, device);
-          combo.inners.push_back(tree.inner());
-          combo.copies.push_back(group->carries_multiplicity() ? tree.copies()
-                                                               : std::vector<int64_t>{});
-          combo.weights.push_back(cached_weight(weight_key, output, folded, out, folded_labels));
+        for (const Sector& candidate : tree_totals) {
+          for (const FusionTree& tree : fusion_trees(group, combo.out_sectors, candidate)) {
+            const at::Tensor output = take_last(stored_dense(out_legs, tree, device),
+                                                group->reference_index(tree.coupled()));
+            std::vector<int64_t> weight_key = tree_key;
+            append_tree(weight_key, out_legs, tree, device);
+            combo.inners.push_back(tree.inner());
+            combo.totals.push_back(candidate);
+            combo.copies.push_back(group->carries_multiplicity() ? tree.copies()
+                                                                 : std::vector<int64_t>{});
+            combo.weights.push_back(cached_weight(weight_key, output, folded, out, folded_labels));
+          }
         }
       }
       combinations.push_back(std::move(combo));
@@ -1494,6 +1734,7 @@ namespace sym
       ++batch_label;
     }
     std::map<BlockKey, at::Tensor> blocks;
+    std::vector<Sector> realized;
     for (const auto &[signature, members] : groups)
     {
       at::Tensor batched;
@@ -1531,6 +1772,8 @@ namespace sym
         {
           BlockKey key{combo.key_legs, combo.inners[t]};
           key.copies = combo.copies[t];
+          if (std::find(realized.begin(), realized.end(), combo.totals[t]) == realized.end())
+            realized.push_back(combo.totals[t]);
           // The first term seeds the output block; later terms accumulate into it, and a
           // weighted term fuses the multiply and the add into the one kernel of addcmul_.
           const auto found = blocks.find(key);
@@ -1556,7 +1799,19 @@ namespace sym
       key_list.push_back(key);
       block_list.push_back(block);
     }
-    return Tensor(block_list, key_list, out_legs, qtotal, group);
+    Sector qtotal = tree_totals.front();
+    if (realized.size() == 1)
+    {
+      qtotal = realized.front();
+    }
+    else if (realized.size() > 1)
+    {
+      throw not_implemented_error("The contracted tensor is a sum of " +
+                                  std::to_string(realized.size()) + " total charges.");
+    }
+    // Dense blocks carry their charge in the legs, so the result has no single total charge to
+    // report whenever the legs of the result allow several.
+    return Tensor(block_list, key_list, out_legs, qtotal, group, !resolved_all);
   }
 
   Tensor cached_einsum(const std::string &spec, py::args tensors)
@@ -1610,7 +1865,7 @@ namespace sym
 
     py::class_<sym::Tensor>(m, "Tensor")
         .def(py::init([](const py::object &blocks, const py::object &qdata, const py::object &legs,
-                         const py::object &qtotal, const py::object &group)
+                         const py::object &qtotal, const py::object &group, bool homogeneous)
                       {
                std::vector<sym::Leg> parsed_legs = sym::parse_legs(legs, py::none());
                std::vector<at::Tensor> parsed_blocks;
@@ -1625,9 +1880,11 @@ namespace sym
                return sym::Tensor(
                    std::move(parsed_blocks), std::move(parsed_keys), std::move(parsed_legs),
                    parsed_qtotal,
-                   group.is_none() ? nullptr : group.cast<std::shared_ptr<sym::Group>>()); }),
+                   group.is_none() ? nullptr : group.cast<std::shared_ptr<sym::Group>>(),
+                   homogeneous); }),
              py::arg("blocks"), py::arg("qdata"), py::arg("legs"), py::arg("qtotal") = py::none(),
-             py::arg("group") = py::none())
+             py::arg("group") = py::none(), py::arg("homogeneous") = true)
+        .def_property_readonly("homogeneous", &sym::Tensor::homogeneous)
         .def_static("from_torch", [](const at::Tensor &data, const py::object &legs, const py::object &qtotal)
                     {
                       std::optional<std::vector<sym::Leg>> parsed_legs;
@@ -1663,6 +1920,8 @@ namespace sym
         .def("numel", &sym::Tensor::numel)
         .def("element_size", &sym::Tensor::element_size)
         .def("to_torch", &sym::Tensor::to_torch)
+        .def("unresolve", &sym::Tensor::unresolve)
+        .def("resolve", &sym::Tensor::resolve)
         .def("item", &sym::Tensor::item)
         .def("clone", &sym::Tensor::clone)
         .def("detach", &sym::Tensor::detach)

@@ -1,0 +1,496 @@
+% The physics of the symmetry data: representations, fusion, invariance, and the container.
+\chapter{Tensors}
+We follow the convention by \cite{tenpy2024}.
+\section{Symmetry and why representations appear}
+
+A quantum state of a lattice model is a vector in a Hilbert space
+$\mathcal H=\bigotimes_{i}\mathcal H_i$, and a symmetry group $G$ acts
+on it through a representation $U(g)=\bigotimes_i u_i(g)$.
+The sites'' local spaces $\mathcal H_i$ are therefore representations of $G$,
+and the physically meaningful operators are those that transform in a
+definite way under $G$.
+
+For a compact Lie group the irreducible representations (irreps) are the
+elementary building blocks.  Any local space decomposes as
+\begin{equation}
+  \mathcal H_i \;\cong\; \bigoplus_{\lambda} m^{i}_{\lambda}\, V_{\lambda},
+\end{equation}
+with $V_{\lambda}$ the irrep of highest weight $\lambda$ and $m^i_\lambda$ its
+multiplicity.  In a spin chain, for example, the local space is a single irrep:
+$\mathcal H_i = V_j$ for spin $j$.  In a Hubbard or $t$--$J$ model it is a
+direct sum of several irreps.
+
+Two facts organize everything that follows.
+
+\begin{enumerate}
+  \item \emph{Only the multiplicities are data.}  An irreducible sector
+        $V_\lambda$ of a local space has no free parameters: once the group
+        and the irrep are fixed, the matrix elements of the generators are the
+        universal representation matrices.
+  \item \emph{Intertwiners carry the physics.}  A tensor that is invariant
+        under $G$ is a map between tensor products of irreps that commutes
+        with the action, and by Schur''s lemma such a map is a sum of
+        proportional copies of the few elementary intertwiners the fusion
+        rules allow.  The proportionality constants are the physical numbers.
+\end{enumerate}
+
+The rest of these notes makes those two statements precise, then describes
+the block-sparse container that realizes them, and the cost argument for why
+the sparse route is the production algorithm.
+
+\section{Lie algebras and their representations}
+\label{sec:lie}
+
+\subsection{Generators, structure constants, Casimir}
+
+A Lie group $G$ has a Lie algebra $\mathfrak g$ with generators $T^a$,
+$a=1,\dots,\dim\mathfrak g$, satisfying
+\begin{equation}
+  [T^a,T^b] \;=\; \mathrm i\, f^{ab}{}_{c}\, T^{c},
+\end{equation}
+with the totally antisymmetric structure constants $f^{abc}$.  The quadratic
+Casimir
+\begin{equation}
+  C_2 \;=\; \sum_{a} T^a T^a
+\end{equation}
+commutes with every generator, $[C_2,T^a]=0$, so by Schur''s lemma it is a
+constant on each irrep.  It is the natural label-independent measure of an
+irrep''s ``size''.
+
+A maximal set of commuting generators $H_i$, $i=1,\dots,r$ (the rank of
+$\mathfrak g$ being $r$) spans the Cartan subalgebra.  Their simultaneous
+eigenvalues are the {\em weights}: a state of weight $\mu$ satisfies
+$H_i|\mu\rangle=\mu_i|\mu\rangle$.  Raising and lowering operators
+$E_\alpha$, associated with the roots $\alpha$, move between weights,
+$\mu\mapsto\mu+\alpha$; positive roots raise, and a highest weight
+$\lambda$ is annihilated by all of them.
+
+\subsection{Highest-weight representations and the dimension formula}
+
+An irrep is built from a highest weight: one starts from the state
+$|\lambda\rangle$ with $E_{\alpha}|\lambda\rangle=0$ for all positive roots
+$\alpha$, and applies lowering operators repeatedly.  The result is a
+finite-dimensional irrep iff $\lambda$ is dominant integral, which in
+Dynkin labels means non-negative integer coefficients on the fundamental
+weights.
+
+The dimension is the Weyl formula
+\begin{equation}
+  \dim V_\lambda \;=\; \prod_{\alpha>0}
+  \frac{\langle \lambda+\rho,\alpha\rangle}{\langle \rho,\alpha\rangle},
+  \qquad \rho \;=\; \tfrac12\sum_{\alpha>0}\alpha ,
+  \label{eq:weyl}
+\end{equation}
+and the Casimir eigenvalue is
+\begin{equation}
+  C_2(\lambda) \;=\; \langle \lambda,\lambda+2\rho\rangle ,
+\end{equation}
+in the normalization in which the generators are those of the defining
+representation.
+
+\subsection{The two groups at hand}
+
+\paragraph{$\SU{2}$.}  Rank one, one Cartan generator $J^z$, and
+irreps labelled by the spin $j=0,\tfrac12,1,\dots$, of dimension
+\begin{equation}
+  \dim V_j = 2j+1, \qquad C_2 = j(j+1).
+\end{equation}
+Weights run over $m=-j,-j+1,\dots,j$; the lowering operator $J^-$ maps
+$|j,m\rangle$ to $|j,m-1\rangle$ with the known matrix element
+$\sqrt{(j+m)(j-m+1)}$, and the raising operator is its adjoint.
+Internally the package labels a spin by the doubled integer $2j$, which is
+an integer and therefore hashable and comparable; the dimension of the
+sector is then $2j+1$.
+
+\paragraph{$\SU{3}$.}  Rank two, two commuting Cartan generators $T^3$, $T^8$
+(the diagonal Gell-Mann matrices) and irreps labelled by the Dynkin labels
+$(p,q)$, $p,q\ge 0$.  The highest weight is
+\begin{equation}
+  \lambda = p\,\omega_1 + q\,\omega_2,
+\end{equation}
+with $\omega_{1,2}$ the fundamental weights; the weights of the irrep form a
+hexagonal (or triangular) pattern in the $(T^3,T^8)$ plane, and the
+fundamental weights are the corners.  The dimension is
+\begin{equation}
+  \dim V_{(p,q)} = \frac{(p+1)(q+1)(p+q+2)}{2},
+\end{equation}
+and the Casimir, in the normalization of the Gell-Mann generators
+$\operatorname{tr}\lambda_a\lambda_b = 2\delta_{ab}$,
+\begin{equation}
+  C_2(p,q) = \frac{p^2+q^2+pq+3p+3q}{3},
+\end{equation}
+so that the defining irrep has $C_2=\tfrac43$ and the adjoint $C_2=3$.
+The conjugate of $(p,q)$ is $(q,p)$: quarks and antiquarks, and the
+generators in the conjugate basis are $-\lambda^T$ at the level of the
+defining representation, but for a general irrep they are the generators of
+the {\em independently constructed} conjugate irrep, not the negated
+generators of the original one.  That distinction is the one place where a
+purely algebraic guess fails, see section~\ref{sec:conj}.
+
+\section{Tensor products, fusion and Clebsch--Gordan}
+\label{sec:fusion}
+
+\subsection{Decomposition and multiplicities}
+
+The tensor product of two irreps decomposes as
+\begin{equation}
+  V_\lambda \otimes V_\mu \;\cong\; \bigoplus_{\nu} N^{\nu}_{\lambda\mu}\, V_{\nu},
+  \label{eq:fusion}
+\end{equation}
+where the fusion multiplicity $N^{\nu}_{\lambda\mu}$ is a non-negative
+integer.  Groups with $N^{\nu}_{\lambda\mu}\in\{0,1\}$ for all triples are
+called multiplicity-free; $\SU{2}$ and $\SU{3}$ have this property for the
+products of their defining representations, but not in general:
+\begin{equation}
+  \tfrac12\otimes\tfrac12 = 0\oplus 1, \qquad
+  \mathbf 3\otimes\mathbf 3 = \mathbf 6 \oplus \bar{\mathbf 3}, \qquad
+  \mathbf 8\otimes\mathbf 8 = \mathbf{27}\oplus\mathbf{10}\oplus
+  \overline{\mathbf{10}}\oplus 2\cdot\mathbf 8\oplus\mathbf 1 .
+  \label{eq:examples}
+\end{equation}
+The last line shows a genuine multiplicity $2$: there are two independent
+invariant ways to couple two adjoints into an adjoint, and a representation
+scheme that cannot carry that label cannot represent $\SU{3}$ physics.
+
+\paragraph{The $\SU{2}$ case.}  $V_{j_1}\otimes V_{j_2} = \bigoplus_{j=|j_1-j_2|}
+^{j_1+j_2} V_j$ with every multiplicity one; the coupling is
+$m=m_1+m_2$.
+
+\paragraph{The $\SU{3}$ case.}  The multiplicities follow from the
+Klimyk--Brauer formula,
+\begin{equation}
+  N^{\nu}_{\lambda\mu} \;=\;
+  \sum_{w\in W} (-1)^{\ell(w)}\,
+  \mathrm{mult}_{\lambda+\mu}\!\left(\nu+\rho-w\rho\right),
+  \label{eq:klimyk}
+\end{equation}
+a signed sum over the Weyl group $W$ (order six for $\SU{3}$), where
+$\mathrm{mult}$ counts weight multiplicities in the product $\lambda+\mu$.
+The formula is exact and computationally cheap once the weights are known;
+it is what the package evaluates, in integer coordinates on the weight
+lattice so that the comparison of dominant weights is exact.
+
+\subsection{Clebsch--Gordan coefficients}
+
+For a fixed triple $(\lambda,\mu,\nu)$ and a fixed copy index $c$ when
+$N^{\nu}_{\lambda\mu}>1$, the Clebsch--Gordan (CG) coefficients are the
+matrix elements of the projector that selects $V_\nu$ inside
+$V_\lambda\otimes V_\mu$.  They are a third-rank tensor
+\begin{equation}
+  C^{(\lambda\mu\nu)}_{a b}{}^{c}, \qquad a=1,\dots,\dim V_\lambda,\;
+  b=1,\dots,\dim V_\mu,\; c=1,\dots,\dim V_\nu ,
+\end{equation}
+characterized up to normalization by invariance,
+\begin{equation}
+  \left(T^{(\lambda)}_x\otimes 1 + 1\otimes T^{(\mu)}_x\right) C
+  \;=\; C\,T^{(\nu)}_x \quad\text{for every generator } x,
+  \label{eq:cg-invariance}
+\end{equation}
+i.e.\ $C$ is an intertwiner $V_\lambda\otimes V_\mu\to V_\nu$.  The standard
+conventions (Condon--Shortley for $\SU{2}$, the Gell-Mann basis for $\SU{3}$)
+fix the normalization and a phase; the package normalizes each CG tensor so
+that its Frobenius norm squared equals the dimension of the coupled irrep,
+\begin{equation}
+  \|C^{(\lambda\mu\nu)}\|^2 = \dim V_\nu ,
+  \label{eq:cg-norm}
+\end{equation}
+which makes the orthogonal-group relations below come out with plain
+integer factors.  For $\SU{2}$ this is the usual relation between the CG
+coefficients and the Wigner $3j$ symbols,
+\begin{equation}
+  \langle j_1 m_1 j_2 m_2 | j m\rangle
+  = (-1)^{j_1-j_2+m}\sqrt{2j+1}\,
+  \begin{pmatrix} j_1 & j_2 & j \\ m_1 & m_2 & -m \end{pmatrix}.
+\end{equation}
+
+\subsection{Recoupling and $6j$ symbols}
+
+Coupling three irreps in different orders gives bases related by the
+recoupling (Racah) coefficients, the $\SU{2}$ $6j$ symbols
+\begin{equation}
+  \begin{Bmatrix} j_1 & j_2 & j_3 \\ j_4 & j_5 & j_6 \end{Bmatrix},
+\end{equation}
+and for a general group by the corresponding invariant intertwiners.  They
+are the change-of-basis matrices on the space of intertwiners
+$V_a\otimes V_b\otimes V_c\to V_d$, and they are what a network needs
+whenever a fusion tree is re-associated, e.g.\ when a leg is split or a
+tensor is contracted along a different pairing.  The package computes them
+for $\SU{2}$ from the CG tables; for $\SU{3}$ the analogous data follow from the
+invariance condition~\eqref{eq:cg-invariance}.
+
+\subsection{Conjugate representations and the invariant form}
+\label{sec:conj}
+
+Every irrep $\lambda$ has a conjugate $\bar\lambda$ whose weights are the
+negatives.  For a self-conjugate irrep ($\lambda=\bar\lambda$, e.g.\ every
+integer-spin $\SU{2}$ irrep and the $\SU{3}$ adjoint) there exists an invariant
+bilinear form
+\begin{equation}
+  D_{\lambda}: V_{\lambda}\otimes V_{\lambda}\to \mathbb C,\qquad
+  D_{\lambda}(u(g)v,u(g)w) = D_{\lambda}(v,w),
+\end{equation}
+unique up to scale, the ``metric''.  It is symmetric or antisymmetric, and
+the sign is the Frobenius--Schur indicator
+\begin{equation}
+  \varepsilon_\lambda = (-1)^{2j} = \begin{cases}
+    +1, & \text{integer spin (orthogonal)},\\
+    -1, & \text{half-integer spin (symplectic)} .
+  \end{cases}
+  \label{eq:fs}
+\end{equation}
+Two consequences matter for a network.  First, a leg that is oriented
+oppositely (a ``dual'' leg) is related to the primal one by $D_\lambda$;
+this is why the contraction of two legs of opposite orientation is the
+invariant pairing, not the naive sum over equal indices.  Second, for
+non-self-conjugate irreps the two bases are genuinely different vector
+spaces, and the intertwiner between $V_\lambda$ and $V_{\bar\lambda}$ is a
+non-trivial matrix.  A negative $\varepsilon$ in a real basis corresponds to
+the antisymmetric invariant of the symplectic rep; getting this sign wrong
+turns an Hermitian effective Hamiltonian into a non-Hermitian one, which is
+exactly the kind of error that survives every symmetry-blind test.
+
+\section{Invariant tensors and symmetric networks}
+\label{sec:invariant}
+
+\subsection{The trivial representation}
+
+$G$-invariance means transforming in the trivial irrep $\nu=0$.  A scalar
+built from local operators is invariant iff its fusion to the trivial
+channel is non-zero,
+\begin{equation}
+  \mathcal O \text{ invariant} \iff 0 \in \lambda_1\otimes\dots\otimes\lambda_k ,
+\end{equation}
+and the number of independent invariants is the corresponding fusion
+multiplicity.  For a Hamiltonian the total charge is trivial by definition,
+which is a checkable property of the network and not an assumption about
+the local terms.
+
+\subsection{Wigner--Eckart and reduced matrix elements}
+
+The Wigner--Eckart theorem is the reason a sparse representation is not just
+possible but natural.  For a tensor operator $T^{(k)}_q$ transforming in the
+irrep $k$,
+\begin{equation}
+  \langle j' m'| T^{(k)}_q | j m\rangle
+  = \langle j\, m;\, k\, q | j' m'\rangle\,
+  \frac{\langle j'\|T^{(k)}\|j\rangle}{\sqrt{2j'+1}},
+  \label{eq:we}
+\end{equation}
+the entire $m$-dependence is a CG coefficient, and the physics sits in the
+{\em reduced} matrix element $\langle j'\|T^{(k)}\|j\rangle$, a single
+number per triple of irreps.  In the general case one has
+\begin{equation}
+  \langle \alpha' \nu c'| T^{(\lambda_1\dots\lambda_k)}_{\text{inv}}| \alpha \mu c\rangle
+  \;=\; \sum_{\text{intertwiners}} \text{(CG data)} \times (\text{reduced data}),
+\end{equation}
+with the reduced data again the only free parameters.
+
+\subsection{Why every tensor of a symmetric network is an intertwiner}
+
+Consider a tensor network whose legs carry irreps and whose local tensors are
+invariant.  Each local tensor is then a map
+\begin{equation}
+  T: V_{\lambda_1}\otimes\dots\otimes V_{\lambda_p}
+  \longrightarrow V_{\mu_1}\otimes\dots\otimes V_{\mu_q},
+  \qquad T\,U(g) = U(g)\,T ,
+\end{equation}
+i.e.\ an intertwiner.  By Schur''s lemma it is a sum of the elementary
+intertwiners allowed by the fusion rules, each multiplied by a reduced
+matrix element.  Applied to a state, the network therefore carries a
+definite total charge at every bond: the bond is not a featureless index
+but the label of an irrep with a definite position in the fusion chain.
+
+\section{The block-sparse representation}
+\label{sec:container}
+
+\subsection{Legs, charges and blocks}
+
+A leg of a tensor is a labelled collection of irrep sectors,
+\begin{equation}
+  L = \bigl\{ (s_1, d_1), \dots, (s_n, d_n)\bigr\},\qquad d_i = m_i \dim V_{s_i},
+\end{equation}
+where $s_i$ is the sector (the charge), $m_i$ the multiplicity and $d_i$ the
+number of indices.  A tensor is a set of blocks, each block labelled by the
+sector chosen on every leg, and the block data are the reduced matrix
+elements of the corresponding intertwiner.  The label of a block consists of
+\begin{itemize}
+  \item the sector index on every leg, and
+  \item for every internal vertex of the fusion chain, the intermediate
+        sector and (when the group has fusion multiplicities) the copy
+        index that selects which of the $N^{\nu}_{\lambda\mu}$ intertwiners
+        is used.
+\end{itemize}
+The block shape is the product of the multiplicities only; the CG tensors,
+which are universal and shared by every block with the same fusion tree, are
+inserted when a block is expanded into indices.  This is the quantitative
+content of Wigner--Eckart: the spin-$j$ structure is not stored, it is
+looked up.
+
+\subsection{Fusion trees}
+
+The chain of intermediate sectors is recorded by a {\em fusion tree}: an
+ordered list of the leg sectors together with the inner couplings and the
+total charge,
+\begin{equation}
+  \text{tree} = \bigl(s_1,\dots,s_k \,\big|\, c_1,\dots,c_{k-2} \,\big|\, c\bigr),
+\end{equation}
+subject to $c_i \in s_1\otimes\dots\otimes s_{i+1}$ and $c\in
+s_1\otimes\dots\otimes s_k$.  A tensor whose legs are chosen admits one
+block per admissible tree; for a multiplicity-free group the tree is
+determined by the sectors, and for a group with multiplicities each copy
+index multiplies the number of admissible trees.  The CG tensor of a tree is
+built once and cached; expanding it multiplies the vertex CG tensors along
+the chain.
+
+\subsection{Cost: why the sparse route is the production path}
+
+The dense Hilbert space of a bond of dimension $D$ has $D^2$ entries;
+the same bond for a group with $r$ irreps of dimensions $d_\alpha$ and
+multiplicities $m_\alpha$ has $\sum_\alpha m_\alpha^2$ reduced entries,
+because Wigner--Eckart factors out the $\sim d_\alpha^2$ entries of each
+irrep.  For $\SU{2}$ at spin $j$ the saving is a factor $(2j+1)^2$ per leg;
+for a chain of $L$ such legs it is exponential in $L$.  A concrete
+measurement of the same physical state in this package gives an 11.5-fold
+smaller tensor at $L=16$ with bond dimension $64$, and an 8.5-fold shorter
+sweep than the symmetry-blind engine, with the gap growing with the bond
+dimension.
+
+Two corollaries are worth stating explicitly.
+
+\begin{itemize}
+  \item \emph{The dense expansion is a reference, not an algorithm.}  A
+        block-sparse tensor can always be expanded into plain indices by
+        re-inserting the CG data.  That expansion is exact and useful for
+        testing a network against a dense calculation, but it defeats the
+        whole point: it restores the $D^2$ cost and materializes numbers
+        that the sparse algorithm never needs.  Expansions therefore belong
+        in tests (as an oracle) and in the small-$D$ diagnostic path, never
+        in the sweep.
+  \item \emph{Every operation is closed under the symmetry.}  Adding tensors
+        with equal legs, contracting them, splitting them with an SVD and
+        applying them to a state all preserve the block structure, provided
+        the same tree conventions are used on both sides of the operation.
+        The algorithms are therefore written once, over the sparse labels,
+        instead of once per representation.
+\end{itemize}
+
+\section{Charge flow through a network}
+\label{sec:flow}
+
+\subsection{Bonds carry the running charge}
+
+In a matrix product state the physical leg of each site is an irrep of $G$,
+and the bond legs carry the running charge.  A symmetric MPS is a network of
+intertwiners whose total charge, read from the fused tree of the whole
+chain, is the state''s quantum number:
+\begin{equation}
+  |\psi\rangle \;=\; \sum_{\{\,q\,\}} \prod_i T^{(i)}_{\text{inv}},
+  \qquad q_{\text{tot}} = \text{fusion of all legs} .
+\end{equation}
+A ground state obtained by a symmetric DMRG run lives in a definite sector:
+the trivial one for a Hamiltonian with a singlet ground state, and the
+appropriate one otherwise.  This is physics, not bookkeeping: the total
+charge cannot be changed by an invariant operator, and an operator that
+carries non-trivial charge produces a state in a different sector.
+
+\subsection{Applying an operator}
+
+An operator $\mathcal O$ acting on the physical index transforms in some
+irrep $\rho$; the state $\mathcal O|\psi\rangle$ then lives in the sector
+$\rho\otimes q_{\text{tot}}$.  In the sparse representation this requires
+that the intermediate objects of the application be allowed to carry
+non-trivial charge - the bond structure does this automatically once every
+tensor''s block labels are derived from the fusion of its own legs, rather
+than demanded to be trivial.  A local operator that is a single component of
+a multiplet ($S^z$ inside the spin-$1$ triplet, or $\lambda_8$ inside the
+$\SU{3}$ adjoint) is exactly such an object: $T^{(k)}_q$ is an intertwiner
+$V_j\to V_j\otimes V_k$ whose charge is the irrep $k$, so the multiplet
+index is part of the operator''s data.  Representing it requires either the
+multiplet index as an explicit data axis of the leg (the ``resolved'' leg of
+the container), or an operator that knows how to project onto its charge
+channel.
+
+\subsection{Contraction of charged tensors}
+
+Contracting two tensors along a shared pair of legs is the invariant pairing
+induced by the CG data.  Two things must hold for the result to stay inside
+the block-sparse format:
+\begin{itemize}
+  \item the shared legs must be oriented oppositely, so that the pairing is
+        the invariant form $D$ (section~\ref{sec:conj}) and not the naive
+        index sum;
+  \item the total charge of the result must be a single irrep, i.e.\ the
+        contraction must not mix several total charges.
+\end{itemize}
+The second condition is a real restriction of a container that stores one
+total charge per tensor.  If the operands force several coupled channels,
+the contracted object is genuinely a sum over them - for instance
+$S^z\cdot S^z$ on a triplet contains both the trivial and the quintet
+channels - and a container with a single label cannot represent it without
+losing information.  The honest behaviour is to refuse such a contraction
+with a clear message, rather than to silently pick one channel.  In
+practice a symmetric algorithm avoids the situation by construction: the
+standard matrix-product operations contract objects whose partial charges
+are carried by the bond legs, so the intermediate total charge is known.
+
+\section{Where the dense route belongs}
+\label{sec:reference}
+
+The package keeps a dense route: tensors whose legs store the magnetic index
+explicitly (the ``resolved'' convention) hold ordinary dense blocks, and
+contract by ordinary dense matrix multiplication.  It serves three purposes:
+
+\begin{enumerate}
+  \item \emph{An oracle.}  Any sparse network can be expanded and compared
+        against the dense result; the checks of this package all do this,
+        which is how convention errors of the kind in
+        section~\ref{sec:conj} are caught.
+  \item \emph{A bridge.}  A user''s bare matrix, a string operator, or an
+        operator given only as a dense array can be turned into a symmetric
+        object in the resolved convention and then manipulated.
+  \item \emph{A slow but general fallback.}  For a group whose fusion data
+        are not implemented, or for a probe of a small tensor, the dense
+        route always works.
+\end{enumerate}
+
+It is not the production path.  A dense-block contraction restores the full
+$D^2$ cost per leg and materializes the CG structure that the sparse route
+never stores.  The intended split is therefore:
+
+\begin{center}
+\begin{tabular}{ll}
+  \textbf{production} & block-sparse labels: charges on the legs, blocks
+  labelled by trees, CG inserted only when a leg is expanded \\
+  \textbf{reference} & resolved legs with dense blocks: plain dense
+  arithmetic, used by tests, conversions and small diagnostics \\
+\end{tabular}
+\end{center}
+
+\section{Measured anchor points}
+
+The following numbers were measured in this package and are quoted here as
+the empirical anchor of the statements above.
+
+\begin{itemize}
+  \item $\SU{2}$ CG normalization~\eqref{eq:cg-norm}: with a unit placement the
+        tree realizes $C_s/\dim V_s$ exactly, i.e.\ $\lVert C_s\rVert^2 =
+        \dim V_s = 1,3,5$ for the sectors $(0),(2),(4)$.
+  \item $\SU{3}$ dimension and Casimir: the constructed irreps reproduce
+        $\dim V_{(p,q)}=(p+1)(q+1)(p+q+2)/2$ and
+        $C_2=(p^2+q^2+pq+3p+3q)/3$ for every $(p,q)$ with $p+q\le4$, and the
+        Klimyk multiplicities~\eqref{eq:klimyk} reproduce
+        $\mathbf 8\otimes\mathbf 8=\mathbf{27}\oplus\mathbf{10}\oplus
+        \overline{\mathbf{10}}\oplus2\cdot\mathbf 8\oplus\mathbf 1$.
+  \item Frobenius--Schur~\eqref{eq:fs}: putting the sign in the wrong place
+        (the free-function convention instead of the group''s duality
+        matrix) turns the effective Hamiltonian non-Hermitian; the
+        measurement that located it was a negative norm of an environment,
+        while every symmetry-blind check stayed green.
+  \item Sparsity: the same $\SU{2}$-symmetric state at $L=16$ with bond
+        dimension $64$ needs $3806$ numbers against $43688$ for the
+        symmetry-blind representation, and its sweep is $8.5$ times faster.
+  \item The dense route: a resolved tensor built from a bare matrix
+        round-trips exactly, $T\!\to\!\text{dense}\!\to\!T$ with
+        $\max|\Delta|=0$, for $S^z$, $S^x$, the identity of $\SU{2}$ and
+        $\lambda_8$ of $\SU{3}$ - which is what makes it usable as an oracle.
+\end{itemize}

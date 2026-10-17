@@ -84,6 +84,27 @@ def cached_einsum(spec: str, *tensors: Any) -> Tensor:
     Returns:
       The contraction.
     '''
+    # the Clebsch-Gordan paths weigh reduced blocks, while a resolved operand stores its
+    # components densely, so a mixed contraction brings the resolved side to reduced data first
+    if not all(isinstance(t, Tensor) and all(leg.resolved for leg in t.legs) for t in tensors):
+        tensors = tuple(t.unresolve() if isinstance(t, Tensor)
+                        and any(leg.resolved for leg in t.legs) else t for t in tensors)
     if len(tensors) > 2 and any(isinstance(t, Tensor) and not t.is_dense for t in tensors):
         return _pairwise(spec, tensors)
     return _engine_einsum(spec, *tensors)
+
+
+def resolve(tensor: Tensor) -> Tensor:
+    '''
+    The same tensor with every leg marked resolved.
+
+    Args:
+      tensor: a tensor whose total charge is known, so that its dense expansion exists.
+
+    Returns:
+      A tensor with the same legs up to the resolved flag and the same dense expansion, whose
+      blocks now store the component data a bare operator matrix needs to act on it.
+    '''
+    legs = tuple(
+        _engine.Leg(leg.group, leg.sectors, leg.slices, leg.qconj, True) for leg in tensor.legs)
+    return Tensor.from_torch(tensor.to_torch(), legs=legs, qtotal=tensor.qtotal)

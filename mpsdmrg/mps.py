@@ -4,7 +4,7 @@ The matrix product state and the initial state of a chain.
 from __future__ import annotations
 
 from math import sqrt
-from typing import Literal
+from typing import Literal, Sequence
 
 import torch
 
@@ -12,7 +12,7 @@ from base import COMPLEX, CUDA
 from mpsdmrg import linalg
 from mpsdmrg.mpo import MPO
 from mpsdmrg.symmetry.group import Group, has_content, no_symmetry
-from mpsdmrg.tensor import Tensor, cached_einsum, capped_leg, fuse_legs, site_leg
+from mpsdmrg.tensor import Tensor, cached_einsum, resolve, capped_leg, fuse_legs, site_leg
 
 class MPS:
     '''
@@ -95,8 +95,39 @@ class MPS:
             if any(t.shape != (bond_dims[i], phys_dim, bond_dims[i + 1]) for i, t in enumerate(init_state)):
                 raise ValueError("Initial state tensors do not match the specified bond and physical dimensions.")
 
+        self._canonical = True  # the tensors below are canonical unless an operator breaks the form
         self.canonicalize()  # Ensure the MPS is in canonical form upon initialization
         self.normalize()  # Normalize the MPS upon initialization
+
+    @staticmethod
+    def _from_tensors(tensors: list[Tensor], group: Group, dtype: torch.dtype,
+                      device: torch.device) -> MPS:
+        '''
+        Assemble an MPS from tensors as they are, without canonicalizing or normalizing them.
+
+        The caller guarantees the tensors form a chain.  An operator applied to a state lands in
+        another charge sector, whose tensors are not the canonical form of a trivial total charge,
+        so the state has to be taken as it is; its left edge carries the total charge.
+
+        Args:
+            tensors (list[Tensor]): one tensor per site, legs (left bond, physical, right bond).
+            group (Group): the symmetry the tensors carry.
+            dtype (torch.dtype): the element type of the state.
+            device (torch.device): the device of the state.
+        Returns:
+            MPS: the state those tensors make.
+        '''
+        state = MPS.__new__(MPS)
+        state.L = len(tensors)
+        state.phys_dim = tensors[0].shape[1]
+        state.bond_dim = [tensors[0].shape[0]] + [tensor.shape[2] for tensor in tensors]
+        state.dtype = dtype
+        state.device = device
+        state.group = group
+        state.center = 0
+        state.tensors = list(tensors)
+        state._canonical = False
+        return state
 
     def __getitem__(self, idx):
         return self.tensors[idx]
@@ -130,12 +161,16 @@ class MPS:
     def expectation(self,operators, mode:Literal['direct','env'] = 'env')-> complex:
         '''
         Compute the expectation value of operators on the MPS.
-        Accepts either a dict[int, Tensor] of single-site operators or an MPO.
+        Accepts either a dict[int, operator] of single-site operators or an MPO.
 
         To compute the norm, just pass {} as the operator list.
         Args:
-            operators: dict[int, Tensor] | MPO: A dictionary of operators to compute the expectation value,
-                       or an MPO representing a full matrix product operator.
+            operators: dict[int, Tensor | torch.Tensor | numpy.ndarray] | MPO: a dictionary of the
+                       operators to measure, or an MPO representing a full matrix product operator.
+                       A value without legs is the matrix of the operator on the physical leg of
+                       the state at that site; the dictionary is then a product of one-site
+                       operators, measured exactly on the dense state (an invariant state has a
+                       dense expansion, so no multiplet structure is needed).
             mode: 'direct' or 'env' — contraction strategy (for dict operators only; MPO always uses direct).
         Returns:
             complex: The expectation value of the operators on the MPS.
@@ -144,7 +179,16 @@ class MPS:
         '''
         if isinstance(operators, MPO):
             return self._mpo_expectation(operators)
-        # Otherwise treat as dict[int, Tensor]
+        if any(not isinstance(operator, Tensor) or not operator.legs for operator in operators.values()):
+            matrices: dict[int, torch.Tensor] = {}
+            for site, operator in operators.items():
+                matrix = operator.to_torch() if isinstance(operator, Tensor) else torch.as_tensor(operator)
+                if matrix.shape != (self.phys_dim, self.phys_dim):
+                    raise ValueError(f"Operator shapes do not match the physical dimension {self.phys_dim}.")
+                if site < 0 or site >= self.L:
+                    raise ValueError(f"Operator indices must be in the range [0, {self.L - 1}].")
+                matrices[site] = matrix.reshape(self.phys_dim, self.phys_dim)
+            return self._dense_expectation(matrices)
         if any(op.shape != (self.phys_dim, self.phys_dim) for op in operators.values()):
             raise ValueError(f"Operator shapes do not match the physical dimension {self.phys_dim}.")
         elif any(idx < 0 or idx >= self.L for idx in operators.keys()):
@@ -155,10 +199,151 @@ class MPS:
             return self._full_env_contract(operators) # uses canonical condition.
 
     def norm(self,mode:Literal['direct','env'] = 'env')->complex:
+        '''
+        Return the squared norm <self|self>.
+        Args:
+            mode (str): 'env' reads the centre tensor, which is the squared norm while the state is
+                        canonical and contracts the whole state otherwise; 'direct' always contracts.
+        Returns:
+            complex: the squared norm of the state.
+        Raises:
+            ValueError: If the mode is neither 'direct' nor 'env'.
+        '''
+        if mode == 'direct' or not self._canonical:
+            return self._full_dir_contract({})
         if mode == 'env':
             return cached_einsum('abc,abc->', self.tensors[self.center].conj(), self.tensors[self.center]).item()
-        elif mode == 'direct':
-            return self.expectation({}, mode='direct')
+        raise ValueError(f"A norm is computed in mode 'direct' or 'env', not {mode!r}.")
+
+    def _apply_gate(self, gate: torch.Tensor, targets: tuple[int, int],
+                    max_bond_dim: int | None, tol: float) -> MPS:
+        '''
+        Return the state with a two-site operator applied to one bond.
+
+        Args:
+            gate: the matrix of the operator in the product basis of the two sites, in shape
+                (dim, dim, dim, dim) read as (bra1, bra2, ket1, ket2).
+            targets: the two neighbouring sites the gate acts on.
+            max_bond_dim (int | None): largest bond dimension the split keeps; ``None`` keeps all.
+            tol (float): singular values at or below this are dropped.
+        Returns:
+            MPS: the state after the gate, not canonicalized.
+        '''
+        first, second = targets
+        # a bare matrix on a symmetry-adapted leg carries every component, which only a resolved
+        # leg can store; an unresolved leg is the plain dense case
+        physical = (resolve(self.tensors[first]) if has_content(self.group)
+                    else self.tensors[first]).legs[1]
+        dim = physical.dim
+        matrix = Tensor.from_torch(
+            torch.as_tensor(gate, dtype=self.dtype, device=self.device).reshape(dim, dim, dim, dim),
+            legs=(physical, physical, physical.conj(), physical.conj()))
+        # a bare gate matrix carries every magnetic component, so a symmetry-adapted window is
+        # resolved for the contraction and the factors are resolved again afterwards
+        window = (lambda site: resolve(self.tensors[site])) if has_content(self.group) else \
+            (lambda site: self.tensors[site])
+        merged = cached_einsum('lsr,rtu->lstu', window(first), window(second))
+        merged = cached_einsum('lstu,pqst->lpqu', merged, matrix)
+        tensor, singular, rest = linalg.svd(merged, (0, 1), (2, 3), max_bond=max_bond_dim,
+                                            tol=tol, direction='right')
+        if has_content(self.group):
+            tensor, rest = resolve(tensor), resolve(rest)
+        tensors = list(self.tensors)
+        tensors[first] = tensor
+        tensors[second] = linalg.absorb(rest, singular)
+        return self._from_tensors(tensors, self.group, self.dtype, self.device)
+
+    def resolve(self) -> MPS:
+        '''
+        Return the same state with every leg resolved.
+
+        Returns:
+            MPS: a state of the same amplitudes whose blocks store the dense data of their
+            charge windows, which is what a bare operator matrix acts on.
+        '''
+        return self._from_tensors([resolve(tensor) for tensor in self.tensors],
+                                  self.group, self.dtype, self.device)
+
+    def apply(self,
+              operator: "MPO | torch.Tensor",
+              sites: "int | Sequence[int] | None" = None,
+              max_bond_dim: int | None = None,
+              tol: float = 0.0) -> MPS:
+        '''
+        Return the state ``operator |self>`` as a new MPS.
+
+        Each site contracts the state tensor with the operator tensor on the physical leg, and the
+        pair of virtual legs the contraction leaves open - the state's and the operator's - is split
+        off again, so the bonds of the result carry whatever charge the operator adds.  The result
+        is not canonicalized.
+
+        Args:
+            operator (MPO): the operator to apply; same length and physical dimension as the state.
+            max_bond_dim (int | None): largest bond dimension the splits keep; ``None`` keeps all.
+            tol (float): singular values at or below this are dropped.
+        Returns:
+            MPS: the state after the operator.
+        Raises:
+            ValueError: If the operator does not act on this state.
+        '''
+        if not isinstance(operator, MPO):
+            if sites is None:
+                raise ValueError('Applying a local operator needs the sites it acts on.')
+            targets = ((int(sites),) if isinstance(sites, int)
+                       else tuple(int(site) for site in sites))
+            if len(targets) == 2:
+                if targets[1] != targets[0] + 1:
+                    raise NotImplementedError(
+                        f'A two-site operator acts on two neighbours, not on {targets}.')
+                return self._apply_gate(operator, (targets[0], targets[1]), max_bond_dim, tol)
+            if len(targets) != 1:
+                raise NotImplementedError('A local operator acts on one site or on two neighbours.')
+            site = targets[0]
+            phys = self.tensors[site].legs[1]
+            if has_content(self.group) and not phys.resolved:
+                # a bare matrix has no fusion path to follow, so the state resolves its
+                # magnetic index into its blocks and the matrix acts on the dense data
+                return self.resolve().apply(operator, sites, max_bond_dim, tol)
+            matrix = Tensor.from_torch(
+                torch.as_tensor(operator, dtype=self.dtype, device=self.device),
+                legs=(phys, phys.conj()))
+            tensors = list(self.tensors)
+            tensors[site] = cached_einsum('lsr,ts->ltr', tensors[site], matrix)
+            return self._from_tensors(tensors, self.group, self.dtype, self.device)
+        if operator.L != self.L or operator.physical_dim != self.phys_dim:
+            raise ValueError(
+                f'An operator of {operator.L} sites of dimension {operator.physical_dim} does not '
+                f'act on a state of {self.L} sites of dimension {self.phys_dim}.')
+        tensors: list[Tensor] = []
+        # a resolved state contracts against resolved operator tensors only, so every window is
+        # dense data and no reduced round trip can drop a multiplet copy
+        carry = None
+        for site in range(self.L):
+            state, matrix = self.tensors[site], operator.tensors[site]
+            if carry is None:
+                # the state's left edge is the left bond of the chain; the operator's left edge is a
+                # trivial leg, so it is closed with its conjugate
+                edge = Tensor.ones(1, legs=(matrix.legs[0].conj(),), dtype=self.dtype,
+                                   device=self.device)
+                merged = cached_einsum('lsr,abps,a->lprb', state, matrix, edge)
+            else:
+                # carry: the new left bond, the state's previous right leg, the operator's previous
+                # right leg
+                merged = cached_einsum('mla,lsr,abps->mprb', carry, state, matrix)
+            if site == self.L - 1:
+                # the chain closes: the operator's right edge is a trivial leg, the state keeps its
+                # own right edge as the last bond
+                edge = Tensor.ones(1, legs=(merged.legs[3].conj(),), dtype=self.dtype,
+                                   device=self.device)
+                tensors.append(cached_einsum('mprb,b->mpr', merged, edge))
+                break
+            # the left group (the new bond and the physical leg) becomes this site's tensor, the
+            # right group (the two virtual legs) becomes the carry into the next site
+            tensor, singular, rest = linalg.svd(merged, (0, 1), (2, 3), max_bond=max_bond_dim,
+                                                tol=tol, direction='right')
+            tensors.append(tensor)
+            carry = linalg.absorb(rest, singular)
+        return MPS._from_tensors(tensors, self.group, self.dtype, self.device)
 
     def normalize(self):
         '''
@@ -166,6 +351,32 @@ class MPS:
         '''
         norm:complex = self.norm(mode='env')
         self.tensors[self.center] /= sqrt(norm.real)
+
+    def _dense_expectation(self, operators: dict[int, torch.Tensor]) -> complex:
+        '''
+        The exact expectation of a product of one-site operators, contracted over the dense state.
+
+        An invariant state has trivial total charge, so its tensors expand into the dense basis;
+        this is the reference an adapted contraction has to reproduce, and it needs no multiplet
+        structure at all.
+
+        Args:
+            operators: site -> matrix in shape (phys_dim, phys_dim), at most one per site.
+        Returns:
+            complex: the expectation value, exact up to the floating point error.
+        '''
+        tensors = [tensor.to_torch() for tensor in self.tensors]
+        environment = torch.ones(1, 1, dtype=self.dtype, device=self.device)
+        for site in range(self.L):
+            operator = operators.get(site)
+            if operator is None:
+                environment = torch.einsum('ab,aic,bid->cd', environment, tensors[site].conj(),
+                                           tensors[site])
+            else:
+                environment = torch.einsum('ab,aic,bjd,ij->cd', environment, tensors[site].conj(),
+                                           tensors[site],
+                                           operator.to(dtype=self.dtype, device=self.device))
+        return complex(environment.sum())
 
     def _mpo_expectation(self, mpo) -> complex:
         '''

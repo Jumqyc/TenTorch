@@ -98,9 +98,11 @@ namespace sym
     //   group: the group of the charges; the group of the legs when it is missing.
     // Raises:
     //   AssertionError: If a key does not describe a block of those legs.
+    // ``homogeneous`` false builds a tensor that sums several total charges: every block
+    // keeps the coupled charge of its own fusion path and ``qtotal`` is not comparable.
     Tensor(std::vector<at::Tensor> blocks, std::vector<BlockKey> qdata, std::vector<Leg> legs,
            std::optional<Sector> qtotal = std::nullopt,
-           std::shared_ptr<Group> group = nullptr);
+           std::shared_ptr<Group> group = nullptr, bool homogeneous = true);
 
     // The dense tensor that stores ``data``, with the legs ``legs`` or one trivial leg per
     // dimension; the buffers share storage with ``data`` when it holds one whole block.
@@ -119,7 +121,8 @@ namespace sym
     const std::vector<at::Tensor> &blocks() const { return blocks_; }
     const std::vector<BlockKey> &qdata() const { return qdata_; }
     const std::vector<Leg> &legs() const { return legs_; }
-    const Sector &qtotal() const { return qtotal_; }
+    const Sector &qtotal() const;
+    bool homogeneous() const { return homogeneous_; }
     const std::shared_ptr<Group> &group() const { return group_; }
 
     // The dimensions of the legs, and the torch dtype and device of a block buffer.
@@ -134,6 +137,20 @@ namespace sym
 
     // The dense tensor of the sector-concatenated basis.
     at::Tensor to_torch() const;
+  /*
+   * The same tensor with every leg unresolved: each dense window of a resolved leg is projected
+   * onto the Clebsch-Gordan component the expansion writes, which is the exact inverse of
+   * ``to_torch`` up to the multiplicity representative (the projection always fills the first).
+   * Returns this tensor when no leg is resolved.
+   */
+  Tensor unresolve() const;
+
+  /*
+   * The same tensor with every leg resolved: each plain block is written into the dense window of
+   * its charge, so the tensor can take a bare matrix on a leg of more than one component.
+   */
+  Tensor resolve() const;
+
     // The single entry of a tensor of no indices.
     py::object item() const;
     Tensor clone() const;
@@ -170,6 +187,8 @@ namespace sym
     std::vector<BlockKey> qdata_;
     std::vector<Leg> legs_;
     Sector qtotal_;
+    // False when the blocks couple to different total charges, i.e. the tensor sums them.
+    bool homogeneous_ = true;
     std::shared_ptr<Group> group_;
   };
 

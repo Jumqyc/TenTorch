@@ -97,7 +97,7 @@ FactorBlocks factor_blocks(const Tensor& t, const std::vector<int64_t>& left,
     const int64_t row = left_slices[lc], rdim = part.left_dims[lc];
     Shape dims;
     for (std::size_t i = 0; i < left.size(); ++i) {
-      dims.push_back(t.legs()[left[i]].multiplicity(combo.legs[i]));
+      dims.push_back(t.legs()[left[i]].data_dim(combo.legs[i]));
     }
     dims.push_back(k);
     out.first_blocks.push_back(first_kept.slice(0, row, row + rdim).reshape(dims));
@@ -113,7 +113,7 @@ FactorBlocks factor_blocks(const Tensor& t, const std::vector<int64_t>& left,
     const int64_t col = right_slices[rc], cdim = part.right_dims[rc];
     Shape dims{k};
     for (std::size_t i = 0; i < right.size(); ++i) {
-      dims.push_back(t.legs()[right[i]].multiplicity(combo.legs[i]));
+      dims.push_back(t.legs()[right[i]].data_dim(combo.legs[i]));
     }
     out.second_blocks.push_back(second_kept.slice(1, col, col + cdim).reshape(dims));
     BlockKey key;
@@ -194,14 +194,14 @@ std::vector<SectorMatrix> sector_matrices(const Tensor& t, const std::vector<int
     for (const BlockKey& state : left_states) {
       int64_t dim = 1;
       for (std::size_t i = 0; i < left.size(); ++i) {
-        dim *= legs[left[i]].multiplicity(state.legs[i]);
+        dim *= legs[left[i]].data_dim(state.legs[i]);
       }
       left_dims.push_back(dim);
     }
     for (const BlockKey& state : right_states) {
       int64_t dim = 1;
       for (std::size_t i = 0; i < right.size(); ++i) {
-        dim *= legs[right[i]].multiplicity(state.legs[i]);
+        dim *= legs[right[i]].data_dim(state.legs[i]);
       }
       right_dims.push_back(dim);
     }
@@ -231,15 +231,26 @@ std::pair<Tensor, Tensor> assemble_split(
     const std::vector<std::pair<at::Tensor, at::Tensor>>& factors,
     const std::vector<Sector>& charges, const std::optional<std::vector<at::Tensor>>& kept,
     const Sector& first_qtotal, const Sector& second_qtotal) {
-  // The new leg holds one sector per charge that keeps at least one singular value.
+  // the bond a split creates inherits the resolution of the tensor it came from
+  const bool split_resolved = std::all_of(t.legs().begin(), t.legs().end(),
+                                          [](const Leg &leg) { return leg.resolved(); });
+  // The new leg holds one sector per charge that keeps at least one singular value.  A resolved
+  // leg stores the kept components themselves, so its block dimension is the multiplicity; an
+  // unresolved leg stores one entry per component of the sector.
   std::vector<std::pair<Sector, int64_t>> entries;
   for (std::size_t i = 0; i < charges.size(); ++i) {
     const at::Tensor* k = kept ? &(*kept)[i] : nullptr;
     if (k != nullptr && k->size(0) == 0) continue;
     const int64_t multiplicity = k != nullptr ? k->size(0) : factors[i].first.size(1);
-    entries.emplace_back(charges[i], multiplicity * t.group()->sector_dim(charges[i]));
+    entries.emplace_back(charges[i],
+                         split_resolved ? multiplicity
+                                        : multiplicity * t.group()->sector_dim(charges[i]));
   }
-  const auto [new_leg, rank] = Leg::from_blocks(t.group(), entries, -1);
+  const std::pair<Leg, std::vector<int64_t>> built = Leg::from_blocks(t.group(), entries, -1);
+  const Leg new_leg = split_resolved
+                          ? Leg(t.group(), built.first.sectors(), built.first.slices(), -1, true)
+                          : built.first;
+  const std::vector<int64_t> &rank = built.second;
   std::map<Sector, int64_t> block_of_charge;
   for (std::size_t i = 0; i < entries.size(); ++i) block_of_charge[entries[i].first] = rank[i];
 

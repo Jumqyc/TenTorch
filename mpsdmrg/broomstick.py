@@ -8,7 +8,7 @@ from numpy.typing import NDArray
 
 from base import COMPLEX, CUDA
 from mpsdmrg import linalg
-from mpsdmrg.symmetry.group import Group, no_symmetry
+from mpsdmrg.symmetry.group import Group, no_symmetry, has_content
 from mpsdmrg.tensor import Tensor, cached_einsum, site_leg
 
 from mpsdmrg.mps import MPS
@@ -197,6 +197,50 @@ class Broomstick:
 
         for i in range(L - 1, 1, -1):
             self._cache_renv(i)
+
+    def time_sweep(self, dt: float, num_steps: int = 1, order: int = 2) -> None:
+        '''
+        Evolve the state by ``exp(-i H dt)`` per step, one bond gate at a time.
+
+        Args:
+            dt (float): the time step; an imaginary value evolves in imaginary time.
+            num_steps (int): how many steps to take.
+            order (int): 1 applies every bond gate once per step, 2 uses the symmetric
+                (Strang) split of a half step, a full step and a half step.
+        Raises:
+            NotImplementedError: for a state of a group with multiplets, or for a coupling
+                that is not a nearest-neighbour two-site term.
+        '''
+        self._ensure_built()
+        state = self.state
+        if state is None:
+            raise ValueError('The engine has no state yet; call initialize_state first.')
+        buffers = self.Hamiltonian._buffers
+        bonds: dict[int, torch.Tensor] = {}
+        for operators, coeff, locations in self.Hamiltonian.couplings:
+            sites = tuple(int(site) for site in locations)
+            if len(sites) != 2 or sites[1] != sites[0] + 1:
+                raise NotImplementedError(
+                    f'A Trotter step needs nearest-neighbour pairs, not {operators} at {sites}.')
+            pair = coeff * torch.kron(buffers[operators[0]], buffers[operators[1]])
+            bonds[sites[0]] = bonds.get(sites[0], torch.zeros_like(pair)) + pair
+        even = sorted(site for site in bonds if site % 2 == 0)
+        odd = sorted(site for site in bonds if site % 2 == 1)
+
+        def gate(site: int, step: float) -> torch.Tensor:
+            return torch.matrix_exp(-1j * step * bonds[site])
+
+        for _ in range(num_steps):
+            if order == 2:
+                for site in even + odd + even:
+                    step = dt if site in odd else dt / 2
+                    state = state.apply(gate(site, step), (site, site + 1),
+                                        max_bond_dim=self.max_bond_dim, tol=self.svd_tol)
+            else:
+                for site in sorted(bonds):
+                    state = state.apply(gate(site, dt), (site, site + 1),
+                                        max_bond_dim=self.max_bond_dim, tol=self.svd_tol)
+        self.state = state
 
     def sweep(self, 
               num_sweeps: int = 5, 

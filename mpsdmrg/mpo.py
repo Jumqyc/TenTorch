@@ -19,7 +19,8 @@ class MPO:
                  mapping:dict[str,Tensor]|None = None,
                  dtype = COMPLEX,
                  device = CUDA,
-                 group:Group = no_symmetry):
+                 group:Group = no_symmetry,
+                 total:tuple[int,...]|None = None):
         '''
         Args:
             L (int): Length of the MPO (number of sites).
@@ -27,11 +28,14 @@ class MPO:
             mapping (dict[str, Tensor]): A dictionary mapping operator names to their dense operator tensors. If None, the spin components and the identity are used.
             dtype, device: Data type and device of the tensors.
             group (Group): Symmetry group of the Hamiltonian; ``no_symmetry`` by default.
+            total (tuple[int, ...] | None): Total charge the operator carries, for an operator
+                that is not a Hamiltonian; ``None`` means the trivial sector.
         '''
         self.dtype = dtype
         self.device = device
         self.L = L
         self.group: Group = group
+        self.total: tuple[int, ...] | None = None if total is None else tuple(int(entry) for entry in total)
         self.couplings: list[tuple[tuple[str, ...], complex, tuple[int, ...]]] = []
         self.physical_dim = phys_dim
         self.tensors: list[Tensor] = []
@@ -72,7 +76,8 @@ class MPO:
                   mapping={k: v.clone() for k, v in self.mapping.items()},
                   dtype=self.dtype,
                   device=self.device,
-                  group=self.group)
+                  group=self.group,
+                  total=self.total)
         new.couplings = [(ops, coeff, locs) for ops, coeff, locs in self.couplings]
         new.group = self.group
         if self.tensors:
@@ -129,7 +134,7 @@ class MPO:
             new.tensors = [tensor * other for tensor in new.tensors]
             return new
         elif isinstance(other, MPO):
-            if self.group is not None or other.group is not None:
+            if has_content(self.group) or has_content(other.group):
                 raise NotImplementedError(
                     'Composing symmetry-adapted MPOs is not supported; merge the couplings of '
                     'the two Hamiltonians instead.')
@@ -231,7 +236,8 @@ class MPO:
         self.tensors = self._build_adapted() if has_content(self.group) else self._build_labels()
 
     def _build_adapted(self) -> list[Tensor]:
-        group, phys_dim, trivial = self.group, self.physical_dim, self.group.trivial_sector
+        group, phys_dim = self.group, self.physical_dim
+        total = group.trivial_sector if self.total is None else self.total
         raw = {name: matrix.to(dtype=self.dtype, device=self.device)
                for name, matrix in self._buffers.items()}
         components = {tuple(sector): tensor.to(dtype=self.dtype, device=self.device)
@@ -266,12 +272,17 @@ class MPO:
             if first > last:
                 first, last = last, first
             if first == last:
-                if trivial not in amplitudes[operators[0]]:
+                if total not in amplitudes[operators[0]]:
                     raise ValueError(
-                        f'The one-site operator {operators[0]} has no trivial component of '
-                        f'{group.group_name}: it cannot appear alone in an invariant MPO.')
+                        f'The one-site operator {operators[0]} has no component of charge {total} '
+                        f'in {group.group_name}.')
+                if total != group.trivial_sector:
+                    raise NotImplementedError(
+                        f'A one-site component of {group.group_name} needs its member index on a '
+                        f'leg of its own, which a Tensor of a single multiplicity does not carry; '
+                        f'write the operator as a two-site term instead.')
                 singles[first] = (singles.get(first, 0.0)
-                                  + complex(coeff) * amplitudes[operators[0]][trivial])
+                                  + complex(coeff) * amplitudes[operators[0]][total])
                 continue
             if len(operators) != 2:
                 raise NotImplementedError(
@@ -282,7 +293,7 @@ class MPO:
             pairs = []
             for sector in amplitudes[left_op]:
                 for partner in amplitudes[right_op]:
-                    if trivial not in {tuple(outcome)
+                    if total not in {tuple(outcome)
                                        for outcome in group.fusion_outcomes(sector, partner)}:
                         continue
                     overlap = complex(coeff) * complex(
@@ -295,14 +306,14 @@ class MPO:
                                   content(group).placement_phase(group, sector)
                                   * np.exp(1j * np.angle(overlap))))
             if not pairs:
-                raise ValueError(f'The operators {operators} do not fuse to the trivial sector.')
+                raise ValueError(f'The operators {operators} do not fuse to the sector {total}.')
             base = {sector: threads.get(sector, 0) for sector, _, _, _ in pairs}
             for sector, _, _, _ in pairs:
                 threads[sector] = threads.get(sector, 0) + (last - first)
             placed.append((first, last, pairs, base))
-        bond = bond_leg(group, [(trivial, 2 + threads.get(trivial, 0))]
+        bond = bond_leg(group, [(group.trivial_sector, 2 + threads.get(group.trivial_sector, 0))]
                         + [(sector, threads[sector] * group.sector_dim(sector))
-                           for sector in threads if sector != trivial], 1)
+                           for sector in threads if sector != group.trivial_sector], 1)
         phys, triv = site_leg(group, phys_dim), site_leg(group, 1)
         tensors = []
         for site in range(self.L):
@@ -329,20 +340,20 @@ class MPO:
                         block[0, 0, 0, 0] = cast(Any, rail + singles.get(site, 0.0))
                         block[1, 1, 0, 0] = rail
                 # a trivial component is placed in this same block, after the two rail slots
-                left_sector = tuple(left.sector(left_block, True)) if left_block else trivial
-                right_sector = tuple(right.sector(right_block, True)) if right_block else trivial
+                left_sector = tuple(left.sector(left_block, True))
+                right_sector = tuple(right.sector(right_block, True))
                 for first, last, pairs, base_of in placed:
                     if not first <= site <= last:
                         continue
                     span = last - first
                     for sector, coeff, left_value, right_value in pairs:
                         # the rails hold the first two slots of the trivial block, the components follow
-                        base = (2 if sector == trivial else 0) + base_of[sector]
+                        base = (2 if sector == group.trivial_sector else 0) + base_of[sector]
                         # the tree carries one Clebsch-Gordan vertex per placement; each vertex is
                         # normalized to the dimension of the sector it couples to, the bond's and the site's
-                        if site == first and left_sector == trivial and right_sector == sector:
-                            block[0, base + span - 1, 0, 0] = np.sqrt(coeff) * left_value
-                        elif site == last and left_sector == sector and right_sector == trivial:
+                        if site == first and left_sector == group.trivial_sector and right_sector == sector:
+                            block[0, base + max(span - 1, 0), 0, 0] = np.sqrt(coeff) * left_value
+                        if site == last and left_sector == sector and right_sector == group.trivial_sector:
                             end = 1 if site != self.L - 1 else 0
                             # the closing placement carries the conjugate component, whose phase is
                             # the Frobenius-Schur sign of the sector
@@ -350,7 +361,7 @@ class MPO:
                                                       * content(group).placement_phase(group, sector))
                         elif (first < site < last and left_sector == sector
                               and right_sector == sector
-                              and (len(q) <= 4 or q[4] == trivial)):
+                              and (len(q) <= 4 or q[4] == group.trivial_sector)):
                             # only the path that pairs the two bond legs through the trivial
                             # sector carries the operator across the site; the other fusion
                             # paths would add the adjoint of the site to the operator
