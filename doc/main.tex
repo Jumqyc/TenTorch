@@ -4,13 +4,20 @@
 \usepackage{amssymb}
 \usepackage[margin=1in]{geometry}
 \usepackage{hyperref}
+\usepackage{tikz}
+\usetikzlibrary{calc}
 
-\newcommand{\code}[1]{\texttt{#1}}
+\emergencystretch=2em
+
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
 \newcommand{\SU}[1]{\mathrm{SU}(#1)}
 
 \title{Documentation for the Tensor Library}
 \date{\today}
 \author{Yuchen Qian}
+
+\setcounter{tocdepth}{1}
+
 
 \begin{document}
 
