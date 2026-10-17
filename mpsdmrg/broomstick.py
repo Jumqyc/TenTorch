@@ -460,7 +460,7 @@ class Broomstick:
         trunc_err = 1.0 - float(s2_kept)
 
         s /= torch.sqrt(s2_kept)
-        new_bond = u.shape[-1]  # kept leg dimension, not the number of kept singular values
+        new_bond = u.legs[2].multiplets  # kept multiplets, the number of kept singular values
         if direction == 'right':
             mps.tensors[i] = u  # M[i] = U
             mps.tensors[i + 1] = s.to(vh.dtype).view(-1, 1, 1) * vh  # M[i+1] = S Vh

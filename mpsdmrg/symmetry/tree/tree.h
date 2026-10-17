@@ -93,6 +93,10 @@ class Leg {
   int64_t block_dim(int64_t qi) const;
   // Multiplicity of one charge block on the leg.
   int64_t multiplicity(int64_t qi) const;
+  // Number of multiplets on the leg: the sum of its block multiplicities.  This is the bond
+  // dimension of the QSpace convention, while `dim()` counts the states instead, every
+  // multiplet holding `sector_dim` of them.
+  int64_t multiplets() const;
   // Number of stored indices of one charge block: its whole block dimension once the leg
   // resolves its magnetic index, its multiplicity otherwise.
   int64_t data_dim(int64_t qi) const;
@@ -193,14 +197,14 @@ std::string sectors_repr(const std::vector<Sector>& sectors);
 // Bind the names of this module to python.
 // The shape algebra a model layer needs without naming a leg: the leg of a bare dimension,
 // a bond leg from (sector, dimension) entries, the fusion of two legs, and a leg capped to
-// the largest dimension that fits.
+// the largest number of multiplets that fits.
 Leg site_leg(const std::shared_ptr<Group>& group, int64_t dim, int64_t qconj = 1,
              bool resolved = false);
 Leg bond_leg(const std::shared_ptr<Group>& group,
              std::vector<std::pair<Sector, int64_t>> entries, int64_t qconj = 1,
              bool resolved = false);
 Leg fuse_legs(const Leg& first, const Leg& second);
-Leg capped_leg(const Leg& leg, int64_t max_dim);
+Leg capped_leg(const Leg& leg, int64_t max_multiplets);
 
 void bind_tree(py::module_& m);
 

@@ -310,7 +310,11 @@ A leg of a tensor is a labelled collection of irrep sectors,
   L = \bigl\{ (s_1, d_1), \dots, (s_n, d_n)\bigr\},\qquad d_i = m_i \dim V_{s_i},
 \end{equation}
 where $s_i$ is the sector (the charge), $m_i$ the multiplicity and $d_i$ the
-number of indices.  A tensor is a set of blocks, each block labelled by the
+number of indices.  The bond dimension a state reports is the sum of the
+multiplicities, $\sum_i m_i$: this is the $D$ of the QSpace convention, which
+counts multiplets, and it is the unit of the truncation bound.  The number of
+states on the leg is $\sum_i d_i = \sum_i m_i \dim V_{s_i}$ instead.  A tensor
+is a set of blocks, each block labelled by the
 sector chosen on every leg, and the block data are the reduced matrix
 elements of the corresponding intertwiner.  The label of a block consists of
 \begin{itemize}
@@ -333,6 +337,7 @@ ordered list of the leg sectors together with the inner couplings and the
 total charge,
 \begin{equation}
   \text{tree} = \bigl(s_1,\dots,s_k \,\big|\, c_1,\dots,c_{k-2} \,\big|\, c\bigr),
+  \label{eq:tree}
 \end{equation}
 subject to $c_i \in s_1\otimes\dots\otimes s_{i+1}$ and $c\in
 s_1\otimes\dots\otimes s_k$.  A tensor whose legs are chosen admits one
@@ -405,12 +410,24 @@ than demanded to be trivial.  A local operator that is a single component of
 a multiplet ($S^z$ inside the spin-$1$ triplet, or $\lambda_8$ inside the
 $\SU{3}$ adjoint) is exactly such an object: $T^{(k)}_q$ is an intertwiner
 $V_j\to V_j\otimes V_k$ whose charge is the irrep $k$, so the multiplet
-index is part of the operator''s data.  Representing it requires either the
-multiplet index as an explicit data axis of the leg (the ``resolved'' leg of
-the container), or an operator that knows how to project onto its charge
-channel.
+index is part of the operator''s data.
+
+An operator that carries non-trivial charge is the one place where the two
+conventions of the container are not interchangeable, and it is worth stating
+why.  Applying an MPO alternates a contraction with a split.  The contraction
+of a state tensor with an operator tensor produces an object whose legs can
+fuse to the output charge along more than one path, and \emph{which} path is
+taken is data: it is what distinguishes $\mathcal O|\psi\rangle$ from any other
+state with the same bond dimensions.  A leg in the resolved convention stores
+the magnetic index and therefore sums the paths into one dense window
+(section~\ref{sec:flow-contract}); a leg in the reduced convention stores one
+entry per path (section~\ref{sec:flow-project}).  The reduced convention is
+therefore the production route for a charged operator, and the resolved
+convention is what a bare matrix needs, because a bare matrix has no path to
+follow at all.
 
 \subsection{Contraction of charged tensors}
+\label{sec:flow-contract}
 
 Contracting two tensors along a shared pair of legs is the invariant pairing
 induced by the CG data.  Two things must hold for the result to stay inside
@@ -422,16 +439,182 @@ the block-sparse format:
   \item the total charge of the result must be a single irrep, i.e.\ the
         contraction must not mix several total charges.
 \end{itemize}
-The second condition is a real restriction of a container that stores one
-total charge per tensor.  If the operands force several coupled channels,
-the contracted object is genuinely a sum over them - for instance
-$S^z\cdot S^z$ on a triplet contains both the trivial and the quintet
-channels - and a container with a single label cannot represent it without
-losing information.  The honest behaviour is to refuse such a contraction
-with a clear message, rather than to silently pick one channel.  In
-practice a symmetric algorithm avoids the situation by construction: the
-standard matrix-product operations contract objects whose partial charges
-are carried by the bond legs, so the intermediate total charge is known.
+The second condition is a property of the operands, not of the algorithm.  A
+contraction of two invariant tensors is again invariant, so the matrix-product
+operations - which contract the physical leg of a state with the physical leg
+of an operator, and then the two virtual legs of the carry - never mix totals,
+and the condition holds by construction.  It fails only for an object that is
+not an intertwiner of a single total, such as a bare matrix $M_{ab}$ whose two
+legs fuse to the trivial channel and to the adjoint channel at the same time;
+such an object has to be carried in the resolved convention, where the two
+channels are simply two components of one dense index pair.
+
+The price of the resolved convention appears at the next step.  Because a
+resolved block stores the magnetic index, it is the \emph{sum over all paths}
+that reach the block''s leg sectors.  That is exactly what one wants for the
+dense expansion of a network, and exactly what has to be undone to continue in
+the sparse convention.  For a multiplicity-free group the sum has a single
+term - the tree is determined by the leg sectors - and nothing is lost; for a
+group with fusion multiplicities, e.g.\ the $\SU{3}$ adjoint product
+$\mathbf 8\otimes\mathbf 8$ that contains $2\cdot\mathbf 8$, a block merges
+several trees and the paths can no longer be read from the labels.
+
+\subsection{The projection that recovers a fusion path}
+\label{sec:flow-project}
+
+A tensor with legs $\lambda_1,\dots,\lambda_k$ and total charge $c$ is expanded
+in the CG data of its admissible fusion trees as
+\begin{equation}
+  T_{a_1\dots a_k} \;=\; \sum_{\text{trees }\tau}
+  C^{\tau}_{a_1\dots a_k}\, T_{\tau},
+  \label{eq:flow-expand}
+\end{equation}
+where the sum runs over the trees $\tau$ of the leg sectors that fuse to $c$
+(including the copy index of every internal vertex when the group has fusion
+multiplicities), $C^\tau$ is the vertex tensor of the tree, obtained by
+multiplying the CG tensors along its chain, and $T_\tau$ is the reduced datum
+of that tree.  This is Wigner--Eckart~\eqref{eq:we} written for a whole
+network: the CG structure is not stored but looked up, and the block shape of
+the reduced container is the product of the leg multiplicities alone.
+
+The inverse of~\eqref{eq:flow-expand} is the projection.  Vertex tensors of
+distinct trees are orthogonal,
+\begin{equation}
+  \sum_{a_1\dots a_k} \overline{C^{\tau}_{a_1\dots a_k}}\,
+  C^{\tau'}_{a_1\dots a_k}
+  \;=\; \lVert C^{\tau}\rVert^{2}\,\delta_{\tau\tau'},
+  \qquad \lVert C^{\tau}\rVert^{2} = \dim V_{c},
+  \label{eq:flow-orth}
+\end{equation}
+with the normalization~\eqref{eq:cg-norm} of the CG tensors, so that
+\begin{equation}
+  T_{\tau} \;=\; \frac{1}{\lVert C^{\tau}\rVert^{2}}
+  \sum_{a_1\dots a_k} \overline{C^{\tau}_{a_1\dots a_k}}\, T_{a_1\dots a_k} .
+  \label{eq:flow-project}
+\end{equation}
+Three details matter in an implementation.  First, the sum runs over the
+magnetic index of every leg \emph{and} over the multiplicity index of every
+leg: a leg that contains the same irrep $m$ times has $m$ independent copies,
+each with its own dense window, and each copy carries one entry per tree.
+Second, the total charge has to be a single irrep, for the reason of the
+previous subsection: a block that sums several totals has no single
+$\lVert C^\tau\rVert^{2}$ to divide by, and projecting it would keep one
+channel and drop the others silently.  Third, the projection is the change of
+basis between the two conventions, so it is exact up to rounding, and the
+checks of this package verify it as a round trip of the dense expansion with
+$\max|\Delta|\lesssim10^{-16}$.
+
+\subsection{Splitting a charged tensor}
+\label{sec:flow-split}
+
+The other half of an application is the split: a tensor whose legs are (left
+group, right group) is cut into a left factor and a right factor by a singular
+value decomposition, and the bond between them carries the cut charge.  The cut
+charge of a tree is the coupling of the left group inside the tree,
+$c_{\text{cut}}=c_{|L|}$ in the notation of equation~\eqref{eq:tree}; in the
+reduced convention it is read off the block label, in the resolved convention
+from the leg sectors whenever the group is multiplicity-free.  Blocks are
+grouped by $c_{\text{cut}}$, one matrix is assembled per group, and each is
+decomposed separately,
+\begin{equation}
+  M_{q} \;=\; U_q\, S_q\, V_q^{\dagger},
+\end{equation}
+so that truncation happens per charge and the symmetry of the state survives
+the truncation itself.
+
+The bookkeeping of the new bond is where the resolved convention needs one
+extra step.  If $r_q$ singular values are kept in the cut charge $q$, the new
+bond holds $r_q$ copies of the irrep $q$: $r_q\dim V_q$ dense indices in the
+resolved convention, $r_q$ entries in the reduced one.  The singular values
+are data per copy, so each of them has to be repeated over the magnetic
+components of its multiplet before it is folded into the right factor,
+\begin{equation}
+  s_{q}\,(V_q^{\dagger})_{\text{index}} \quad\text{for every index in the
+  multiplet of } q ,
+  \label{eq:flow-absorb}
+\end{equation}
+whereas in the reduced convention the factor''s index \emph{is} the copy and
+the plain product is already correct.  Broadcasting $r_q$ numbers over
+$r_q\dim V_q$ indices is a different operation, and it is right only when
+$\dim V_q=1$ - the case of every Abelian group, and of the trivial irrep of
+any group.  This is the step that a naive $s\,\text{reshape}(-1,1,1)$ gets
+wrong, and it is why the split is a pair of operations, the decomposition and
+the absorption of the singular values, rather than one.
+
+\subsection{The three steps of the implementation}
+
+The mechanism above is realized in three places.
+
+\begin{enumerate}
+  \item \emph{The projection.}  The engine walks the trees of the reduced
+        labelling and, for every tree and every combination of leg
+        multiplicity indices, writes the amplitude~\eqref{eq:flow-project}
+        with the vertex tensor taken from the cached CG data of that tree.
+        It belongs in the engine because the CG data and the tree enumeration
+        live there; it cannot be done from the block keys of a resolved
+        tensor in the Python layer, because those keys hold no internal
+        vertices, so the paths to project onto are not in the key.  The Python
+        layer only decides when a tensor is resolved.
+  \item \emph{The absorption.}  The second factor of a split takes each kept
+        singular value repeated over the multiplet of its cut charge, as
+        in~\eqref{eq:flow-absorb}; the two callers are the two-site gate and
+        the operator application.  The reduced route needs no repetition, so
+        the operation is a no-op there.
+  \item \emph{The refusal.}  A charge-changing operator is now accepted on any
+        state, in either convention, because the projection makes the reduced
+        route exact - for the multiplicity-free groups and for $\SU{3}$ with a
+        bond of multiplicity two alike
+        (section~\ref{sec:anchors}).  What stays refused is what the container
+        genuinely cannot represent: a one-site operator whose charge is
+        non-trivial and which therefore has no path to follow, and a reduced
+        tensor whose content mixes several total charges.
+\end{enumerate}
+
+\subsection{Abelian groups, point groups, and the general case}
+\label{sec:flow-groups}
+
+Nothing in the mechanism is specific to $\SU{2}$ or $\SU{3}$: it uses the
+fusion rules, the CG (vertex) data with its normalization, and the invariant
+form that orients a leg.  What changes from group to group is which of the
+three degenerates.
+
+\paragraph{Abelian groups.}  Every irrep is one-dimensional, so the sector
+dimension is one, the CG data are trivial (every coefficient is $1$), the
+fusion is multiplicity-free and the invariant form is the identity.  The
+resolved and the reduced convention then coincide index by index: the
+projection~\eqref{eq:flow-project} is the selection of the block that carries
+the charge, the repetition~\eqref{eq:flow-absorb} is the identity, and a
+charge-changing operator is exact in either route.  This is the case of a
+$U(1)$ charge (particle number, $S^z$), of $\mathbb Z_n$ and of the fermion
+parity, and it is why the sparse machinery was exact for them long before the
+non-Abelian case was.
+
+\paragraph{Point groups.}  A crystallographic point group is finite: finitely
+many irreps, of dimension $1$, $2$ or $3$.  The fusion rules are the
+Clebsch--Gordan series of the group, computable from the character table, and
+the CG data are the orthogonal matrices that reduce
+$V_\lambda\otimes V_\mu$.  Two features of the general case appear here: a
+multiplicity $N^{\nu}_{\lambda\mu}>1$ whenever the character sum
+$\frac{1}{|G|}\sum_g\chi_\lambda(g)\chi_\mu(g)\overline{\chi_\nu(g)}$ exceeds
+one, and a Frobenius--Schur indicator that separates the orthogonal from the
+symplectic irreps (and, for a double group, the spinorial ones).  Both are
+handled by the same three ingredients, with $\dim V_\lambda$ read from the
+character table.
+
+\paragraph{The general case.}  Any symmetry whose irreps carry a fusion ring
+with a CG calculus - a compact Lie group, a finite group, a quantum group at a
+root of unity - is covered by the same three ingredients, because neither the
+projection nor the split ever asks what the group is: they ask for the sectors
+of a leg, the trees between them, the vertex tensor of a tree, and the
+invariant form.  In this package that is exactly the interface of the group
+object - its fusion outcomes, its fusion tensor, its sector dimensions, its
+invariant form and its duality matrix - and the engine branches on none of
+them.  Adding a group therefore means adding its fusion and CG data, not a
+case in the algorithm.  The design rule is that the symmetry logic is
+universal and sealed inside the group layer, and the charge flow described
+here is the sharpest test of it, because it is the operation that needs every
+piece of the group data at once.
+
 
 \section{Where the dense route belongs}
 \label{sec:reference}
@@ -467,6 +650,7 @@ never stores.  The intended split is therefore:
 \end{center}
 
 \section{Measured anchor points}
+\label{sec:anchors}
 
 The following numbers were measured in this package and are quoted here as
 the empirical anchor of the statements above.
@@ -493,4 +677,42 @@ the empirical anchor of the statements above.
         round-trips exactly, $T\!\to\!\text{dense}\!\to\!T$ with
         $\max|\Delta|=0$, for $S^z$, $S^x$, the identity of $\SU{2}$ and
         $\lambda_8$ of $\SU{3}$ - which is what makes it usable as an oracle.
+  \item Charge flow, $\SU{2}$: applying an operator of total charge $1$ (a
+        triplet, the sector $(2)$) to the $L=4$ Heisenberg ground state gives
+        $\lVert\mathcal O\psi\rVert^2=0.5290063509461093$ against
+        $0.5290063509461105$ from the dense expansion of the same operator, and
+        at $L=6$ with two such operators $1.1901684550722649$ against
+        $1.1901684550722691$.  The bonds of the result carry
+        $(1)$, $(0)\oplus(2)$, $(1)\oplus(3)$,
+        $(0)\oplus(2)\oplus(4)$, $(1)$: the charge the operator added, and not
+        the trivial one.
+  \item Charge flow with a multiplicity, $\SU{3}$: the same application on the
+        $L=6$ ULS chain, whose bond between sites $2$ and $3$ holds two copies
+        of the adjoint, gives $0.10983847951600069$ against
+        $0.10983847951600301$ dense for the adjoint channel and
+        $0.0888259974999079$ against $0.08882599749990971$ for the
+        $\mathbf{10}$ channel, so the multiplicity is carried exactly instead
+        of being dropped.
+  \item The projection~\eqref{eq:flow-project}: applied to a merged state and
+        operator tensor it reproduces the reduced labelling of the same
+        contraction to $1.2\times10^{-16}$, with the same block keys, and both
+        contractions agree with the plain dense contraction of the three
+        tensors to $3\times10^{-16}$.
+  \item The absorption~\eqref{eq:flow-absorb}: without the repetition of each
+        singular value over its multiplet, the application fails with a size
+        mismatch ($4$ against $2$) as soon as a kept charge has
+        $\dim V_q>1$; with the repetition, and with the projection above, a
+        charge-changing operator applies in either convention and the checks
+        of the package are green.
+  \item Where the time goes: one $\SU{2}$ sweep at $L=10$ with bond dimension
+        $32$ issues $1.8\times10^{5}$ CUDA kernels of $2.3\,\mu$s on average,
+        $2.3\times10^{4}$ device-to-device copies and $1.6\times10^{5}$ block
+        slices, for a total device time of $0.21$ s against a wall time of
+        $1.4$ s.  The GPU is therefore idle for most of the sweep: the cost is
+        the dispatch of one tiny operation per block, not the arithmetic.  The
+        decomposition is negligible in that budget ($36$ SVD calls, $0.7\%$ of
+        the CPU time), and the default intra-op thread pool does not pay for
+        itself - the same sweep takes $2.9$ s with the pool and $1.4$ s
+        without it, because a workload of tiny operations cannot be spread
+        over threads.
 \end{itemize}

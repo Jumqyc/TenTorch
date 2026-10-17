@@ -14,6 +14,22 @@ from mpsdmrg.mpo import MPO
 from mpsdmrg.symmetry.group import Group, has_content, no_symmetry
 from mpsdmrg.tensor import Tensor, cached_einsum, resolve, capped_leg, fuse_legs, site_leg
 
+
+def _bond_multiplets(tensors: list[Tensor]) -> list[int]:
+    '''
+    The number of multiplets on every bond of a chain of tensors.
+
+    Args:
+        tensors (list[Tensor]): one tensor per site, legs (left bond, physical, right bond).
+    Returns:
+        list[int]: one count per bond, the left edge first.  This is the bond dimension of the
+            QSpace convention; the dense length of the same bond counts the states instead,
+            every multiplet holding ``sector_dim`` of them.
+    '''
+    return ([tensors[0].legs[0].multiplets]
+            + [tensor.legs[2].multiplets for tensor in tensors])
+
+
 class MPS:
     '''
     A class representing a Matrix Product State (MPS) in quantum physics and tensor networks.
@@ -32,7 +48,11 @@ class MPS:
         Args:
             L (int): Length of the MPS (number of sites).
             phys_dim (int): Physical dimension of each site.
-            bond_dims (list[int] | None): List of bond dimensions for each bond in the MPS. Including the left and right virtual bonds, the length of this list should be L+1. If None, defaults to [1] + [phys_dim] * (L - 1) + [1].
+            bond_dims (list[int] | None): List of dense bond dimensions -- the number of states on
+                each bond -- for each bond in the MPS. Including the left and right virtual bonds,
+                the length of this list should be L+1. If None, defaults to
+                [1] + [phys_dim] * (L - 1) + [1].  The ``bond_dim`` of the state counts the
+                multiplets instead.
             init_state (list[Tensor] | None): Optional initial state for the MPS. If None, random tensors will be generated.
             dtype: data type of the MPS tensors (default: COMPLEX).
             device: device that stores the MPS tensors (default: CUDA).
@@ -44,7 +64,7 @@ class MPS:
             init_state: kept as a copy of the caller's list; the tensors themselves are
                 canonicalized in place, so the caller's tensors are left as they were only
                 when the constructor does not rebuild them.
-            max_bond_dim: largest bond dimension of that invariant start state.
+            max_bond_dim: largest number of multiplets of that invariant start state.
         Raises:
             ValueError: If the length of bond_dims does not match L+1, or if a
                 multiplet-carrying group is given without a bond cap.
@@ -74,7 +94,6 @@ class MPS:
             bond_dims = [1] + [phys_dim] * (L - 1) + [1]
         self.L = L
         self.phys_dim = phys_dim
-        self.bond_dim = bond_dims
         if len(bond_dims) != L + 1:
             raise ValueError(f"Bond dimension list length {len(bond_dims)} does not match the expected length of {L + 1}.")
         self.dtype = dtype
@@ -95,6 +114,7 @@ class MPS:
             if any(t.shape != (bond_dims[i], phys_dim, bond_dims[i + 1]) for i, t in enumerate(init_state)):
                 raise ValueError("Initial state tensors do not match the specified bond and physical dimensions.")
 
+        self.bond_dim = _bond_multiplets(self.tensors)
         self._canonical = True  # the tensors below are canonical unless an operator breaks the form
         self.canonicalize()  # Ensure the MPS is in canonical form upon initialization
         self.normalize()  # Normalize the MPS upon initialization
@@ -120,12 +140,12 @@ class MPS:
         state = MPS.__new__(MPS)
         state.L = len(tensors)
         state.phys_dim = tensors[0].shape[1]
-        state.bond_dim = [tensors[0].shape[0]] + [tensor.shape[2] for tensor in tensors]
         state.dtype = dtype
         state.device = device
         state.group = group
         state.center = 0
         state.tensors = list(tensors)
+        state.bond_dim = _bond_multiplets(state.tensors)
         state._canonical = False
         return state
 
@@ -224,7 +244,7 @@ class MPS:
             gate: the matrix of the operator in the product basis of the two sites, in shape
                 (dim, dim, dim, dim) read as (bra1, bra2, ket1, ket2).
             targets: the two neighbouring sites the gate acts on.
-            max_bond_dim (int | None): largest bond dimension the split keeps; ``None`` keeps all.
+            max_bond_dim (int | None): largest number of multiplets the split keeps; ``None`` keeps all.
             tol (float): singular values at or below this are dropped.
         Returns:
             MPS: the state after the gate, not canonicalized.
@@ -279,7 +299,7 @@ class MPS:
 
         Args:
             operator (MPO): the operator to apply; same length and physical dimension as the state.
-            max_bond_dim (int | None): largest bond dimension the splits keep; ``None`` keeps all.
+            max_bond_dim (int | None): largest number of multiplets the splits keep; ``None`` keeps all.
             tol (float): singular values at or below this are dropped.
         Returns:
             MPS: the state after the operator.
@@ -476,7 +496,7 @@ class MPS:
         if i < 0 or i >= self.L-1:
             raise IndexError(f"Index {i} is out of bounds for MPS of length {self.L}.")
         q, r = linalg.qr(self.tensors[i], (0, 1), (2,))
-        self.bond_dim[i+1] = q.shape[-1]
+        self.bond_dim[i+1] = q.legs[2].multiplets
         self.tensors[i] = q
         self.tensors[i+1] = cached_einsum('ab,bcd->acd', r, self.tensors[i+1])
         if update_center:
@@ -499,7 +519,7 @@ class MPS:
         if i <= 0 or i >= self.L:
             raise IndexError(f"Index {i} is out of bounds for MPS of length {self.L}.")
         r, q = linalg.rq(self.tensors[i], (0,), (1, 2))
-        self.bond_dim[i] = q.shape[0]
+        self.bond_dim[i] = q.legs[0].multiplets
         self.tensors[i] = q
         self.tensors[i-1] = cached_einsum('lpb,br->lpr', self.tensors[i-1], r)
         if update_center:
@@ -520,7 +540,8 @@ class MPS:
         '''
         return MPS(self.L,
                       self.phys_dim,
-                      self.bond_dim.copy(),
+                      [tensor.shape[0] for tensor in self.tensors[:1]]
+                      + [tensor.shape[2] for tensor in self.tensors],
                       [t.clone().detach() for t in self.tensors],
                       self.dtype,
                       self.device,

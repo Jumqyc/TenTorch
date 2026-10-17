@@ -402,17 +402,20 @@ class MPO:
         bond_dim = len(state_idx) + 2  # start (0) + end (bond_dim - 1)
 
         p = self.physical_dim
-        tensors = [Tensor.zeros((1, bond_dim, p, p), dtype=self.dtype, device=self.device)]
-        tensors += [Tensor.zeros((bond_dim, bond_dim, p, p), dtype=self.dtype, device=self.device)
-                    for _ in range(1, self.L)]
-        tensors += [Tensor.zeros((bond_dim, 1, p, p), dtype=self.dtype, device=self.device)]
+        tensors = []
+        for site in range(self.L):
+            # the two edges of the chain are trivial, the bond carries the start and the end state
+            left = 1 if site == 0 else bond_dim
+            right = 1 if site == self.L - 1 else bond_dim
+            tensors.append(Tensor.zeros((left, right, p, p), dtype=self.dtype, device=self.device))
 
         eye = torch.eye(p, dtype=self.dtype, device=self.device)
-        tensors[0][0, 0] = eye                             # site-0 start
-        tensors[self.L][bond_dim - 1, 0] = eye             # right boundary
-        for i in range(1, self.L):
-            tensors[i][0, 0] = eye                         # bulk start
-            tensors[i][bond_dim - 1, bond_dim - 1] = eye   # bulk end
+        if self.L > 1:
+            tensors[0][0, 0] = eye                             # site-0 start
+            tensors[self.L - 1][bond_dim - 1, 0] = eye         # right boundary
+            for i in range(1, self.L - 1):
+                tensors[i][0, 0] = eye                         # bulk start
+                tensors[i][bond_dim - 1, bond_dim - 1] = eye   # bulk end
 
         # identity on skipped sites for long-range couplings
         for key, ranges in state_ranges.items():
@@ -434,7 +437,9 @@ class MPO:
                     mat = coeff * mat
 
                 state_in = 0 if n == 0 else state_idx[keys[n - 1]]
-                state_out = bond_dim - 1 if n == len(ops) - 1 else state_idx[keys[n]]
+                # the closing leg of the last site has a single slot, the bond's end state
+                end = 0 if site == self.L - 1 else bond_dim - 1
+                state_out = end if n == len(ops) - 1 else state_idx[keys[n]]
 
                 if site == 0:
                     tensors[0][0, state_out] += mat

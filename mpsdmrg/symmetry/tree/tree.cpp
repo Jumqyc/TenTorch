@@ -185,6 +185,13 @@ int64_t Leg::multiplicity(int64_t qi) const {
   return block_dim(qi) / group_->sector_dim(sectors_.at(static_cast<std::size_t>(qi)));
 }
 
+int64_t Leg::multiplets() const {
+  // Every multiplet contributes one copy; its magnetic index is carried by the vertex.
+  int64_t total = 0;
+  for (int64_t qi = 0; qi < nblocks(); ++qi) total += multiplicity(qi);
+  return total;
+}
+
 int64_t Leg::data_dim(int64_t qi) const {
   // A resolved leg keeps the full block as its data axis (copies and magnetic index together);
   // an unresolved leg keeps one entry per mapping only.
@@ -478,18 +485,17 @@ Leg bond_leg(const std::shared_ptr<Group>& group, std::vector<std::pair<Sector, 
 
 Leg fuse_legs(const Leg& first, const Leg& second) { return first.fuse(second); }
 
-Leg capped_leg(const Leg& leg, int64_t max_dim) {
-  if (leg.dim() <= max_dim) return leg;
+Leg capped_leg(const Leg& leg, int64_t max_multiplets) {
+  if (leg.multiplets() <= max_multiplets) return leg;
   const std::shared_ptr<Group>& group = leg.group();
   std::vector<std::pair<Sector, int64_t>> entries;
   int64_t total = 0;
   for (int64_t qi = 0; qi < leg.nblocks(); ++qi) {
     const Sector& sector = leg.sectors().at(qi);
-    const int64_t room = (max_dim - total) / group->sector_dim(sector);
-    const int64_t keep = std::min(leg.multiplicity(qi), room);
+    const int64_t keep = std::min(leg.multiplicity(qi), max_multiplets - total);
     if (keep > 0) {
       entries.emplace_back(sector, keep * group->sector_dim(sector));
-      total += keep * group->sector_dim(sector);
+      total += keep;
     }
   }
   return Leg::from_blocks(group, std::move(entries), leg.qconj()).first;
@@ -501,7 +507,7 @@ void bind_tree(py::module_& m) {
     m.def("bond_leg", &sym::bond_leg, py::arg("group"), py::arg("entries"), py::arg("qconj") = 1,
           py::arg("resolved") = false);
     m.def("fuse_legs", &sym::fuse_legs, py::arg("first"), py::arg("second"));
-    m.def("capped_leg", &sym::capped_leg, py::arg("leg"), py::arg("max_dim"));
+    m.def("capped_leg", &sym::capped_leg, py::arg("leg"), py::arg("max_multiplets"));
     py::class_<sym::Leg, std::shared_ptr<sym::Leg>>(m, "Leg")
         .def(py::init<std::shared_ptr<sym::Group>, std::vector<sym::Sector>,
                       std::vector<int64_t>, int64_t, bool>(),
@@ -533,6 +539,7 @@ void bind_tree(py::module_& m) {
              },
              py::arg("qi"), py::arg("dual") = false)
         .def("multiplicity", &sym::Leg::multiplicity, py::arg("qi"))
+        .def_property_readonly("multiplets", &sym::Leg::multiplets)
         .def_property_readonly("resolved", &sym::Leg::resolved)
         .def("fuse", &sym::Leg::fuse, py::arg("other"))
         .def("conj", &sym::Leg::conj)
