@@ -72,6 +72,20 @@ multiplet_leg = _extension.multiplet_leg
 site_leg = _extension.site_leg
 ZNSymmetry = _extension.ZNSymmetry
 cached_einsum = _extension.cached_einsum
+dense_path = _extension.dense_path
+
+
+def set_dense_path(enabled: bool) -> None:
+    '''
+    Force every contraction onto the dense route, for comparing the two routes.
+    Args:
+      enabled: True to route every contraction through the dense path, False to release it.
+    Raises:
+      NotImplementedError: when this build has no dense-path switch.
+    '''
+    if not hasattr(_extension, 'set_dense_path'):
+        raise NotImplementedError('this build has no dense-path switch; rebuild with DENSEPATH=1')
+    _extension.set_dense_path(enabled)
 fermion_parity = _extension.fermion_parity
 fibonacci = _extension.fibonacci
 inner = _extension.inner
