@@ -88,7 +88,7 @@ def _pairwise(spec: str, tensors: tuple[Any, ...]) -> Tensor:
     Contract three or more operands as a sequence of two-operand contractions.
     Args:
       spec: the einsum equation, with an explicit output.
-      tensors: the operands, at least one of them a charged ``Tensor``.
+      tensors: dense, charged, or raw operands with the shapes named by ``spec``.
     Returns:
       The contraction.
     '''
@@ -107,12 +107,17 @@ def cached_einsum(spec: str, *tensors: Any) -> Tensor:
     Args:
       spec: the einsum equation, with an explicit output; every label appears once in the output
         or exactly twice among the operands.
-      tensors: the operands.  A charged ``Tensor`` makes the contraction block by block, and
-        three or more operands go through the pairwise plan of opt_einsum, so that no step of a
-        contraction touches more than two blocks at a time.
+      tensors: the operands.  A charged ``Tensor`` makes the contraction block by block.
+        With three or more operands, charged calls and dense/raw calls of one dtype use the
+        cached pairwise plan of opt_einsum to avoid large intermediates. Mixed-dtype dense calls
+        keep the engine's original order to preserve operation-dependent dtype promotion.
     Returns:
       The contraction.
     '''
-    if len(tensors) > 2 and any(isinstance(t, Tensor) and not t.is_dense for t in tensors):
-        return _pairwise(spec, tensors)
+    if len(tensors) > 2:
+        if any(isinstance(t, Tensor) and not t.is_dense for t in tensors):
+            return _pairwise(spec, tensors)
+        raw = [t.blocks[0] if isinstance(t, Tensor) else t for t in tensors]
+        if all(t.dtype == raw[0].dtype for t in raw[1:]):
+            return _pairwise(spec, tensors)
     return _engine_einsum(spec, *tensors)
