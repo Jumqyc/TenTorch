@@ -765,7 +765,11 @@ vocabulary of \code{cat.h}, of \code{FusionStyle::general}, so
 Nothing in the list above is missing, so the same diagram algorithm of
 Section~\ref{sec:diagram} applies --- the loop weight is $\varphi$ where a group
 would have had an integer, and the fusion of two $\tau$'s resolves into two
-channels (Figure~\ref{fig:exact}).
+channels (Figure~\ref{fig:exact}).  Representing a tensor as a fusion tree and
+contracting two trees by moving one into the other's basis is the organisation
+\code{TensorKit} uses \cite{tensorkit}; the algorithm below fixes what such a
+move pays at every step, and keeps its dense fallback wherever a multiplicity
+would pair the coefficients into a matrix.
 
 \begin{figure}[htbp]
   \centering
@@ -854,17 +858,18 @@ loop, the shared block itself, whose label $b$ is the total charge of the glued
 part (Figure~\ref{fig:diagram}).  Closing that loop is what the engine pays for
 with the weight of the block, so the junction scale carries
 \begin{equation}
-  \frac{1}{\sqrt{d_{b}}}
-  \qquad\text{and, when the left free part has three legs,}\qquad
-  F^{b\,f_0 f_1}_{c_{s+1}}\bigl(c_{s},\phi\bigr),
+  \frac{1}{\sqrt{d_{b}}}\;\prod_{i=1}^{n-2}
+  F^{b\,\mu_{i-1} f_{i}}_{c_{s+i}}\bigl(c_{s+i-1},\phi_{i}\bigr),
+  \qquad \mu_{0}=f_{0},\quad \mu_{i}=\phi_{i},
   \label{eq:junction}
 \end{equation}
 where $s$ is the number of glued legs, $b=c_{s}$ is their total charge (the
-shared block), $c_{s+1}$ is the coupling the left chain carries there, and
-$\phi$ is the frame --- the coupling the free part takes in the recoupled tree.
-The one associator moves the left free chain from its chain coupling $c_{s+1}$
-through $c_{s}$ into $\phi$; the right free part needs none, because the chain
-move of \eqref{eq:states} already carries it.  A pair whose dual leg lies on the
+shared block), $c_{s+i}$ is the coupling the left chain carries after its $i$-th
+free leg, and $\phi_{1},\dots,\phi_{n-2}$ are the frame couplings --- the
+couplings the free part takes once the block has been moved through it.  One
+associator per interior vertex of the left free chain moves the block through it,
+each step summed over its intermediate coupling; the right free part needs none,
+because the chain move of \eqref{eq:states} already carries it.  A pair whose dual leg lies on the
 left also carries the self-duality sign of that label, which is how a
 half-integer glued leg keeps the right weight.
 
@@ -891,8 +896,8 @@ that block's own coupling tuple:
   \bigl[\text{joined amplitude for that coupling tuple}\bigr],
   \label{eq:weight}
 \end{equation}
-with $\sigma$ the duality sign of \eqref{eq:junction} and $F(\phi)=1$ when the
-frame is empty.  Every factor on the right is a fusion rule, an associator, a
+with $\sigma$ the duality sign of \eqref{eq:junction} and the product in
+\eqref{eq:junction} empty when the left free part has fewer than three legs.  Every factor on the right is a fusion rule, an associator, a
 braiding or a quantum dimension; no Clebsch--Gordan coefficient and no dense
 contraction appears.
 
@@ -912,18 +917,15 @@ contraction appears.
 --- for a shape it does not model: a leg that both operands keep in the output
 (which would be counted twice), a fusion multiplicity that pairs the associators
 into matrices over copies rather than a scalar, or a joined chain whose length
-does not match the couplings it produced.  Those guards are structural, not a
-characterisation of coverage.  Measured exact: the layouts the library issues in
-a sweep (every step of the $L=6$ SU(2) Heisenberg contraction), every shape with
-one glued leg on randomised operands, and two or more glued legs when the left
-operand keeps at least one spectator leg.  Measured wrong, and \emph{not}
-guarded: a left operand with four spectator legs
-(\code{abcde,af->bcdef}), a left operand whose coupled block takes three glued
-legs out of a longer chain (\code{abcde,ead->bc}), and a fully glued left
-operand at two glued legs on some spin assignments.  Outside the measured set a
-caller must not rely on the categorical route until the rule is extended to
-those layouts or \code{diagram\_weight} learns to recognise and decline them.
-
+does not match the couplings it produced.  Those guards are structural: they
+name what the surgery assumes, not how far it has been measured.  Measured exact:
+the layouts the library issues in a sweep (every step of the $L=6$ SU(2)
+Heisenberg contraction, $1.1\times10^{-15}$), a left free part of four legs
+(\code{abcde,af->bcdef}, $2.8\times10^{-16}$), a left operand whose coupled block
+takes three glued legs out of a longer chain (\code{abcde,ead->bc}), a fully
+glued pair (\code{ab,ac->bc}), and twenty randomised layouts with up to five
+free and three glued legs on both sides ($1.3\times10^{-15}$, counting only the
+shapes that are not empty).
 
 \section{Charge flow: contraction and splitting}
 \label{sec:charge-flow}

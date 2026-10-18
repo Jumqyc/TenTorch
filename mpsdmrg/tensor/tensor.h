@@ -192,6 +192,16 @@ namespace sym
   // The block-by-block einsum.
   Tensor blocked_einsum(const std::string &spec, const std::vector<Tensor> &tensors);
 
+  // Whether a contraction is forced onto the dense route.
+  //
+  // A normal build always answers false; a build with ``-DDENSEPATH`` lets the caller flip it,
+  // so a check can evaluate the same operands on both routes.
+  bool dense_path();
+#ifdef DENSEPATH
+  // Force every contraction onto the dense route, or release that force.
+  void set_dense_path(bool enabled);
+#endif
+
   // Bind the names of this module to python.
   void bind_tensor(py::module_ &m);
 

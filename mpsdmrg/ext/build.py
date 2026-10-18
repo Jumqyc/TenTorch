@@ -132,7 +132,8 @@ def build_extension(verbose: bool, jobs: int) -> Any:
     module: Any = load(
         name = 'symmetry_ext',
         sources = list(SOURCES),
-        extra_cflags = ['-O3', '-include', PCH],
+        # ``DENSEPATH=1`` keeps the debug switch that forces the dense route (``set_dense_path``).
+        extra_cflags = ['-O3', '-include', PCH] + (['-DDENSEPATH'] if os.environ.get('DENSEPATH') else []),
         build_directory = BUILD_DIR,
         verbose = verbose)
     # the loader treats this script as an input, so a successful build has to stamp the library

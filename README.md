@@ -86,13 +86,14 @@ symmetry/cat   ->   symmetry/tree   ->   tensor   ->   linalg
 A contraction has two routes for the weight of an output tree: a categorical one, which needs
 nothing but associators and braidings, and a dense one, which builds the trees densely and
 contracts them. The categorical route is exact on the layouts the library issues today — the 22
-layouts of one L=6 SU(2) Heisenberg sweep reproduce the dense route to 8e-16 — but it is derived
-for a family of layouts, not for all of them. Shapes outside that family (a left free part of
-four or more legs, no left free leg together with two or more shared legs, and two left free
-legs together with three shared legs) do not always decline; on some sector assignments they
-return a weight that disagrees with the dense route, which is why the dense route stays the
-reference. The categorical route is also roughly 12 times slower than the dense one at present,
-so the dense route remains the default for anything not covered.
+layouts of one L=6 SU(2) Heisenberg sweep reproduce the dense route to 8e-16. It declines the
+shapes it does not model — a multiplicity pairing, a leg that is both contracted and kept, a leg
+count the chain cannot express — and those fall back to the dense route, so a category without a
+Clebsch-Gordan tensor still works wherever the route applies.
+
+The dense route is also the faster of the two at present, by roughly 12 times, so it stays the
+reference. A build with `DENSEPATH=1` keeps a Python switch that forces it
+(`mpsdmrg.ext.set_dense_path`), which is how the two routes are compared on the same operands.
 
 ## Documentation and tests
 

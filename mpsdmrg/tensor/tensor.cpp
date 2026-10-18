@@ -23,6 +23,9 @@ namespace sym
   namespace
   {
 
+    // Set only by a debug build; see ``set_dense_path``.
+    bool g_dense_path = false;
+
     // The sector sizes and values in one plain vector, so a sequence of sectors can be a cache
     // key without ambiguity between two of them.
     std::vector<int64_t> flatten(const std::vector<Sector> &sectors)
@@ -1639,7 +1642,9 @@ namespace sym
             shared_dual.push_back(tensors[0].legs()[axis].qconj() == -1 ? 1 : 0);
           }
         }
-        const bool categorical_route = n_operands == 2 && !shared_left.empty();
+        // ``set_dense_path`` is the debug build's escape to the dense route, so a check can
+        // evaluate the same operands on both routes; a normal build never takes that branch.
+        const bool categorical_route = n_operands == 2 && !shared_left.empty() && !dense_path();
         for (const Sector& candidate : tree_totals) {
           for (const FusionTree& tree : fusion_trees(group, combo.out_sectors, candidate)) {
             combo.inners.push_back(tree.inner());
@@ -1779,6 +1784,18 @@ namespace sym
     // report whenever the legs of the result allow several.
     return Tensor(block_list, key_list, out_legs, qtotal, group, true);
   }
+
+  bool dense_path()
+  {
+    return g_dense_path;
+  }
+
+#ifdef DENSEPATH
+  void set_dense_path(bool enabled)
+  {
+    g_dense_path = enabled;
+  }
+#endif
 
   Tensor cached_einsum(const std::string &spec, py::args tensors)
   {

@@ -49,6 +49,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   sym::bind_su2(m);
   sym::bind_su3(m);
   sym::bind_tree(m);
+  m.def("dense_path", &sym::dense_path, "Whether a contraction is forced onto the dense route.");
+#ifdef DENSEPATH
+  m.def("set_dense_path", &sym::set_dense_path, "Force the dense route for debugging.", py::arg("enabled"));
+#endif
   sym::bind_tensor(m);
   sym::bind_linalg(m);
 }

@@ -162,24 +162,47 @@ std::vector<std::vector<Sector>> free_frames(const std::vector<Sector>& legs, co
   return frames;
 }
 
-// The scalar one junction of the diagram carries: the loop weight of the shared block, and, once
-// the left free part reaches three legs, the one associator that recouples it against `inner`.
-// Empty when the associator is not a scalar.
+// The coupling an operand's chain carries at one position of its shared prefix.  A prefix that
+// runs to the operand's last leg ends on that leg's total charge, which the tree keeps outside
+// its inner list.
+std::optional<Sector> prefix_coupling(const std::vector<Sector>& inner, const Sector& coupled,
+                                      int64_t index) {
+  if (index < static_cast<int64_t>(inner.size())) return inner[index];
+  if (index == static_cast<int64_t>(inner.size())) return coupled;
+  return std::nullopt;
+}
+
+// The couplings of a chain at one index, with the last leg's total charge standing in for the
+// entry the inner list does not carry.
+const Sector& chain_coupling(const std::vector<Sector>& inner, const Sector& coupled, int64_t index) {
+  return index < static_cast<int64_t>(inner.size()) ? inner[index] : coupled;
+}
+
+// The scalar the junction carries: the loop weight of the shared block, and the recoupling that
+// moves the block through the left free chain one vertex at a time, each step one associator.
+// Empty when a step's associator is not a scalar.
 std::optional<std::complex<double>> junction_scale(
-    const Sector& block, const std::vector<Sector>& inner, const std::vector<Sector>& frame,
-    const std::vector<Sector>& free_legs, int64_t shared,
+    const Sector& block, const std::vector<Sector>& inner, const Sector& coupled,
+    const std::vector<Sector>& frame, const std::vector<Sector>& free_legs, int64_t shared,
     const std::shared_ptr<FusionCategory>& group, const c10::Device& device) {
   // The block that closes the loop also fixes the local frame, and a loop whose pair carries the
   // duality on the left does not fuse back to the trivial sector without the self-duality sign.
   const double loop = 1.0 / std::sqrt(group->quantum_dim(block));
-  if (frame.empty()) return std::complex<double>(loop, 0.0);
-  std::complex<double> recoupled;
-  if (!symbol_scalar(group->associator(block, free_legs[0], free_legs[1], inner[shared],
-                                       inner[shared - 1], frame[0], device),
-                     recoupled)) {
-    return std::nullopt;
+  std::complex<double> product = 1.0;
+  Sector previous = free_legs.empty() ? block : free_legs[0];
+  for (std::size_t step = 0; step < frame.size() && step + 1 < free_legs.size(); ++step) {
+    std::complex<double> one;
+    const Sector& after = chain_coupling(inner, coupled, shared + static_cast<int64_t>(step));
+    const Sector& before = chain_coupling(inner, coupled, shared - 1 + static_cast<int64_t>(step));
+    if (!symbol_scalar(group->associator(block, previous, free_legs[step + 1], after, before,
+                                         frame[step], device),
+                       one)) {
+      return std::nullopt;
+    }
+    product *= one;
+    previous = frame[step];
   }
-  return recoupled * loop;
+  return product * loop;
 }
 
 }  // namespace
@@ -240,18 +263,23 @@ bool diagram_weight(const std::shared_ptr<FusionCategory>& group,
     for (const ChainState& right : *right_states) {
       const int64_t right_count = static_cast<int64_t>(right.inner.size());
       // Every coupling inside the shared block has to agree.
-      const int64_t matching = std::min(shared - 1, left_count);
-      if (matching != std::min(shared - 1, right_count) ||
-          !std::equal(left.inner.begin(), left.inner.begin() + matching, right.inner.begin())) {
-        continue;
+      bool agrees = true;
+      for (int64_t index = 0; index < shared - 1 && agrees; ++index) {
+        const auto one = prefix_coupling(left.inner, left_coupled, index);
+        const auto two = prefix_coupling(right.inner, right_coupled, index);
+        agrees = one.has_value() && two.has_value() && *one == *two;
       }
-      const Sector& block = shared == 1                                  ? moved_left[0]
+      if (!agrees) continue;
+      const Sector& block = shared == 1               ? moved_left[0]
+                            : left_free == 0          ? left_coupled
                             : shared - 2 < left_count ? left.inner[shared - 2]
-                                                                     : left_coupled;
+                                                      : left_coupled;
       const int64_t from = std::min(shared - 1, right_count);
       const std::vector<Sector> tail(right.inner.begin() + from, right.inner.end());
       for (const std::vector<Sector>& frame : free_frames(free_legs, block, group)) {
-        const auto scale = junction_scale(block, left.inner, frame, free_legs, shared, group, device);
+        const auto scale =
+            junction_scale(block, left.inner, left_coupled, frame, free_legs, shared,
+                           group, device);
         if (!scale.has_value()) return false;
         // A scalar output carries no coupling tuple, so the junction charge has to be its total.
         if (out_legs.empty()) {
