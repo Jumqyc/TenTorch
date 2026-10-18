@@ -15,40 +15,6 @@
 
 namespace sym {
 
-// One dense matrix per fused charge of the left legs.
-//
-// ``left`` holds the row state of every charge block: the charge-block index of the legs on
-// the left side followed by the couplings of their fusion tree, so a row and a column
-// recover the whole key of a block.
-struct SectorMatrix {
-  Sector charge;
-  at::Tensor matrix;
-  std::vector<BlockKey> left;
-  std::vector<BlockKey> right;
-  std::vector<int64_t> left_dims;
-  std::vector<int64_t> right_dims;
-  BlockKey qdata;
-};
-
-// The legs ``left`` and ``right`` must cover every leg index exactly once.
-// Raises:
-//   ValueError: If they do not.
-void check_partition(const Tensor& t, const std::vector<int64_t>& left,
-                     const std::vector<int64_t>& right);
-
-// One dense matrix per fused charge of the left legs, sorted by charge.
-std::vector<SectorMatrix> sector_matrices(const Tensor& t, const std::vector<int64_t>& left,
-                                          const std::vector<int64_t>& right);
-
-// The two factors of a split, assembled from the per-charge factor matrices: one block per
-// distinct state of each side, sharing the new leg.
-std::pair<Tensor, Tensor> assemble_split(
-    const Tensor& t, const std::vector<int64_t>& left, const std::vector<int64_t>& right,
-    const std::vector<SectorMatrix>& parts,
-    const std::vector<std::pair<at::Tensor, at::Tensor>>& factors,
-    const std::vector<Sector>& charges, const std::optional<std::vector<at::Tensor>>& kept,
-    const Sector& first_qtotal, const Sector& second_qtotal);
-
 // Factor the tensor between its left and right legs as u s vh, one fused charge at a time.
 //
 // The singular values of every charge are truncated jointly to ``max_bond`` and ``tol``, and

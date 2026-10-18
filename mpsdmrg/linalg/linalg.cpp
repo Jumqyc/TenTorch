@@ -20,6 +20,20 @@ Shape running(const std::vector<int64_t>& dims) {
   return out;
 }
 
+// One dense matrix per fused charge of the left legs.
+//
+// ``left`` holds the row state of every charge block: the charge-block index of the legs on
+// the left side followed by the couplings of their fusion tree, so a row and a column
+// recover the whole key of a block.
+struct SectorMatrix {
+  Sector charge;
+  at::Tensor matrix;
+  std::vector<BlockKey> left;
+  std::vector<BlockKey> right;
+  std::vector<int64_t> left_dims;
+  std::vector<int64_t> right_dims;
+};
+
 // The Python spelling of a tuple of integers.
 std::string int_tuple(const std::vector<int64_t>& values) {
   if (values.empty()) return "()";
@@ -128,8 +142,6 @@ FactorBlocks factor_blocks(const Tensor& t, const std::vector<int64_t>& left,
   return out;
 }
 
-}  // namespace
-
 void check_partition(const Tensor& t, const std::vector<int64_t>& left,
                      const std::vector<int64_t>& right) {
   Shape flat = left;
@@ -219,8 +231,7 @@ std::vector<SectorMatrix> sector_matrices(const Tensor& t, const std::vector<int
           .slice(1, right_slices[rc], right_slices[rc] + cdim)
           .copy_(block);
     }
-    out.push_back(SectorMatrix{charge, matrix, left_states, right_states, left_dims, right_dims,
-                               t.qdata()[bis.front()]});
+    out.push_back(SectorMatrix{charge, matrix, left_states, right_states, left_dims, right_dims});
   }
   return out;
 }
@@ -269,6 +280,8 @@ std::pair<Tensor, Tensor> assemble_split(
   return {Tensor(first_blocks, first_qdata, first_legs, first_qtotal, t.group()),
           Tensor(second_blocks, second_qdata, second_legs, second_qtotal, t.group())};
 }
+
+}  // namespace
 
 std::tuple<Tensor, at::Tensor, Tensor> svd(const Tensor& t, const std::vector<int64_t>& left,
                                            const std::vector<int64_t>& right,

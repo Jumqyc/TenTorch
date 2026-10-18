@@ -16,9 +16,10 @@ from types import SimpleNamespace
 from typing import Any
 
 from base import COMPLEX, CUDA
-from mpsdmrg.ext.build import (BUILD_DIR, GIB_PER_JOB, HEADERS, LIBRARY, PCH, SOURCES,
-                                available_gib, build_pch, clear_stale_lock)
+from mpsdmrg.ext.build import (BUILD_DIR, GIB_PER_JOB, HEADERS, LIBRARY, SOURCES,
+                                available_gib, build_extension)
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(HERE))
 # the build script is an input as well: it holds the list of sources
 INPUTS = SOURCES + HEADERS + (os.path.join(HERE, 'build.py'),)
 
@@ -34,26 +35,16 @@ if os.path.exists(LIBRARY) and os.path.getmtime(LIBRARY) > max(
     _extension = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_extension)
 else:
-    # the build needs ninja on PATH, which a bare .venv/bin/python does not add
-    os.environ['PATH'] = os.path.dirname(sys.executable) + os.pathsep + os.environ.get('PATH', '')
-    # a compile on a starved host is killed mid-build and leaves torch's lock behind
+    # the engine is older than one of its inputs, so this import has to compile it
     free = available_gib()
     if free < GIB_PER_JOB:
+        stale = os.path.relpath(max(INPUTS, key = os.path.getmtime), ROOT)
         raise RuntimeError(
             f'{free:.1f} GiB of host memory is available but compiling the engine needs '
-            f'{GIB_PER_JOB:.1f} GiB; free some memory, then build with '
+            f'{GIB_PER_JOB:.1f} GiB.  {stale} is newer than the built engine, so this import '
+            f'has to recompile it: free some memory, then build with '
             f'`PYTHONPATH=. .venv/bin/python -u mpsdmrg/ext/build.py --jobs 1`.')
-    clear_stale_lock(verbose = False)
-    build_pch(verbose = False)
-    from torch.utils.cpp_extension import load
-    _extension = load(
-        name = 'symmetry_ext',
-        sources = list(SOURCES),
-        extra_cflags = ['-O3', '-include', PCH],
-        build_directory = BUILD_DIR,
-        verbose = False)
-    # this module is an input of its own freshness check, so a fresh build has to stamp the library
-    os.utime(LIBRARY)
+    _extension = build_extension(verbose = False, jobs = 1)
 
 # the engine allocates a fresh block buffer with the project's device and dtype
 _extension.set_defaults(str(CUDA), str(COMPLEX))
