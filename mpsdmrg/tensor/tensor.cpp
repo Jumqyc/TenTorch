@@ -11,6 +11,7 @@
 #include <map>
 #include <numeric>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -21,6 +22,51 @@ namespace sym
 
   namespace
   {
+
+    // The sector sizes and values in one plain vector, so a sequence of sectors can be a cache
+    // key without ambiguity between two of them.
+    std::vector<int64_t> flatten(const std::vector<Sector> &sectors)
+    {
+      std::vector<int64_t> out;
+      for (const Sector &sector : sectors)
+      {
+        out.push_back(static_cast<int64_t>(sector.size()));
+        out.insert(out.end(), sector.begin(), sector.end());
+      }
+      return out;
+    }
+
+    // One kept dense expansion, keyed by the group, the device, the direction of every leg and
+    // the tree itself.
+    struct DenseKey
+    {
+      std::string group;
+      int64_t device = 0;
+      std::vector<int64_t> code;
+
+      bool operator==(const DenseKey &other) const
+      {
+        return group == other.group && device == other.device && code == other.code;
+      }
+    };
+
+    struct DenseKeyHash
+    {
+      std::size_t operator()(const DenseKey &key) const
+      {
+        std::size_t h = std::hash<std::string>()(key.group) ^ std::hash<int64_t>()(key.device);
+        for (int64_t value : key.code)
+        {
+          h = h * 1000003 + std::hash<int64_t>()(value);
+        }
+        return h;
+      }
+    };
+
+    // The expansions are read-only and recur in every sweep, so they are kept by tree and legs,
+    // and dropped wholesale when the table is full.
+    std::unordered_map<DenseKey, at::Tensor, DenseKeyHash> stored_dense_cache;
+    constexpr std::size_t stored_dense_limit = 8192;
 
     // The device and dtype every freshly allocated block buffer takes.
     c10::Device &default_device()
@@ -367,6 +413,55 @@ namespace sym
 
   } // namespace
 
+  at::Tensor stored_dense(const std::vector<Leg> &legs, const FusionTree &tree,
+                          const c10::Device &device)
+  {
+    DenseKey key;
+    key.group = tree.group()->type_name() + "|" + tree.group()->name();
+    key.device = device_code(device);
+    for (const Leg &leg : legs)
+    {
+      key.code.push_back(leg.qconj());
+    }
+    key.code.push_back(-1);
+    const std::vector<int64_t> sector_code = flatten(tree.sectors());
+    key.code.insert(key.code.end(), sector_code.begin(), sector_code.end());
+    key.code.push_back(-1);
+    const std::vector<int64_t> inner_code = flatten(tree.inner());
+    key.code.insert(key.code.end(), inner_code.begin(), inner_code.end());
+    key.code.push_back(-1);
+    const std::vector<int64_t> coupled_code = flatten({tree.coupled()});
+    key.code.insert(key.code.end(), coupled_code.begin(), coupled_code.end());
+    key.code.push_back(-1);
+    key.code.insert(key.code.end(), tree.copies().begin(), tree.copies().end());
+
+    const auto found = stored_dense_cache.find(key);
+    if (found != stored_dense_cache.end())
+    {
+      return found->second;
+    }
+    at::Tensor out = tree.to_dense_block(device);
+    // a leg that carries duals stores the magnetic index flipped and carries the phase (-1)^m
+    for (std::size_t i = 0; i < legs.size(); ++i)
+    {
+      if (legs[i].qconj() != -1)
+      {
+        continue;
+      }
+      const int64_t axis = static_cast<int64_t>(i);
+      const at::Tensor matrix = legs[i].group()->duality_matrix(tree.sectors()[i], device);
+      out = at::tensordot(out, matrix, {axis}, {1}).movedim(-1, axis);
+    }
+    if (stored_dense_cache.size() >= stored_dense_limit)
+    {
+      stored_dense_cache.clear();
+    }
+    stored_dense_cache.emplace(std::move(key), out);
+    return out;
+  }
+
+  void clear_stored_dense() { stored_dense_cache.clear(); }
+
   // Drop the cached folds and weights.
   void clear_tree_caches()
   {
@@ -504,7 +599,7 @@ namespace sym
     return offsets;
   }
 
-  EinsumSpec parse_einsum(const std::string &spec, std::size_t operands)
+  EinsumSpec parse_einsum(const std::string &spec)
   {
     EinsumSpec out;
     for (char c : spec)
@@ -541,7 +636,6 @@ namespace sym
       if (counts[l] == 1)
         out.out.push_back(static_cast<int64_t>(l));
     }
-    (void)operands;
     return out;
   }
 
@@ -602,8 +696,6 @@ namespace sym
     return out;
   }
 
-  Leg natural_leg(const std::shared_ptr<FusionCategory> &group, int64_t dim) { return site_leg(group, dim); }
-
   std::vector<Leg> parse_legs(const py::object &legs, const py::object &group_value)
   {
     std::vector<Leg> out;
@@ -615,7 +707,7 @@ namespace sym
         {
           throw value_error("A bare dimension among the legs needs the group it belongs to.");
         }
-        out.push_back(natural_leg(group_value.cast<std::shared_ptr<FusionCategory>>(), py::cast<int64_t>(item)));
+        out.push_back(site_leg(group_value.cast<std::shared_ptr<FusionCategory>>(), py::cast<int64_t>(item)));
       }
       else
       {
@@ -809,7 +901,7 @@ namespace sym
       const std::shared_ptr<FusionCategory> &group =
           group_value.is_none() ? no_symmetry() : group_value.cast<std::shared_ptr<FusionCategory>>();
       for (int64_t dim : dims)
-        legs.push_back(natural_leg(group, dim));
+        legs.push_back(site_leg(group, dim));
     }
     else
     {
@@ -1270,7 +1362,7 @@ namespace sym
 
   Tensor blocked_einsum(const std::string &spec, const std::vector<Tensor> &tensors)
   {
-    const EinsumSpec parsed = parse_einsum(spec, tensors.size());
+    const EinsumSpec parsed = parse_einsum(spec);
     const std::vector<std::vector<int64_t>> &labels = parsed.labels;
     const std::vector<int64_t> &out = parsed.out;
     if (labels.size() != tensors.size())
@@ -1720,7 +1812,7 @@ namespace sym
     std::vector<at::Tensor> raw;
     for (const Tensor &tensor : operands)
       raw.push_back(tensor.blocks().front());
-    const EinsumSpec parsed = parse_einsum(spec, raw.size());
+    const EinsumSpec parsed = parse_einsum(spec);
     return Tensor::from_torch(reduce_blocks(raw, parsed.labels, parsed.out));
   }
 

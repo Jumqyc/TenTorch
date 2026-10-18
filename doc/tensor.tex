@@ -523,9 +523,10 @@ below it, mirroring Sections~\ref{sec:lie}--\ref{sec:container}:
       \item \code{quantum_dim(a)} --- the same number as a real, the weight a
         closed loop carries; it equals \code{sector_dim} for a group and may be
         non-integer for a general category;
-      \item \code{fusion_channels(a, b)} --- the outcomes of \eqref{eq:fusion}
-        with their multiplicities, in one query;
       \item \code{is_trivial} --- whether the category is the trivial one;
+      \item \code{braiding_style} --- \code{bosonic}, \code{fermionic} or
+        \code{anyonic}, the exchange behaviour the associator and the braiding
+        realize (Fibonacci is anyonic);
       \item \code{clear_caches()} --- drop the memo tables a category keeps;
       \item \code{fusion_tensor(a, b, c, device)} --- the dense realization of
         one vertex, the CG tensor \eqref{eq:cg} for a group, normalised to
@@ -538,10 +539,10 @@ below it, mirroring Sections~\ref{sec:lie}--\ref{sec:container}:
     (\path{mpsdmrg/symmetry/cat/group.h}) whose associator and braiding follow
     from its CG calculus: \code{Group::associator} is the overlap of the two
     fusion trees in the CG basis, the $6j$ symbol, and \code{Group::braiding}
-    is the exchange sign; a group adds the CG-basis metric
+    is the exchange sign.  The interface also declares the CG-basis metric
     \code{invariant_form(sector, device)}, the metric $D^{s}$ of
-    \eqref{eq:channel}, which a category with no CG basis does not have.  The
-    concrete groups are subclasses of it:
+    \eqref{eq:channel}, which a category with no CG basis does not implement and
+    raises for.  The concrete groups are subclasses of \code{Group}:
     \code{u1_symmetry} and \code{z2_symmetry} (abelian), \code{su2_symmetry}
     and \code{su3_symmetry} (non-abelian).
     Abelian groups have $\dim V_s=1$ for all $s$, so their fusion trees are
@@ -550,8 +551,7 @@ below it, mirroring Sections~\ref{sec:lie}--\ref{sec:container}:
     The \code{Leg} and \code{FusionTree} of Section~\ref{sec:container}, plus
     the constructors \code{site_leg} (a leg of $d$ copies of the trivial sector, an abelian
     group only), \code{multiplet_leg} (a leg of one multiplet, named by its sector),
-    \code{bond_leg} (a leg built from explicit sectors), and \code{fuse_legs}.  The cached
-    dense expansion of a tree lives here (\code{stored_dense}).
+    \code{bond_leg} (a leg built from explicit sectors), and \code{fuse_legs}.
   \item \textbf{Tensor} (\path{mpsdmrg/tensor/tensor.cpp}).  The
     \code{Tensor} container, its \code{from_torch} constructor, and the
     contraction engine \code{cached_einsum}.  A contraction is planned once (the \code{opt_einsum}
@@ -1039,8 +1039,9 @@ exists as a single interface: the whole rest of the code is group-agnostic.
 \section{Measured anchors}
 \label{sec:anchors}
 
-Every claim above is checked numerically.  The conventions are those of the
-code: $\SU{2}$ sector $s=2j$, $\SU{3}$ sector $(p,q)$.
+Each formula above is the one the engine implements; the anchors below record
+the numbers that were measured for it.  The conventions are those of the code:
+$\SU{2}$ sector $s=2j$, $\SU{3}$ sector $(p,q)$.
 
 \begin{itemize}
   \item \emph{CG normalisation.}  The CG tensors satisfy

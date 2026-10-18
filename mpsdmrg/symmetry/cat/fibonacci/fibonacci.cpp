@@ -27,10 +27,8 @@ at::TensorOptions options(const c10::Device& device) {
 
 }  // namespace
 
-// The interface carries no anyonic braiding style yet; the engine never reads the style, and the
-// braiding itself is supplied below.
 FibonacciCategory::FibonacciCategory()
-    : FusionCategory("FibonacciCategory", FusionStyle::general, BraidingStyle::fermionic,
+    : FusionCategory("FibonacciCategory", FusionStyle::general, BraidingStyle::anyonic,
                      Sector{TRIVIAL}, "Fibonacci") {}
 
 bool FibonacciCategory::is_valid_sector(const Sector& a) const {

@@ -12,10 +12,6 @@ Group::Group(std::string type_name, FusionStyle fusion_style, BraidingStyle brai
     : FusionCategory(std::move(type_name), fusion_style, braiding_style, std::move(trivial_sector),
                      std::move(name)) {}
 
-at::Tensor Group::invariant_form(const Sector&, const c10::Device&) const {
-  throw not_implemented_error("Group " + name() + " does not define an invariant form.");
-}
-
 at::Tensor Group::associator(const Sector& a, const Sector& b, const Sector& c, const Sector& d,
                              const Sector& e, const Sector& f, const c10::Device& device) const {
   // One amplitude per combination of the multiplicities of the four vertices that meet in the
@@ -72,17 +68,9 @@ at::Tensor Group::braiding(const Sector& a, const Sector& b, const Sector& c,
                     at::stack(swapped, 0).conj().flatten(1).transpose(0, 1)) / quantum_dim(c);
 }
 
-}  // namespace sym
-
-namespace sym {
-
 void bind_group(py::module_& m) {
-  // The group carries its own associator and braiding; every other method is the category API.
-  py::class_<sym::Group, sym::FusionCategory, std::shared_ptr<sym::Group>>(m, "Group")
-      .def("invariant_form",
-           [](const sym::Group& self, const sym::Sector& sector, const c10::Device& device) {
-             return self.invariant_form(sector, device);
-           }, py::arg("sector"), py::arg("device"));
+  // The group carries its own associator and braiding; the rest of its API is the category's.
+  py::class_<sym::Group, sym::FusionCategory, std::shared_ptr<sym::Group>>(m, "Group");
 }
 
 }  // namespace sym

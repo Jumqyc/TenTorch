@@ -5,25 +5,14 @@
 #include <ATen/ATen.h>
 #include <torch/csrc/utils/pybind.h>
 
-#include <memory>
-#include <stdexcept>
-#include <string>
-#include <vector>
-
-#include "../cat/cat.h"
-// The charge-adapted legs and fusion trees of the engine: the block structure of a leg, the
-// tree that fixes how its sectors fuse, and the dense Clebsch-Gordan expansion of a tree.
-#pragma once
-
-#include <ATen/ATen.h>
-#include <torch/csrc/utils/pybind.h>
-
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "../cat/cat.h"
 
 namespace sym {
 
@@ -167,25 +156,10 @@ class FusionTree {
 std::vector<FusionTree> fusion_trees(const std::shared_ptr<FusionCategory>& group,
                                      const std::vector<Sector>& sectors, const Sector& coupled);
 
-// The sign a leg of `sector` picks up when the direction of its charge is reversed: -1 for
-// a pseudo-real self-dual sector, +1 otherwise.
-double dual_sign(const FusionCategory& group, const Sector& sector);
-
-// Dense expansion of one tree in the stored indices of its legs: `to_dense_block` with the
-// flipped magnetic index and the phase of every leg that carries duals, which is what makes
-// a contraction of two dual legs a plain index sum.  The returned tensor is kept and read
-// only; shape ``(d_0, ..., d_{n-1}, d_coupled)``.
-at::Tensor stored_dense(const std::vector<Leg>& legs, const FusionTree& tree,
-                        const c10::Device& device);
-
-// Drop every kept dense expansion.
-void clear_stored_dense();
-
 // A sector as Python renders it, `(0,)`, and a sequence of them, `((0,), (2,))`.
 std::string sector_repr(const Sector& sector);
 std::string sectors_repr(const std::vector<Sector>& sectors);
 
-// Bind the names of this module to python.
 // The shape algebra a model layer needs without naming a leg: the leg of a bare dimension, the
 // leg of one multiplet, a bond leg from (sector, dimension) entries, the fusion of two legs, and
 // a leg capped to the largest number of multiplets that fits.
@@ -197,6 +171,7 @@ Leg bond_leg(const std::shared_ptr<FusionCategory>& group,
 Leg fuse_legs(const Leg& first, const Leg& second);
 Leg capped_leg(const Leg& leg, int64_t max_multiplets);
 
+// Bind the names of this module to python.
 void bind_tree(py::module_& m);
 
 }  // namespace sym

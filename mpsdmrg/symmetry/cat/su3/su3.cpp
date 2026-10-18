@@ -201,11 +201,6 @@ int64_t dimension(const Sector& sector) {
   return (p + 1) * (q + 1) * (p + q + 2) / 2;
 }
 
-double casimir(const Sector& sector) {
-  const double p = static_cast<double>(sector.at(0));
-  const double q = static_cast<double>(sector.at(1));
-  return 4.0 / 3.0 * (p * p + q * q + p * q + 3.0 * p + 3.0 * q);
-}
 
 // The memo of `weight_keys`, so that the cache can be dropped.
 std::map<Sector, std::vector<std::array<int64_t, 3>>>& weight_keys_cache() {

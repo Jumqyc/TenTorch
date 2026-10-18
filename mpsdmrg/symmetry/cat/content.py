@@ -1,10 +1,3 @@
-"""How a group acts on the operators of one site.
-
-A site carries the operators of the irreps in the product of its own irrep with its conjugate.
-The content of a group states which multiplets carry them and which invariant channel a pair of
-multiplets forms, so the builder of an invariant Hamiltonian reads the action of the group
-instead of inferring it, and a further group adds a class instead of a branch.
-"""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

@@ -1,4 +1,3 @@
-'''The single-site spin operators of a chain, as the ``SpinOperator`` bundle the models use.'''
 from math import sqrt
 
 import torch

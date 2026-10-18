@@ -22,9 +22,6 @@ namespace sym::su3 {
 // The dimension of the sector, (p + 1) (q + 1) (p + q + 2) / 2.
 int64_t dimension(const Sector& sector);
 
-// The quadratic Casimir of the sector, (4 / 3) (p^2 + q^2 + p q + 3 p + 3 q).
-double casimir(const Sector& sector);
-
 // The weights of the sector as exact integer six-vectors, memoised.
 const std::vector<std::array<int64_t, 3>>& weight_keys(const Sector& sector);
 

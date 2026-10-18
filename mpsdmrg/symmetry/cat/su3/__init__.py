@@ -13,6 +13,34 @@ from mpsdmrg.ext import Group, Sector
 from mpsdmrg.symmetry.cat.content import OperatorContent
 
 
+def gell_mann(dtype: torch.dtype = torch.complex128,
+              device: torch.device | None = None) -> list[torch.Tensor]:
+    r'''
+    The eight Hermitian Gell-Mann generators of the defining representation.
+
+    Args:
+        dtype: data type of the returned matrices.
+        device: device of the returned matrices; ``None`` keeps the default device.
+
+    Returns:
+        The eight 3x3 generators, normalized so that :math:`\mathrm{tr}(\lambda_a
+        \lambda_b) = 2 \delta_{ab}`: the seven off-diagonal and diagonal ones as given and
+        the eighth divided by :math:`\sqrt{3}`.
+    '''
+    raw = [
+        [[0, 1, 0], [1, 0, 0], [0, 0, 0]],
+        [[0, -1j, 0], [1j, 0, 0], [0, 0, 0]],
+        [[1, 0, 0], [0, -1, 0], [0, 0, 0]],
+        [[0, 0, 1], [0, 0, 0], [1, 0, 0]],
+        [[0, 0, -1j], [0, 0, 0], [1j, 0, 0]],
+        [[0, 0, 0], [0, 0, 1], [0, 1, 0]],
+        [[0, 0, 0], [0, 0, -1j], [0, 1j, 0]],
+        [[1, 0, 0], [0, 1, 0], [0, 0, -2]],
+    ]
+    return [torch.tensor(matrix, dtype=dtype, device=device) / (1.0 if index < 7 else 3 ** 0.5)
+            for index, matrix in enumerate(raw)]
+
+
 class SU3Content(OperatorContent):
     r'''
     The action of SU(3) on the operators of a site.

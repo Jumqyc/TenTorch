@@ -1,63 +1,17 @@
-// The symmetry groups of the engine: sector labels, duality, fusion and quantum dimension.
+// The charge-adapted legs and fusion trees of the engine: the block structure of a leg, the
+// tree that fixes how its sectors fuse, and the dense Clebsch-Gordan expansion of a tree.
 #include "tree.h"
-
-#include <algorithm>
-#include <limits>
-#include <map>
-#include <utility>
-
-
 
 #include <algorithm>
 #include <cstddef>
 #include <map>
 #include <numeric>
 #include <unordered_map>
+#include <utility>
 
 namespace sym {
 
 namespace {
-
-// The sector sizes and values in one plain vector, so a sequence of sectors can be a cache
-// key without ambiguity between two of them.
-std::vector<int64_t> flatten(const std::vector<Sector>& sectors) {
-  std::vector<int64_t> out;
-  for (const Sector& sector : sectors) {
-    out.push_back(static_cast<int64_t>(sector.size()));
-    out.insert(out.end(), sector.begin(), sector.end());
-  }
-  return out;
-}
-
-// Device of a cache key: the type distinguishes CPU from CUDA, the index the device.
-int64_t device_code(const c10::Device& device) {
-  return static_cast<int64_t>(device.type()) * 1000 + (device.has_index() ? device.index() : -1);
-}
-
-struct DenseKey {
-  std::string group;
-  int64_t device = 0;
-  std::vector<int64_t> code;
-
-  bool operator==(const DenseKey& other) const {
-    return group == other.group && device == other.device && code == other.code;
-  }
-};
-
-struct DenseKeyHash {
-  std::size_t operator()(const DenseKey& key) const {
-    std::size_t h = std::hash<std::string>()(key.group) ^ std::hash<int64_t>()(key.device);
-    for (int64_t value : key.code) {
-      h = h * 1000003 + std::hash<int64_t>()(value);
-    }
-    return h;
-  }
-};
-
-// The expansions are read-only and recur in every sweep, so they are kept by tree and legs,
-// and dropped wholesale when the table is full.
-std::unordered_map<DenseKey, at::Tensor, DenseKeyHash> stored_dense_cache;
-constexpr std::size_t stored_dense_limit = 8192;
 
 // The order of the blocks of a leg by sector: stable, so the layout of equal legs matches.
 std::vector<std::size_t> sector_order(const std::vector<Sector>& sectors) {
@@ -81,8 +35,6 @@ std::size_t hash_sector(std::size_t seed, const Sector& sector) {
   PyErr_SetString(PyExc_AssertionError, message.c_str());
   throw py::error_already_set();
 }
-
-void clear_stored_dense() { stored_dense_cache.clear(); }
 
 std::string sector_repr(const Sector& sector) {
   std::string out = "(";
@@ -406,57 +358,6 @@ std::vector<FusionTree> fusion_trees(const std::shared_ptr<FusionCategory>& grou
   return out;
 }
 
-double dual_sign(const FusionCategory& group, const Sector& sector) {
-  return group.dual_sign(sector);
-}
-
-at::Tensor stored_dense(const std::vector<Leg>& legs, const FusionTree& tree,
-                        const c10::Device& device) {
-  DenseKey key;
-  key.group = tree.group()->type_name() + "|" + tree.group()->name();
-  key.device = device_code(device);
-  for (const Leg& leg : legs) {
-    key.code.push_back(leg.qconj());
-  }
-  key.code.push_back(-1);
-  const std::vector<int64_t> sector_code = flatten(tree.sectors());
-  key.code.insert(key.code.end(), sector_code.begin(), sector_code.end());
-  key.code.push_back(-1);
-  const std::vector<int64_t> inner_code = flatten(tree.inner());
-  key.code.insert(key.code.end(), inner_code.begin(), inner_code.end());
-  key.code.push_back(-1);
-  const std::vector<int64_t> coupled_code = flatten({tree.coupled()});
-  key.code.insert(key.code.end(), coupled_code.begin(), coupled_code.end());
-  key.code.push_back(-1);
-  key.code.insert(key.code.end(), tree.copies().begin(), tree.copies().end());
-
-  const auto found = stored_dense_cache.find(key);
-  if (found != stored_dense_cache.end()) {
-    return found->second;
-  }
-  at::Tensor out = tree.to_dense_block(device);
-  // a leg that carries duals stores the magnetic index flipped and carries the phase (-1)^m
-  for (std::size_t i = 0; i < legs.size(); ++i) {
-    if (legs[i].qconj() != -1) {
-      continue;
-    }
-    const int64_t axis = static_cast<int64_t>(i);
-    const at::Tensor matrix = legs[i].group()->duality_matrix(tree.sectors()[i], device);
-    out = at::tensordot(out, matrix, {axis}, {1}).movedim(-1, axis);
-  }
-  if (stored_dense_cache.size() >= stored_dense_limit) {
-    stored_dense_cache.clear();
-  }
-  stored_dense_cache.emplace(std::move(key), out);
-  return out;
-}
-
-}  // namespace sym
-
-
-namespace sym {
-
-// Bind the ``tree`` names of this module to python.
 Leg site_leg(const std::shared_ptr<FusionCategory>& group, int64_t dim, int64_t qconj) {
   // an abelian group has one charge, so a leg of dimension d is d copies of it; a non-abelian
   // group names a multiplet, which its dimension alone does not pick out

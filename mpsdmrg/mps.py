@@ -1,6 +1,3 @@
-"""
-The matrix product state and the initial state of a chain.
-"""
 from __future__ import annotations
 
 from math import sqrt

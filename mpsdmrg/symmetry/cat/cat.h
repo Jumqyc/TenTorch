@@ -20,7 +20,7 @@ using Sector = std::vector<int64_t>;
 enum class FusionStyle { single = 0, multiple_unique = 10, general = 20 };
 
 // How sectors behave when two legs carrying them are exchanged.
-enum class BraidingStyle { bosonic = 0, fermionic = 10 };
+enum class BraidingStyle { bosonic = 0, fermionic = 10, anyonic = 20 };
 
 // Raised where the Python API raises ValueError.
 class value_error : public std::runtime_error {
@@ -89,9 +89,6 @@ class FusionCategory {
   bool can_fuse_to(const Sector& a, const Sector& b, const Sector& c) const;
   // Multiplicity of the fusion of `a` and `b` to `c`.
   virtual int64_t n_symbol(const Sector& a, const Sector& b, const Sector& c) const;
-  // The fusion channels of `a` and `b` with their multiplicities, in one query.
-  virtual std::vector<std::pair<Sector, int64_t>> fusion_channels(const Sector& a,
-                                                                  const Sector& b) const;
   // The dense realization of one fusion vertex, one block per channel.  `copy` selects the
   // coupling when the vertex couples more than once.
   virtual at::Tensor fusion_tensor(const Sector& a, const Sector& b, const Sector& c,
@@ -114,6 +111,9 @@ class FusionCategory {
   // The conjugate basis of a sector against its own basis: entry (row, column) maps the
   // column index of the leg onto the row index of the leg that stores its dual.
   virtual at::Tensor duality_matrix(const Sector& a, const c10::Device& device) const;
+  // The conjugate basis of a sector paired with its own: the fully contracted one-leg tree,
+  // which is how an inner product is read without a Clebsch-Gordan tensor.
+  virtual at::Tensor invariant_form(const Sector& a, const c10::Device& device) const;
   // Drop whatever memo tables the category keeps; a category with none need not override it.
   virtual void clear_caches() const {}
   /// The component of a coupled multiplet the reduced blocks are stored at.

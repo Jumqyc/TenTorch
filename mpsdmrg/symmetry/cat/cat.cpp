@@ -38,20 +38,12 @@ int64_t FusionCategory::n_symbol(const Sector& a, const Sector& b, const Sector&
   return can_fuse_to(a, b, c) ? 1 : 0;
 }
 
-std::vector<std::pair<Sector, int64_t>> FusionCategory::fusion_channels(const Sector& a,
-                                                                       const Sector& b) const {
-  std::vector<std::pair<Sector, int64_t>> channels;
-  for (const Sector& outcome : fusion_outcomes(a, b)) {
-    const int64_t multiplicity = n_symbol(a, b, outcome);
-    if (multiplicity > 0) {
-      channels.emplace_back(outcome, multiplicity);
-    }
-  }
-  return channels;
-}
-
 double FusionCategory::quantum_dim(const Sector& a) const {
   return static_cast<double>(sector_dim(a));
+}
+
+at::Tensor FusionCategory::invariant_form(const Sector&, const c10::Device&) const {
+  throw not_implemented_error("Category " + name_ + " does not define an invariant form.");
 }
 
 at::Tensor FusionCategory::fusion_tensor(const Sector&, const Sector&, const Sector&,
@@ -100,7 +92,8 @@ void bind_category(py::module_& m) {
       .value("general", sym::FusionStyle::general);
   py::enum_<sym::BraidingStyle> braiding_style(m, "BraidingStyle");
   braiding_style.value("bosonic", sym::BraidingStyle::bosonic)
-      .value("fermionic", sym::BraidingStyle::fermionic);
+      .value("fermionic", sym::BraidingStyle::fermionic)
+      .value("anyonic", sym::BraidingStyle::anyonic);
 
   // Hand back the registered members, not a fresh instance of the same value, so that the
   // ``is`` comparisons of the checks hold.
@@ -109,6 +102,7 @@ void bind_category(py::module_& m) {
   const py::object general = fusion_style.attr("general");
   const py::object bosonic = braiding_style.attr("bosonic");
   const py::object fermionic = braiding_style.attr("fermionic");
+  const py::object anyonic = braiding_style.attr("anyonic");
 
   py::class_<sym::FusionCategory, std::shared_ptr<sym::FusionCategory>>(m, "FusionCategory")
       .def_property_readonly("fusion_style", [single, multiple_unique, general](const sym::FusionCategory& self) {
@@ -116,8 +110,10 @@ void bind_category(py::module_& m) {
         return style == sym::FusionStyle::single ? single
              : (style == sym::FusionStyle::multiple_unique ? multiple_unique : general);
       })
-      .def_property_readonly("braiding_style", [bosonic, fermionic](const sym::FusionCategory& self) {
-        return self.braiding_style() == sym::BraidingStyle::bosonic ? bosonic : fermionic;
+      .def_property_readonly("braiding_style", [bosonic, fermionic, anyonic](const sym::FusionCategory& self) {
+        const sym::BraidingStyle style = self.braiding_style();
+        return style == sym::BraidingStyle::bosonic ? bosonic
+             : (style == sym::BraidingStyle::fermionic ? fermionic : anyonic);
       })
       .def_property_readonly("trivial_sector", [](const sym::FusionCategory& self) {
         return sym::to_python(self.trivial_sector());
@@ -135,14 +131,10 @@ void bind_category(py::module_& m) {
            }, py::arg("a"), py::arg("b"))
       .def("sector_dim", &sym::FusionCategory::sector_dim, py::arg("a"))
       .def("quantum_dim", &sym::FusionCategory::quantum_dim, py::arg("a"))
-      .def("fusion_channels",
-           [](const sym::FusionCategory& self, const sym::Sector& a, const sym::Sector& b) {
-             py::list channels;
-             for (const auto& [outcome, multiplicity] : self.fusion_channels(a, b)) {
-               channels.append(py::make_tuple(sym::to_python(outcome), multiplicity));
-             }
-             return channels;
-           }, py::arg("a"), py::arg("b"))
+      .def("invariant_form",
+           [](const sym::FusionCategory& self, const sym::Sector& sector,
+              const c10::Device& device) { return self.invariant_form(sector, device); },
+           py::arg("sector"), py::arg("device"))
       .def("fuse", [](const sym::FusionCategory& self, py::args sectors) {
         std::vector<sym::Sector> parsed;
         parsed.reserve(sectors.size());

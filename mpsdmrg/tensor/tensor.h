@@ -60,13 +60,23 @@ namespace sym
   };
 
   // Parse ``lhs->rhs``; a missing ``->`` keeps every label that appears exactly once.
-  EinsumSpec parse_einsum(const std::string &spec, std::size_t operands);
+  EinsumSpec parse_einsum(const std::string &spec);
 
   // The subscript of a sequence of labels.
   std::string label_string(const std::vector<int64_t> &labels);
 
   // Drop the cached CG folds and tree weights.
   void clear_tree_caches();
+
+  // Dense expansion of one tree in the stored indices of its legs: `to_dense_block` with the
+  // flipped magnetic index and the phase of every leg that carries duals, which is what makes
+  // a contraction of two dual legs a plain index sum.  The returned tensor is kept and read
+  // only; shape ``(d_0, ..., d_{n-1}, d_coupled)``.
+  at::Tensor stored_dense(const std::vector<Leg> &legs, const FusionTree &tree,
+                          const c10::Device &device);
+
+  // Drop every kept dense expansion.
+  void clear_stored_dense();
 
   // One block key as Python spells it: the leg blocks, then the coupled sectors.
   py::tuple key_to_python(const BlockKey &key);
@@ -76,7 +86,6 @@ namespace sym
   std::vector<BlockKey> parse_keys(const py::object &qdata, const std::vector<Leg> &legs);
 
   // The legs of a Python sequence of legs.
-  Leg natural_leg(const std::shared_ptr<FusionCategory> &group, int64_t dim);
   std::vector<Leg> parse_legs(const py::object &legs, const py::object &group_value = py::none());
 
   // The dimensions of a ``*shape`` argument: a single sequence is spread into the dimensions.

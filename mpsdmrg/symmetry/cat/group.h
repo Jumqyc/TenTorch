@@ -16,9 +16,6 @@ class Group : public FusionCategory {
   Group(std::string type_name, FusionStyle fusion_style, BraidingStyle braiding_style,
         Sector trivial_sector, std::string name);
 
-  // The invariant form of a group: its conjugate basis paired with its own.
-  virtual at::Tensor invariant_form(const Sector& a, const c10::Device& device) const;
-
   // The associator of a group is the overlap of the two fusion trees ((a b) c) -> d and
   // (a (b c)) -> d in its Clebsch-Gordan basis: the 6j symbol of the three sectors.
   at::Tensor associator(const Sector& a, const Sector& b, const Sector& c, const Sector& d,

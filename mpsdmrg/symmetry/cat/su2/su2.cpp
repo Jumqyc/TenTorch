@@ -201,11 +201,6 @@ std::map<int64_t, std::vector<double>> coefficients(int64_t j1, int64_t j2) {
   return out;
 }
 
-at::Tensor highest(const std::map<int64_t, at::Tensor>& table, int64_t j1, int64_t j2,
-                      int64_t j4) {
-  return table.at(j4).slice(2, j4, j4 + 1).squeeze(2);
-}
-
 std::map<int64_t, at::Tensor> table(int64_t j1, int64_t j2) {
   std::map<int64_t, at::Tensor> out;
   for (const auto& [j3, values] : coefficients(j1, j2)) {
@@ -214,36 +209,6 @@ std::map<int64_t, at::Tensor> table(int64_t j1, int64_t j2) {
     out[j3] = tensor;
   }
   return out;
-}
-
-std::tuple<std::vector<int64_t>, std::vector<int64_t>, at::Tensor> recoupling(
-    int64_t j1, int64_t j2, int64_t j3, int64_t j4) {
-  const std::map<int64_t, at::Tensor> pair12 = table(j1, j2);
-  const std::map<int64_t, at::Tensor> pair23 = table(j2, j3);
-  const std::map<int64_t, at::Tensor> fused34 = table(j3, j4);
-  const std::map<int64_t, at::Tensor> fused14 = table(j1, j4);
-  std::vector<int64_t> rows, cols;
-  for (const auto& [j12, unused] : pair12) if (fused34.count(j12)) rows.push_back(j12);
-  for (const auto& [j23, unused] : pair23) if (fused14.count(j23)) cols.push_back(j23);
-  // Both states carry the total spin j4, so the overlap is the same at every total
-  // component; the highest one keeps the sum short.
-  std::vector<at::Tensor> right_totals;
-  for (int64_t j23 : cols) right_totals.push_back(highest(table(j1, j23), j1, j23, j4));
-  std::vector<double> values;
-  values.reserve(rows.size() * cols.size());
-  for (int64_t j12 : rows) {
-    const at::Tensor left_total = highest(table(j12, j3), j12, j3, j4);
-    for (size_t k = 0; k < cols.size(); ++k) {
-      values.push_back(torch::einsum("abe,ec,bcf,af->",
-                                     {pair12.at(j12), left_total, pair23.at(cols[k]),
-                                      right_totals[k]}).item<double>());
-    }
-  }
-  at::Tensor f = torch::from_blob(values.data(),
-                                     {static_cast<int64_t>(rows.size()),
-                                      static_cast<int64_t>(cols.size())},
-                                     torch::kFloat64).clone();
-  return {rows, cols, f};
 }
 
 namespace {
