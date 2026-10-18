@@ -5,9 +5,9 @@ import torch
 from numpy.typing import NDArray
 
 from base import COMPLEX, CUDA
-from mpsdmrg.symmetry.group import Group, Sector, content, has_content, no_symmetry
+from mpsdmrg.symmetry.cat import Group, Sector, content, has_content, no_symmetry
 from mpsdmrg.operators import SpinOperator
-from mpsdmrg.tensor import Tensor, bond_leg, cached_einsum, site_leg
+from mpsdmrg.tensor import Tensor, bond_leg, cached_einsum, multiplet_leg, phys_leg
 
 class MPO:
     '''
@@ -20,7 +20,8 @@ class MPO:
                  dtype = COMPLEX,
                  device = CUDA,
                  group:Group = no_symmetry,
-                 total:tuple[int,...]|None = None):
+                 total:tuple[int,...]|None = None,
+                 site_sector:tuple[int,...]|None = None):
         '''
         Args:
             L (int): Length of the MPO (number of sites).
@@ -30,12 +31,16 @@ class MPO:
             group (Group): Symmetry group of the Hamiltonian; ``no_symmetry`` by default.
             total (tuple[int, ...] | None): Total charge the operator carries, for an operator
                 that is not a Hamiltonian; ``None`` means the trivial sector.
+            site_sector (tuple[int, ...] | None): The multiplet one site lives in, e.g. ``(1,)``
+                for a spin-1/2 site of SU(2) or ``(1, 0)`` for the fundamental of SU(3); a group
+                whose multiplets are not told apart by their dimension needs it.
         '''
         self.dtype = dtype
         self.device = device
         self.L = L
         self.group: Group = group
         self.total: tuple[int, ...] | None = None if total is None else tuple(int(entry) for entry in total)
+        self.site_sector = None if site_sector is None else tuple(int(entry) for entry in site_sector)
         self.couplings: list[tuple[tuple[str, ...], complex, tuple[int, ...]]] = []
         self.physical_dim = phys_dim
         self.tensors: list[Tensor] = []
@@ -55,7 +60,7 @@ class MPO:
     @property
     def _buffers(self) -> dict[str, torch.Tensor]:
         '''The dense buffers of the mapping, for the contractions that build the tensors.'''
-        return {name: matrix.to_torch() for name, matrix in self.mapping.items()}
+        return {name: matrix.blocks[0] for name, matrix in self.mapping.items()}
 
     def to(self, device):
         '''
@@ -77,7 +82,8 @@ class MPO:
                   dtype=self.dtype,
                   device=self.device,
                   group=self.group,
-                  total=self.total)
+                  total=self.total,
+                  site_sector=self.site_sector)
         new.couplings = [(ops, coeff, locs) for ops, coeff, locs in self.couplings]
         new.group = self.group
         if self.tensors:
@@ -238,11 +244,12 @@ class MPO:
     def _build_adapted(self) -> list[Tensor]:
         group, phys_dim = self.group, self.physical_dim
         total = group.trivial_sector if self.total is None else self.total
+        phys = phys_leg(group, phys_dim, self.site_sector)
         raw = {name: matrix.to(dtype=self.dtype, device=self.device)
                for name, matrix in self._buffers.items()}
         components = {tuple(sector): tensor.to(dtype=self.dtype, device=self.device)
                       for sector, tensor in content(group).tensor_operators(
-                          group, raw, phys_dim, self.dtype, self.device).items()}
+                          group, raw, phys, self.dtype, self.device).items()}
         # one unit placement of a sector acts as the channel of its pair, and a projection divides
         # by the norm that member of the multiplet carries
         channels = {sector: content(group).channel(group, sector, tensor)
@@ -261,7 +268,7 @@ class MPO:
                     residual = residual - torch.einsum('m,mab->ab', member, tensor)
             if float(residual.abs().max()) > 1e-10:
                 raise ValueError(f'The operator {name!r} is not a combination of the components '
-                                 f'of {group.group_name}.')
+                                 f'of {group.name}.')
             amplitudes[name] = found
         singles: dict[int, complex] = {}
         placed: list[tuple[int, int, list[tuple[Sector, float, complex, complex]],
@@ -275,10 +282,10 @@ class MPO:
                 if total not in amplitudes[operators[0]]:
                     raise ValueError(
                         f'The one-site operator {operators[0]} has no component of charge {total} '
-                        f'in {group.group_name}.')
+                        f'in {group.name}.')
                 if total != group.trivial_sector:
                     raise NotImplementedError(
-                        f'A one-site component of {group.group_name} needs its member index on a '
+                        f'A one-site component of {group.name} needs its member index on a '
                         f'leg of its own, which a Tensor of a single multiplicity does not carry; '
                         f'write the operator as a two-site term instead.')
                 singles[first] = (singles.get(first, 0.0)
@@ -314,7 +321,7 @@ class MPO:
         bond = bond_leg(group, [(group.trivial_sector, 2 + threads.get(group.trivial_sector, 0))]
                         + [(sector, threads[sector] * group.sector_dim(sector))
                            for sector in threads if sector != group.trivial_sector], 1)
-        phys, triv = site_leg(group, phys_dim), site_leg(group, 1)
+        triv = multiplet_leg(group, group.trivial_sector)
         tensors = []
         for site in range(self.L):
             if site == 0:
@@ -367,7 +374,7 @@ class MPO:
                             # paths would add the adjoint of the site to the operator
                             remaining = last - site
                             block[base + remaining, base + remaining - 1, 0, 0] = float(
-                                np.sqrt(group.sector_dim(sector) * phys_dim))
+                                np.sqrt(group.quantum_dim(sector) * phys_dim))
             tensors.append(tensor)
         return tensors
 

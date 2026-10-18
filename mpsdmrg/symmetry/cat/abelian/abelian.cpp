@@ -25,9 +25,9 @@ int64_t residue(int64_t charge, int64_t modulus) {
 }  // namespace
 
 AbelianGroup::AbelianGroup(std::string type_name, Sector trivial_sector, std::string group_name,
-                           double num_sectors, BraidingStyle braiding_style)
+                           BraidingStyle braiding_style)
     : Group(std::move(type_name), FusionStyle::single, braiding_style, std::move(trivial_sector),
-            std::move(group_name), num_sectors) {}
+            std::move(group_name)) {}
 
 int64_t AbelianGroup::sector_dim(const Sector&) const {
   return 1;
@@ -53,7 +53,7 @@ c10::ScalarType AbelianGroup::fusion_dtype() const {
   return at::kDouble;
 }
 
-NoSymmetry::NoSymmetry() : AbelianGroup("NoSymmetry", {0}, "NoSymmetry", 1) {}
+NoSymmetry::NoSymmetry() : AbelianGroup("NoSymmetry", {0}, "NoSymmetry") {}
 
 bool NoSymmetry::is_valid_sector(const Sector& a) const {
   return a == Sector{0};
@@ -67,16 +67,15 @@ std::vector<Sector> NoSymmetry::fusion_outcomes(const Sector& a, const Sector&) 
   return {a};
 }
 
-bool NoSymmetry::is_same_symmetry(const Group& other) const {
+bool NoSymmetry::is_same_symmetry(const FusionCategory& other) const {
   return other.type_name() == "NoSymmetry";
 }
 
-std::vector<Sector> NoSymmetry::all_sectors() const {
-  return {{0}};
+bool NoSymmetry::is_trivial() const {
+  return true;
 }
 
-U1Symmetry::U1Symmetry()
-    : AbelianGroup("U1Symmetry", {0}, "U(1)", std::numeric_limits<double>::infinity()) {}
+U1Symmetry::U1Symmetry() : AbelianGroup("U1Symmetry", {0}, "U(1)") {}
 
 bool U1Symmetry::is_valid_sector(const Sector& a) const {
   return a.size() == 1;
@@ -90,12 +89,12 @@ std::vector<Sector> U1Symmetry::fusion_outcomes(const Sector& a, const Sector& b
   return {{a.at(0) + b.at(0)}};
 }
 
-bool U1Symmetry::is_same_symmetry(const Group& other) const {
+bool U1Symmetry::is_same_symmetry(const FusionCategory& other) const {
   return other.type_name() == "U1Symmetry";
 }
 
 ZNSymmetry::ZNSymmetry(int64_t modulus)
-    : AbelianGroup("ZNSymmetry", {0}, z_n_name(modulus), modulus), modulus_(modulus) {}
+    : AbelianGroup("ZNSymmetry", {0}, z_n_name(modulus)), modulus_(modulus) {}
 
 bool ZNSymmetry::is_valid_sector(const Sector& a) const {
   return a.size() == 1 && 0 <= a[0] && a[0] < modulus_;
@@ -109,21 +108,13 @@ std::vector<Sector> ZNSymmetry::fusion_outcomes(const Sector& a, const Sector& b
   return {{residue(a.at(0) + b.at(0), modulus_)}};
 }
 
-bool ZNSymmetry::is_same_symmetry(const Group& other) const {
+bool ZNSymmetry::is_same_symmetry(const FusionCategory& other) const {
   return other.type_name() == "ZNSymmetry" &&
          static_cast<const ZNSymmetry&>(other).modulus_ == modulus_;
 }
 
-std::vector<Sector> ZNSymmetry::all_sectors() const {
-  std::vector<Sector> sectors;
-  sectors.reserve(modulus_);
-  for (int64_t a = 0; a < modulus_; ++a) {
-    sectors.push_back({a});
-  }
-  return sectors;
-}
 FermionParity::FermionParity()
-    : AbelianGroup("FermionParity", {0}, "FermionParity", 2, BraidingStyle::fermionic) {}
+    : AbelianGroup("FermionParity", {0}, "FermionParity", BraidingStyle::fermionic) {}
 
 bool FermionParity::is_valid_sector(const Sector& a) const {
   return a == Sector{0} || a == Sector{1};
@@ -137,16 +128,12 @@ std::vector<Sector> FermionParity::fusion_outcomes(const Sector& a, const Sector
   return {{residue(a.at(0) + b.at(0), 2)}};
 }
 
-bool FermionParity::is_same_symmetry(const Group& other) const {
+bool FermionParity::is_same_symmetry(const FusionCategory& other) const {
   return other.type_name() == "FermionParity";
 }
 
-std::vector<Sector> FermionParity::all_sectors() const {
-  return {{0}, {1}};
-}
-
-const std::shared_ptr<Group>& no_symmetry() {
-  static const std::shared_ptr<Group> instance = std::make_shared<NoSymmetry>();
+const std::shared_ptr<FusionCategory>& no_symmetry() {
+  static const std::shared_ptr<FusionCategory> instance = std::make_shared<NoSymmetry>();
   return instance;
 }
 

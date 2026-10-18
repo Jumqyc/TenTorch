@@ -4,6 +4,7 @@ from math import sqrt
 import torch
 
 from base import COMPLEX, CUDA
+from mpsdmrg.ext import FusionCategory, su2_symmetry
 from mpsdmrg.tensor import Tensor
 
 
@@ -41,3 +42,30 @@ class SpinOperator:
         if half % 2 == 0:
             return f"Spin {half // 2} operator"
         return f"Spin {half}/2 operator"
+
+
+def wigner_eckart_factor(group:FusionCategory, sector:tuple[int, ...], member:int = 0) -> float:
+    '''
+    The factor between the component and the invariant value of a two-site tensor-operator
+    correlator on a state of total charge zero.
+
+    A state of the reduced representation is a multiplet: it carries no definite magnetic member,
+    so a single component of an operator is not one of its observables.  Wigner and Eckart relate
+    the two, :math:`\\langle T_m(i) T_{-m}(j)\\rangle = f \\sum_{m'} (-1)^{m'}
+    \\langle T_{m'}(i) T_{-m'}(j)\\rangle`, and for SU(2) the factor of the member ``member`` is
+    :math:`(-1)^m / (2k + 1)`, the reciprocal dimension of the multiplet.
+
+    Args:
+        group: symmetry group of the chain.
+        sector: the multiplet the operator transforms in, e.g. ``(2,)`` for a spin-1 operator.
+        member: the magnetic member ``m`` of the component, 0 for the :math:`S_z`-like one.
+    Returns:
+        float: the factor f.
+    Raises:
+        NotImplementedError: for a group other than SU(2), whose Clebsch-Gordan data would have
+            to give the ratio of the coupling coefficients.
+    '''
+    if not group.is_same_symmetry(su2_symmetry):
+        raise NotImplementedError(f'The Wigner-Eckart factor of {group.name} needs its '
+                                  f'Clebsch-Gordan data; only the closed SU(2) form is written.')
+    return (-1.0) ** member / group.quantum_dim(sector)

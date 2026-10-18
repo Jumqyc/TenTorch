@@ -10,9 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "../group/group.h"
-#include "../group/abelian/abelian.h"
-#include "../group/su2/su2.h"
+#include "../cat/cat.h"
 // The charge-adapted legs and fusion trees of the engine: the block structure of a leg, the
 // tree that fixes how its sectors fuse, and the dense Clebsch-Gordan expansion of a tree.
 #pragma once
@@ -55,7 +53,7 @@ class FusionTree;
 [[noreturn]] void assertion_failed(const std::string& message);
 
 // Whether two groups describe the same symmetry.
-inline bool same_group(const Group& a, const Group& b) { return a.is_same_symmetry(b); }
+inline bool same_group(const FusionCategory& a, const FusionCategory& b) { return a.is_same_symmetry(b); }
 
 // The charge structure of one leg: its group, one block per sector and the block boundaries.
 // The blocks are kept sorted by sector, so equal legs hold identically laid out storage.
@@ -67,22 +65,20 @@ class Leg {
   //   slices: the block boundaries, len(sectors) + 1 of them, starting at zero and strictly
   //       increasing.
   //   qconj: +1 if the leg carries its charges, -1 if it carries their duals.
-  //   resolved: true when the leg stores its magnetic index as data instead of leaving it to
-  //       the Clebsch-Gordan expansion of a fusion tree.
-  Leg(std::shared_ptr<Group> group, std::vector<Sector> sectors, std::vector<int64_t> slices,
-      int64_t qconj = 1, bool resolved = false);
+  Leg(std::shared_ptr<FusionCategory> group, std::vector<Sector> sectors, std::vector<int64_t> slices,
+      int64_t qconj = 1);
 
   // One block of `dim` indices in the trivial sector.
   // Args:
   //   dim: number of indices on the leg.
   //   group: the group of the leg; the group without symmetry when it is null.
   //   qconj: +1 if the leg carries its charges, -1 if it carries their duals.
-  static Leg trivial(int64_t dim, std::shared_ptr<Group> group = nullptr, int64_t qconj = 1);
+  static Leg trivial(int64_t dim, std::shared_ptr<FusionCategory> group = nullptr, int64_t qconj = 1);
 
   // A leg from `(sector, block dimension)` entries, sorted by sector, together with, for
   // entry `k`, the block index it ends up at.
   static std::pair<Leg, std::vector<int64_t>> from_blocks(
-      std::shared_ptr<Group> group, const std::vector<std::pair<Sector, int64_t>>& entries,
+      std::shared_ptr<FusionCategory> group, const std::vector<std::pair<Sector, int64_t>>& entries,
       int64_t qconj = 1);
 
   // Number of indices on the leg.
@@ -97,9 +93,6 @@ class Leg {
   // dimension of the QSpace convention, while `dim()` counts the states instead, every
   // multiplet holding `sector_dim` of them.
   int64_t multiplets() const;
-  // Number of stored indices of one charge block: its whole block dimension once the leg
-  // resolves its magnetic index, its multiplicity otherwise.
-  int64_t data_dim(int64_t qi) const;
   // Sector of one charge block; the stored sector dualised for a leg that carries duals.
   Sector sector(int64_t qi, bool dual = false) const;
   // The leg carrying every outcome of fusing this leg's sectors with `other`'s, one block
@@ -108,11 +101,10 @@ class Leg {
   // The same leg with the direction of its charges reversed.
   Leg conj() const;
 
-  const std::shared_ptr<Group>& group() const { return group_; }
+  const std::shared_ptr<FusionCategory>& group() const { return group_; }
   const std::vector<Sector>& sectors() const { return sectors_; }
   const std::vector<int64_t>& slices() const { return slices_; }
   int64_t qconj() const { return qconj_; }
-  bool resolved() const { return resolved_; }
 
   std::string repr() const;
   bool operator==(const Leg& other) const;
@@ -120,11 +112,10 @@ class Leg {
   std::size_t hash() const;
 
  private:
-  std::shared_ptr<Group> group_;
+  std::shared_ptr<FusionCategory> group_;
   std::vector<Sector> sectors_;
   std::vector<int64_t> slices_;
   int64_t qconj_ = 1;
-  bool resolved_ = false;
 };
 
 // One left-nested fusion order ``((l0 l1) l2) ...`` of a tensor's legs: the sector of every
@@ -136,16 +127,16 @@ class FusionTree {
   //   sectors: the sector of every leg, in leg order, dualised for a leg carrying duals.
   //   inner: the coupled sector of every inner vertex, len(sectors) - 2 of them.
   //   coupled: the sector every leg fuses to.
-  FusionTree(std::shared_ptr<Group> group, std::vector<Sector> sectors,
+  FusionTree(std::shared_ptr<FusionCategory> group, std::vector<Sector> sectors,
              std::vector<Sector> inner, Sector coupled, std::vector<int64_t> copies = {});
 
   // The tree stored in one charge-block key: one sector per leg, dualised where the leg
   // carries duals, and the couplings that follow the leg indices in the key.
-  static FusionTree from_blocks(const std::shared_ptr<Group>& group,
+  static FusionTree from_blocks(const std::shared_ptr<FusionCategory>& group,
                                 const std::vector<Leg>& legs, const BlockKey& key,
                                 const Sector& qtotal);
 
-  const std::shared_ptr<Group>& group() const { return group_; }
+  const std::shared_ptr<FusionCategory>& group() const { return group_; }
   const std::vector<Sector>& sectors() const { return sectors_; }
   const std::vector<Sector>& inner() const { return inner_; }
   const Sector& coupled() const { return coupled_; }
@@ -164,7 +155,7 @@ class FusionTree {
   std::size_t hash() const;
 
  private:
-  std::shared_ptr<Group> group_;
+  std::shared_ptr<FusionCategory> group_;
   std::vector<Sector> sectors_;
   std::vector<Sector> inner_;
   Sector coupled_;
@@ -173,12 +164,12 @@ class FusionTree {
 
 // Every left-nested fusion of `sectors` into `coupled`, one tree per allowed combination of
 // the prefix couplings, in the order the couplings are explored.
-std::vector<FusionTree> fusion_trees(const std::shared_ptr<Group>& group,
+std::vector<FusionTree> fusion_trees(const std::shared_ptr<FusionCategory>& group,
                                      const std::vector<Sector>& sectors, const Sector& coupled);
 
 // The sign a leg of `sector` picks up when the direction of its charge is reversed: -1 for
 // a pseudo-real self-dual sector, +1 otherwise.
-double dual_sign(const Group& group, const Sector& sector);
+double dual_sign(const FusionCategory& group, const Sector& sector);
 
 // Dense expansion of one tree in the stored indices of its legs: `to_dense_block` with the
 // flipped magnetic index and the phase of every leg that carries duals, which is what makes
@@ -195,14 +186,14 @@ std::string sector_repr(const Sector& sector);
 std::string sectors_repr(const std::vector<Sector>& sectors);
 
 // Bind the names of this module to python.
-// The shape algebra a model layer needs without naming a leg: the leg of a bare dimension,
-// a bond leg from (sector, dimension) entries, the fusion of two legs, and a leg capped to
-// the largest number of multiplets that fits.
-Leg site_leg(const std::shared_ptr<Group>& group, int64_t dim, int64_t qconj = 1,
-             bool resolved = false);
-Leg bond_leg(const std::shared_ptr<Group>& group,
-             std::vector<std::pair<Sector, int64_t>> entries, int64_t qconj = 1,
-             bool resolved = false);
+// The shape algebra a model layer needs without naming a leg: the leg of a bare dimension, the
+// leg of one multiplet, a bond leg from (sector, dimension) entries, the fusion of two legs, and
+// a leg capped to the largest number of multiplets that fits.
+Leg site_leg(const std::shared_ptr<FusionCategory>& group, int64_t dim, int64_t qconj = 1);
+Leg multiplet_leg(const std::shared_ptr<FusionCategory>& group, const Sector& sector,
+                  int64_t qconj = 1);
+Leg bond_leg(const std::shared_ptr<FusionCategory>& group,
+             std::vector<std::pair<Sector, int64_t>> entries, int64_t qconj = 1);
 Leg fuse_legs(const Leg& first, const Leg& second);
 Leg capped_leg(const Leg& leg, int64_t max_multiplets);
 

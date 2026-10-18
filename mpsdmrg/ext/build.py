@@ -11,11 +11,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BUILD_DIR = os.path.join(HERE, 'build')
 LIBRARY = os.path.join(BUILD_DIR, 'symmetry_ext.so')
 SOURCES = (os.path.join(HERE, 'bindings.cpp'),
-           os.path.join(HERE, '..', 'symmetry', 'group', 'group.cpp'),
-           os.path.join(HERE, '..', 'symmetry', 'group', 'abelian', 'abelian.cpp'),
-           os.path.join(HERE, '..', 'symmetry', 'group', 'su2', 'su2.cpp'),
-           os.path.join(HERE, '..', 'symmetry', 'group', 'su3', 'su3.cpp'),
+           os.path.join(HERE, '..', 'symmetry', 'cat', 'cat.cpp'),
+           os.path.join(HERE, '..', 'symmetry', 'cat', 'group.cpp'),
+           os.path.join(HERE, '..', 'symmetry', 'cat', 'abelian', 'abelian.cpp'),
+           os.path.join(HERE, '..', 'symmetry', 'cat', 'fibonacci', 'fibonacci.cpp'),
+           os.path.join(HERE, '..', 'symmetry', 'cat', 'su2', 'su2.cpp'),
+           os.path.join(HERE, '..', 'symmetry', 'cat', 'su3', 'su3.cpp'),
            os.path.join(HERE, '..', 'symmetry', 'tree', 'tree.cpp'),
+           os.path.join(HERE, '..', 'tensor', 'diagram.cpp'),
            os.path.join(HERE, '..', 'tensor', 'tensor.cpp'),
            os.path.join(HERE, '..', 'linalg', 'linalg.cpp'))
 HEADERS = tuple(sorted(glob.glob(os.path.join(HERE, '..', '**', '*.h'), recursive=True)))

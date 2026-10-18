@@ -124,9 +124,15 @@ struct Irrep {
   at::Tensor weights;     // (d, 2) of (T3, T8)
 };
 
+// The memo of `irrep`, so that the cache can be dropped.
+std::map<Sector, Irrep>& irrep_cache() {
+  static std::map<Sector, Irrep> cache;
+  return cache;
+}
+
 // The generators and weights of the sector in its weight basis, memoised.
 const Irrep& irrep(const Sector& sector) {
-  static std::map<Sector, Irrep> cache;
+  std::map<Sector, Irrep>& cache = irrep_cache();
   const auto found = cache.find(sector);
   if (found != cache.end()) return found->second;
   const int64_t p = sector.at(0);
@@ -201,8 +207,14 @@ double casimir(const Sector& sector) {
   return 4.0 / 3.0 * (p * p + q * q + p * q + 3.0 * p + 3.0 * q);
 }
 
-const std::vector<std::array<int64_t, 3>>& weight_keys(const Sector& sector) {
+// The memo of `weight_keys`, so that the cache can be dropped.
+std::map<Sector, std::vector<std::array<int64_t, 3>>>& weight_keys_cache() {
   static std::map<Sector, std::vector<std::array<int64_t, 3>>> cache;
+  return cache;
+}
+
+const std::vector<std::array<int64_t, 3>>& weight_keys(const Sector& sector) {
+  std::map<Sector, std::vector<std::array<int64_t, 3>>>& cache = weight_keys_cache();
   const auto found = cache.find(sector);
   if (found != cache.end()) return found->second;
   const Irrep& data = irrep(sector);
@@ -313,6 +325,12 @@ at::Tensor metric(const Sector& sector, const c10::Device& device) {
   return form.reshape({form.size(0), form.size(1)}) * scale;
 }
 
+// Drop the memo tables of the representation data.
+void clear_caches() {
+  irrep_cache().clear();
+  weight_keys_cache().clear();
+}
+
 }  // namespace sym::su3
 
 namespace sym {
@@ -327,8 +345,7 @@ std::string labels(const Sector& a) {
 }  // namespace
 
 SU3Symmetry::SU3Symmetry()
-    : Group("SU3Symmetry", FusionStyle::general, BraidingStyle::bosonic, {0, 0}, "SU(3)",
-            std::numeric_limits<double>::infinity()) {}
+    : Group("SU3Symmetry", FusionStyle::general, BraidingStyle::bosonic, {0, 0}, "SU(3)") {}
 
 bool SU3Symmetry::is_valid_sector(const Sector& a) const {
   return a.size() == 2 && a[0] >= 0 && a[1] >= 0;
@@ -372,6 +389,10 @@ c10::ScalarType SU3Symmetry::fusion_dtype() const {
   return at::kComplexDouble;
 }
 
+void SU3Symmetry::clear_caches() const {
+  su3::clear_caches();
+}
+
 int64_t SU3Symmetry::n_symbol(const Sector& a, const Sector& b, const Sector& c) const {
   const std::map<Sector, int64_t> outcomes = su3::fusion(a, b);
   const auto found = outcomes.find(c);
@@ -400,18 +421,7 @@ double SU3Symmetry::dual_phase(const Sector& sector) const {
   return (sector.at(0) + sector.at(1)) % 2 == 0 ? 1.0 : -1.0;
 }
 
-Sector SU3Symmetry::sector_of_dimension(int64_t dim) const {
-  for (int64_t q = 0; q <= dim; ++q) {
-    for (int64_t p = 0; p <= dim; ++p) {
-      if (su3::dimension({p, q}) == dim) {
-        return {p, q};
-      }
-    }
-  }
-  throw value_error("No SU(3) sector has dimension " + std::to_string(dim) + ".");
-}
-
-bool SU3Symmetry::is_same_symmetry(const Group& other) const {
+bool SU3Symmetry::is_same_symmetry(const FusionCategory& other) const {
   return other.type_name() == "SU3Symmetry";
 }
 

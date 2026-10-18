@@ -8,6 +8,7 @@ instead of inferring it, and a further group adds a class instead of a branch.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 import torch
 
@@ -25,7 +26,7 @@ class OperatorContent(ABC):
     '''
 
     @abstractmethod
-    def tensor_operators(self, group: Group, mapping: dict[str, torch.Tensor], dim: int,
+    def tensor_operators(self, group: Group, mapping: dict[str, torch.Tensor], phys: Any,
                          dtype: torch.dtype, device: torch.device
                          ) -> dict[Sector, torch.Tensor]:
         r'''
@@ -34,7 +35,7 @@ class OperatorContent(ABC):
         Args:
             group: the symmetry group; it needs a Clebsch-Gordan tensor, so it must be non-abelian.
             mapping: operator names to their dense matrices, the spin components among them.
-            dim: physical dimension of one site.
+            phys: the physical leg of one site, in the multiplet the site lives in.
             dtype, device: data type and device of the matrices.
         Returns:
             dict sector -> tensor in shape (dim s, d, d), the components of the multiplet.

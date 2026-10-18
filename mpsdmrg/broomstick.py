@@ -8,8 +8,8 @@ from numpy.typing import NDArray
 
 from base import COMPLEX, CUDA
 from mpsdmrg import linalg
-from mpsdmrg.symmetry.group import Group, no_symmetry, has_content
-from mpsdmrg.tensor import Tensor, cached_einsum, site_leg
+from mpsdmrg.symmetry.cat import Group, no_symmetry, has_content
+from mpsdmrg.tensor import Tensor, cached_einsum, multiplet_leg
 
 from mpsdmrg.mps import MPS
 from mpsdmrg.mpo import MPO
@@ -39,7 +39,8 @@ class Broomstick:
                  L: int | None = None,
                  phys_dim: int | None = None,
                  mapping: dict[str, Tensor] | None = None,
-                 group: Group = no_symmetry):
+                 group: Group = no_symmetry,
+                 site_sector: tuple[int, ...] | None = None):
         '''
         Args:
             mps: the state to optimize; filled in later by ``initialize_state`` if None.
@@ -52,6 +53,9 @@ class Broomstick:
             phys_dim: physical dimension of one site; from ``mps`` or ``mpo`` if None.
             mapping: operator names to their dense tensors, for the Hamiltonian built here.
             group: symmetry group of the state and of the Hamiltonian; ``no_symmetry`` by default.
+            site_sector: the multiplet one site lives in, e.g. ``(1,)`` for a spin-1/2 site of
+                SU(2) or ``(1, 0)`` for the fundamental of SU(3); a group whose multiplets are
+                not told apart by their dimension needs it.
         Raises:
             ValueError: If no source gives the number of sites or the physical dimension,
                 or if the sources disagree.
@@ -80,9 +84,10 @@ class Broomstick:
                                  (mpo.device if mpo is not None else CUDA))
         self.state: MPS | None = mps
         self.group = group
+        self.site_sector = None if site_sector is None else tuple(int(entry) for entry in site_sector)
         self.Hamiltonian = mpo if mpo is not None else MPO(
             self.L, self.physical_dim, mapping=mapping, dtype=self.dtype, device=self.device,
-            group=group)
+            group=group, site_sector=self.site_sector)
         self.max_bond_dim = max_bond_dim
         self.svd_tol = svd_tol
 
@@ -138,7 +143,8 @@ class Broomstick:
                 dimension on the inner bonds and ``[1]`` if None.
             init_state: the state tensors, as in ``MPS``; random if None.
         '''
-        self.state = MPS(self.L, self.physical_dim, group=self.group, max_bond_dim=self.max_bond_dim,
+        self.state = MPS(self.L, self.physical_dim, group=self.group,
+                                 site_sector=self.site_sector, max_bond_dim=self.max_bond_dim,
                                  bond_dims=bond_dims, init_state=init_state,
                                  dtype=self.dtype, device=self.device)
 
@@ -167,7 +173,8 @@ class Broomstick:
                           svd_tol=self.svd_tol,
                           device=self.device,
                           dtype=self.dtype,
-                          group=self.group)
+                          group=self.group,
+                          site_sector=self.site_sector)
         return new
 
     def cache_envs(self):
@@ -181,7 +188,7 @@ class Broomstick:
         # of the MPO bond.
         if state.tensors[0].group != no_symmetry:
             group = state.tensors[0].group
-            triv = site_leg(group, 1)
+            triv = multiplet_leg(group, group.trivial_sector)
             self.lenv[0] = Tensor.ones(1, 1, 1, legs=(triv, triv.conj(), triv.conj()),
                                        qtotal=group.trivial_sector,
                                        dtype=self.dtype, device=self.device)
@@ -197,50 +204,6 @@ class Broomstick:
 
         for i in range(L - 1, 1, -1):
             self._cache_renv(i)
-
-    def time_sweep(self, dt: float, num_steps: int = 1, order: int = 2) -> None:
-        '''
-        Evolve the state by ``exp(-i H dt)`` per step, one bond gate at a time.
-
-        Args:
-            dt (float): the time step; an imaginary value evolves in imaginary time.
-            num_steps (int): how many steps to take.
-            order (int): 1 applies every bond gate once per step, 2 uses the symmetric
-                (Strang) split of a half step, a full step and a half step.
-        Raises:
-            NotImplementedError: for a state of a group with multiplets, or for a coupling
-                that is not a nearest-neighbour two-site term.
-        '''
-        self._ensure_built()
-        state = self.state
-        if state is None:
-            raise ValueError('The engine has no state yet; call initialize_state first.')
-        buffers = self.Hamiltonian._buffers
-        bonds: dict[int, torch.Tensor] = {}
-        for operators, coeff, locations in self.Hamiltonian.couplings:
-            sites = tuple(int(site) for site in locations)
-            if len(sites) != 2 or sites[1] != sites[0] + 1:
-                raise NotImplementedError(
-                    f'A Trotter step needs nearest-neighbour pairs, not {operators} at {sites}.')
-            pair = coeff * torch.kron(buffers[operators[0]], buffers[operators[1]])
-            bonds[sites[0]] = bonds.get(sites[0], torch.zeros_like(pair)) + pair
-        even = sorted(site for site in bonds if site % 2 == 0)
-        odd = sorted(site for site in bonds if site % 2 == 1)
-
-        def gate(site: int, step: float) -> torch.Tensor:
-            return torch.matrix_exp(-1j * step * bonds[site])
-
-        for _ in range(num_steps):
-            if order == 2:
-                for site in even + odd + even:
-                    step = dt if site in odd else dt / 2
-                    state = state.apply(gate(site, step), (site, site + 1),
-                                        max_bond_dim=self.max_bond_dim, tol=self.svd_tol)
-            else:
-                for site in sorted(bonds):
-                    state = state.apply(gate(site, dt), (site, site + 1),
-                                        max_bond_dim=self.max_bond_dim, tol=self.svd_tol)
-        self.state = state
 
     def sweep(self, 
               num_sweeps: int = 5, 
@@ -520,8 +483,9 @@ class Broomstick:
         for i in range(1, self.L):
             lenv = cached_einsum('bdxy,bpa,xwpr,yzrq,dqc->acwz',
                                  lenv, A[i].conj(), W[i], W[i], A[i])
-        # lenv shape: (1, 1, D, D) → pick the final MPO states
-        E2 = float(lenv[0, 0, -1, -1].real.item().real)
+        # the MPO's right edges are trivial legs of one component, so closing both leaves a scalar
+        edge = Tensor.ones(1, legs=(lenv.legs[2].conj(),), dtype=self.dtype, device=self.device)
+        E2 = float(cached_einsum('acwz,w,z->ac', lenv, edge, edge).real.item().real)
 
         E = state.expectation(self.Hamiltonian)
         var = float(E2) - float(E.real) ** 2
@@ -529,7 +493,7 @@ class Broomstick:
     
     def __repr__(self) -> str:
         '''A one-line summary: the chain, the bond cap, the group and the last energy.'''
-        group = self.group.group_name
+        group = self.group.name
         energy = '' if self._last_energy is None else f', E = {self._last_energy:.12f}'
         return (f'Broomstick(L = {self.L}, phys_dim = {self.physical_dim}, '
                 f'max_bond_dim = {self.max_bond_dim}, group = {group}{energy})')

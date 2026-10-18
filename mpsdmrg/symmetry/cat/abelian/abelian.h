@@ -11,8 +11,8 @@ class NoSymmetry : public AbelianGroup {
   bool is_valid_sector(const Sector& a) const override;
   Sector dual_sector(const Sector& a) const override;
   std::vector<Sector> fusion_outcomes(const Sector& a, const Sector& b) const override;
-  bool is_same_symmetry(const Group& other) const override;
-  std::vector<Sector> all_sectors() const override;
+  bool is_same_symmetry(const FusionCategory& other) const override;
+  bool is_trivial() const override;
 };
 
 class U1Symmetry : public AbelianGroup {
@@ -21,7 +21,7 @@ class U1Symmetry : public AbelianGroup {
   bool is_valid_sector(const Sector& a) const override;
   Sector dual_sector(const Sector& a) const override;
   std::vector<Sector> fusion_outcomes(const Sector& a, const Sector& b) const override;
-  bool is_same_symmetry(const Group& other) const override;
+  bool is_same_symmetry(const FusionCategory& other) const override;
 };
 
 class ZNSymmetry : public AbelianGroup {
@@ -33,8 +33,7 @@ class ZNSymmetry : public AbelianGroup {
   bool is_valid_sector(const Sector& a) const override;
   Sector dual_sector(const Sector& a) const override;
   std::vector<Sector> fusion_outcomes(const Sector& a, const Sector& b) const override;
-  bool is_same_symmetry(const Group& other) const override;
-  std::vector<Sector> all_sectors() const override;
+  bool is_same_symmetry(const FusionCategory& other) const override;
 
  private:
   int64_t modulus_;
@@ -45,8 +44,7 @@ class FermionParity : public AbelianGroup {
   bool is_valid_sector(const Sector& a) const override;
   Sector dual_sector(const Sector& a) const override;
   std::vector<Sector> fusion_outcomes(const Sector& a, const Sector& b) const override;
-  bool is_same_symmetry(const Group& other) const override;
-  std::vector<Sector> all_sectors() const override;
+  bool is_same_symmetry(const FusionCategory& other) const override;
 };
 
 // The singletons behind the module-level names; the same object every call.

@@ -7,8 +7,6 @@
 #include <utility>
 
 
-#include "../group/abelian/abelian.h"
-#include "../group/su2/su2.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -106,9 +104,9 @@ std::string sectors_repr(const std::vector<Sector>& sectors) {
   return out + ")";
 }
 
-Leg::Leg(std::shared_ptr<Group> group, std::vector<Sector> sectors, std::vector<int64_t> slices,
-         int64_t qconj, bool resolved)
-    : group_(std::move(group)), qconj_(qconj), resolved_(resolved) {
+Leg::Leg(std::shared_ptr<FusionCategory> group, std::vector<Sector> sectors, std::vector<int64_t> slices,
+         int64_t qconj)
+    : group_(std::move(group)), qconj_(qconj) {
   if (!group_) {
     assertion_failed("A leg needs a group.");
   }
@@ -145,7 +143,7 @@ Leg::Leg(std::shared_ptr<Group> group, std::vector<Sector> sectors, std::vector<
   }
 }
 
-Leg Leg::trivial(int64_t dim, std::shared_ptr<Group> group, int64_t qconj) {
+Leg Leg::trivial(int64_t dim, std::shared_ptr<FusionCategory> group, int64_t qconj) {
   if (!group) {
     group = no_symmetry();
   }
@@ -154,7 +152,7 @@ Leg Leg::trivial(int64_t dim, std::shared_ptr<Group> group, int64_t qconj) {
 }
 
 std::pair<Leg, std::vector<int64_t>> Leg::from_blocks(
-    std::shared_ptr<Group> group, const std::vector<std::pair<Sector, int64_t>>& entries,
+    std::shared_ptr<FusionCategory> group, const std::vector<std::pair<Sector, int64_t>>& entries,
     int64_t qconj) {
   std::vector<Sector> given;
   given.reserve(entries.size());
@@ -192,12 +190,6 @@ int64_t Leg::multiplets() const {
   return total;
 }
 
-int64_t Leg::data_dim(int64_t qi) const {
-  // A resolved leg keeps the full block as its data axis (copies and magnetic index together);
-  // an unresolved leg keeps one entry per mapping only.
-  return resolved_ ? block_dim(qi) : multiplicity(qi);
-}
-
 Sector Leg::sector(int64_t qi, bool dual) const {
   const Sector& stored = sectors_.at(static_cast<std::size_t>(qi));
   return dual && qconj_ == -1 ? group_->dual_sector(stored) : stored;
@@ -205,8 +197,8 @@ Sector Leg::sector(int64_t qi, bool dual) const {
 
 Leg Leg::fuse(const Leg& other) const {
   if (!same_group(*group_, *other.group_)) {
-    assertion_failed("Cannot fuse legs of groups " + group_->group_name() + " and " +
-                     other.group_->group_name() + ".");
+    assertion_failed("Cannot fuse legs of groups " + group_->name() + " and " +
+                     other.group_->name() + ".");
   }
   std::map<Sector, int64_t> counts;
   for (std::size_t i = 0; i < sectors_.size(); ++i) {
@@ -226,7 +218,7 @@ Leg Leg::fuse(const Leg& other) const {
   return from_blocks(group_, entries, 1).first;
 }
 
-Leg Leg::conj() const { return Leg(group_, sectors_, slices_, -qconj_, resolved_); }
+Leg Leg::conj() const { return Leg(group_, sectors_, slices_, -qconj_); }
 
 std::string Leg::repr() const {
   return "Leg(dim=" + std::to_string(dim()) + ", qconj=" + std::to_string(qconj_) +
@@ -235,11 +227,11 @@ std::string Leg::repr() const {
 
 bool Leg::operator==(const Leg& other) const {
   return same_group(*group_, *other.group_) && sectors_ == other.sectors_ &&
-         slices_ == other.slices_ && qconj_ == other.qconj_ && resolved_ == other.resolved_;
+         slices_ == other.slices_ && qconj_ == other.qconj_;
 }
 
 std::size_t Leg::hash() const {
-  std::size_t seed = std::hash<std::string>()(group_->group_name()) ^
+  std::size_t seed = std::hash<std::string>()(group_->name()) ^
                      std::hash<std::string>()(group_->type_name());
   for (const Sector& sector : sectors_) {
     seed = hash_sector(seed, sector);
@@ -247,10 +239,10 @@ std::size_t Leg::hash() const {
   for (int64_t value : slices_) {
     seed = seed * 1000003 + std::hash<int64_t>()(value);
   }
-  return (seed * 1000003 + std::hash<int64_t>()(qconj_)) * 3 + (resolved_ ? 1 : 0);
+  return seed * 1000003 + std::hash<int64_t>()(qconj_);
 }
 
-FusionTree::FusionTree(std::shared_ptr<Group> group, std::vector<Sector> sectors,
+FusionTree::FusionTree(std::shared_ptr<FusionCategory> group, std::vector<Sector> sectors,
                        std::vector<Sector> inner, Sector coupled, std::vector<int64_t> copies)
     : group_(std::move(group)), sectors_(std::move(sectors)), inner_(std::move(inner)),
       coupled_(std::move(coupled)), copies_(std::move(copies)) {
@@ -290,7 +282,7 @@ FusionTree::FusionTree(std::shared_ptr<Group> group, std::vector<Sector> sectors
   }
 }
 
-FusionTree FusionTree::from_blocks(const std::shared_ptr<Group>& group,
+FusionTree FusionTree::from_blocks(const std::shared_ptr<FusionCategory>& group,
                                    const std::vector<Leg>& legs, const BlockKey& key,
                                    const Sector& qtotal) {
   if (legs.empty()) {
@@ -349,7 +341,7 @@ bool FusionTree::operator==(const FusionTree& other) const {
 }
 
 std::size_t FusionTree::hash() const {
-  std::size_t seed = std::hash<std::string>()(group_->group_name()) ^
+  std::size_t seed = std::hash<std::string>()(group_->name()) ^
                      std::hash<std::string>()(group_->type_name());
   for (const Sector& sector : sectors_) {
     seed = hash_sector(seed, sector);
@@ -363,7 +355,7 @@ std::size_t FusionTree::hash() const {
   return hash_sector(seed, coupled_);
 }
 
-std::vector<FusionTree> fusion_trees(const std::shared_ptr<Group>& group,
+std::vector<FusionTree> fusion_trees(const std::shared_ptr<FusionCategory>& group,
                                      const std::vector<Sector>& sectors, const Sector& coupled) {
   if (sectors.empty()) {
     return coupled == group->trivial_sector()
@@ -414,14 +406,14 @@ std::vector<FusionTree> fusion_trees(const std::shared_ptr<Group>& group,
   return out;
 }
 
-double dual_sign(const Group& group, const Sector& sector) {
+double dual_sign(const FusionCategory& group, const Sector& sector) {
   return group.dual_sign(sector);
 }
 
 at::Tensor stored_dense(const std::vector<Leg>& legs, const FusionTree& tree,
                         const c10::Device& device) {
   DenseKey key;
-  key.group = tree.group()->type_name() + "|" + tree.group()->group_name();
+  key.group = tree.group()->type_name() + "|" + tree.group()->name();
   key.device = device_code(device);
   for (const Leg& leg : legs) {
     key.code.push_back(leg.qconj());
@@ -435,10 +427,6 @@ at::Tensor stored_dense(const std::vector<Leg>& legs, const FusionTree& tree,
   key.code.push_back(-1);
   const std::vector<int64_t> coupled_code = flatten({tree.coupled()});
   key.code.insert(key.code.end(), coupled_code.begin(), coupled_code.end());
-  key.code.push_back(-1);
-  for (const Leg& leg : legs) {
-    key.code.push_back(leg.resolved() ? 1 : 0);
-  }
   key.code.push_back(-1);
   key.code.insert(key.code.end(), tree.copies().begin(), tree.copies().end());
 
@@ -469,25 +457,31 @@ at::Tensor stored_dense(const std::vector<Leg>& legs, const FusionTree& tree,
 namespace sym {
 
 // Bind the ``tree`` names of this module to python.
-Leg site_leg(const std::shared_ptr<Group>& group, int64_t dim, int64_t qconj, bool resolved) {
+Leg site_leg(const std::shared_ptr<FusionCategory>& group, int64_t dim, int64_t qconj) {
   // an abelian group has one charge, so a leg of dimension d is d copies of it; a non-abelian
-  // group names the sector whose multiplet is d-dimensional
-  if (group->is_abelian()) return Leg::trivial(dim, group, qconj);
-  return Leg(group, {group->sector_of_dimension(dim)}, {0, dim}, qconj, resolved);
+  // group names a multiplet, which its dimension alone does not pick out
+  if (!group->is_abelian()) {
+    throw value_error("A non-abelian group does not name a leg by a dimension; name the multiplet "
+                      "instead, e.g. multiplet_leg(group, (1, 0)).");
+  }
+  return Leg::trivial(dim, group, qconj);
 }
 
-Leg bond_leg(const std::shared_ptr<Group>& group, std::vector<std::pair<Sector, int64_t>> entries,
-             int64_t qconj, bool resolved) {
-  const Leg built = Leg::from_blocks(group, std::move(entries), qconj).first;
-  if (!resolved) return built;
-  return Leg(group, built.sectors(), built.slices(), qconj, true);
+Leg multiplet_leg(const std::shared_ptr<FusionCategory>& group, const Sector& sector, int64_t qconj) {
+  // one copy of one multiplet, whose magnetic indices are carried by the vertex
+  return Leg(group, {sector}, {0, group->sector_dim(sector)}, qconj);
+}
+
+Leg bond_leg(const std::shared_ptr<FusionCategory>& group, std::vector<std::pair<Sector, int64_t>> entries,
+             int64_t qconj) {
+  return Leg::from_blocks(group, std::move(entries), qconj).first;
 }
 
 Leg fuse_legs(const Leg& first, const Leg& second) { return first.fuse(second); }
 
 Leg capped_leg(const Leg& leg, int64_t max_multiplets) {
   if (leg.multiplets() <= max_multiplets) return leg;
-  const std::shared_ptr<Group>& group = leg.group();
+  const std::shared_ptr<FusionCategory>& group = leg.group();
   std::vector<std::pair<Sector, int64_t>> entries;
   int64_t total = 0;
   for (int64_t qi = 0; qi < leg.nblocks(); ++qi) {
@@ -502,22 +496,21 @@ Leg capped_leg(const Leg& leg, int64_t max_multiplets) {
 }
 
 void bind_tree(py::module_& m) {
-    m.def("site_leg", &sym::site_leg, py::arg("group"), py::arg("dim"), py::arg("qconj") = 1,
-          py::arg("resolved") = false);
-    m.def("bond_leg", &sym::bond_leg, py::arg("group"), py::arg("entries"), py::arg("qconj") = 1,
-          py::arg("resolved") = false);
+    m.def("site_leg", &sym::site_leg, py::arg("group"), py::arg("dim"), py::arg("qconj") = 1);
+    m.def("multiplet_leg", &sym::multiplet_leg, py::arg("group"), py::arg("sector"),
+          py::arg("qconj") = 1);
+    m.def("bond_leg", &sym::bond_leg, py::arg("group"), py::arg("entries"), py::arg("qconj") = 1);
     m.def("fuse_legs", &sym::fuse_legs, py::arg("first"), py::arg("second"));
     m.def("capped_leg", &sym::capped_leg, py::arg("leg"), py::arg("max_multiplets"));
     py::class_<sym::Leg, std::shared_ptr<sym::Leg>>(m, "Leg")
-        .def(py::init<std::shared_ptr<sym::Group>, std::vector<sym::Sector>,
-                      std::vector<int64_t>, int64_t, bool>(),
-             py::arg("group"), py::arg("sectors"), py::arg("slices"), py::arg("qconj") = 1,
-             py::arg("resolved") = false)
+        .def(py::init<std::shared_ptr<sym::FusionCategory>, std::vector<sym::Sector>,
+                      std::vector<int64_t>, int64_t>(),
+             py::arg("group"), py::arg("sectors"), py::arg("slices"), py::arg("qconj") = 1)
         .def_static("trivial", &sym::Leg::trivial, py::arg("dim"), py::arg("group") = nullptr,
                     py::arg("qconj") = 1)
         .def_static(
             "from_blocks",
-            [](std::shared_ptr<sym::Group> group,
+            [](std::shared_ptr<sym::FusionCategory> group,
                const std::vector<std::pair<sym::Sector, int64_t>>& entries, int64_t qconj) {
               auto [leg, rank] = sym::Leg::from_blocks(std::move(group), entries, qconj);
               return py::make_tuple(py::cast(leg), py::tuple(py::cast(rank)));
@@ -540,7 +533,6 @@ void bind_tree(py::module_& m) {
              py::arg("qi"), py::arg("dual") = false)
         .def("multiplicity", &sym::Leg::multiplicity, py::arg("qi"))
         .def_property_readonly("multiplets", &sym::Leg::multiplets)
-        .def_property_readonly("resolved", &sym::Leg::resolved)
         .def("fuse", &sym::Leg::fuse, py::arg("other"))
         .def("conj", &sym::Leg::conj)
         .def("__eq__",

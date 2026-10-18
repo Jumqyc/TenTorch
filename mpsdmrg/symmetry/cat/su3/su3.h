@@ -42,6 +42,9 @@ at::Tensor clebsch(const Sector& first, const Sector& second, const Sector& thir
 // The invariant form of the sector with its conjugate in the shape (d, d).
 at::Tensor metric(const Sector& sector, const c10::Device& device);
 
+// Drop the memo tables of the representation data.
+void clear_caches();
+
 }  // namespace sym::su3
 
 namespace sym {
@@ -60,10 +63,10 @@ class SU3Symmetry : public Group {
   at::Tensor invariant_form(const Sector& a, const c10::Device& device) const override;
   int64_t reference_index(const Sector& a) const override;
   c10::ScalarType fusion_dtype() const override;
-  Sector sector_of_dimension(int64_t dim) const override;
   double dual_sign(const Sector& sector) const override;
   double dual_phase(const Sector& sector) const override;
-  bool is_same_symmetry(const Group& other) const override;
+  bool is_same_symmetry(const FusionCategory& other) const override;
+  void clear_caches() const override;
 };
 
 // The SU(3) group the engine runs on.

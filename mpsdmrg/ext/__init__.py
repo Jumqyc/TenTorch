@@ -71,15 +71,18 @@ Sector = tuple[int, ...]
 
 BraidingStyle = _extension.BraidingStyle
 FusionStyle = _extension.FusionStyle
+FusionCategory = _extension.FusionCategory
 Group = _extension.Group
 Tensor = _extension.Tensor
 bond_leg = _extension.bond_leg
 capped_leg = _extension.capped_leg
 fuse_legs = _extension.fuse_legs
+multiplet_leg = _extension.multiplet_leg
 site_leg = _extension.site_leg
 ZNSymmetry = _extension.ZNSymmetry
 cached_einsum = _extension.cached_einsum
 fermion_parity = _extension.fermion_parity
+fibonacci = _extension.fibonacci
 inner = _extension.inner
 no_symmetry = _extension.no_symmetry
 norm = _extension.norm
@@ -98,22 +101,23 @@ z2_symmetry = _extension.z2_symmetry
 _expr_cache = SimpleNamespace(clear = _extension.clear_caches)
 
 
-def _restore_group(group_name: str) -> Group:
+def _restore_group(name: str) -> Group:
     '''
     The group a pickled group object refers to.
 
     Args:
-      group_name: ``group_name`` of the group, and its only identity: the groups of one
+      name: ``name`` of the group, and its only identity: the groups of one
         symmetry type are singletons of the engine.
 
     Returns:
       The singleton of that name, or a fresh ``ZNSymmetry`` for a modulus without one.
     '''
-    if group_name.startswith('Z') and group_name[1:].isdigit():
-        modulus = int(group_name[1:])
+    if name.startswith('Z') and name[1:].isdigit():
+        modulus = int(name[1:])
         return getattr(_extension, f'z{modulus}_symmetry', None) or ZNSymmetry(modulus)
     singletons = {'NoSymmetry': no_symmetry, 'U(1)': u1_symmetry, 'SU(2)': su2_symmetry,
-                  'SU(3)': su3_symmetry, 'FermionParity': fermion_parity}
-    if group_name not in singletons:
-        raise ValueError(f'No group of the engine is named {group_name!r}.')
-    return singletons[group_name]
+                  'SU(3)': su3_symmetry, 'FermionParity': fermion_parity,
+                  'Fibonacci': fibonacci}
+    if name not in singletons:
+        raise ValueError(f'No group of the engine is named {name!r}.')
+    return singletons[name]

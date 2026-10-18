@@ -16,8 +16,7 @@ std::string half_label(int64_t jj) {
 }  // namespace
 
 SU2Symmetry::SU2Symmetry()
-    : Group("SU2Symmetry", FusionStyle::multiple_unique, BraidingStyle::bosonic, {0}, "SU(2)",
-            std::numeric_limits<double>::infinity()) {}
+    : Group("SU2Symmetry", FusionStyle::multiple_unique, BraidingStyle::bosonic, {0}, "SU(2)") {}
 
 bool SU2Symmetry::is_valid_sector(const Sector& a) const {
   return a.size() == 1 && a[0] >= 0;
@@ -49,7 +48,7 @@ at::Tensor SU2Symmetry::fusion_tensor(const Sector& a, const Sector& b, const Se
   return su2::fusion_tensor(a.at(0), b.at(0), c.at(0), device);
 }
 
-bool SU2Symmetry::is_same_symmetry(const Group& other) const {
+bool SU2Symmetry::is_same_symmetry(const FusionCategory& other) const {
   return other.type_name() == "SU2Symmetry";
 }
 
@@ -62,14 +61,6 @@ double SU2Symmetry::dual_phase(const Sector& sector) const {
   return (sector.at(0) / 2) % 2 == 0 ? 1.0 : -1.0;
 }
 
-Sector SU2Symmetry::sector_of_dimension(int64_t dim) const {
-  if (dim < 1) {
-    throw value_error("A spin multiplet has a positive dimension, not " + std::to_string(dim) +
-                      ".");
-  }
-  // the spin-j multiplet of dimension 2j + 1 is stored as jj = 2j
-  return Sector{dim - 1};
-}
 const std::shared_ptr<Group>& su2_symmetry() {
   static const std::shared_ptr<Group> instance = std::make_shared<SU2Symmetry>();
   return instance;
@@ -86,6 +77,10 @@ int64_t SU2Symmetry::reference_index(const Sector& a) const {
 
 c10::ScalarType SU2Symmetry::fusion_dtype() const {
   return at::kDouble;
+}
+
+void SU2Symmetry::clear_caches() const {
+  su2::clear_tables();
 }
 
 at::Tensor SU2Symmetry::invariant_form(const Sector& a, const c10::Device& device) const {

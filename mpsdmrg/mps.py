@@ -11,8 +11,9 @@ import torch
 from base import COMPLEX, CUDA
 from mpsdmrg import linalg
 from mpsdmrg.mpo import MPO
-from mpsdmrg.symmetry.group import Group, has_content, no_symmetry
-from mpsdmrg.tensor import Tensor, cached_einsum, resolve, capped_leg, fuse_legs, site_leg
+from mpsdmrg.symmetry.cat import Group, has_content, no_symmetry
+from mpsdmrg.tensor import Tensor, cached_einsum, capped_leg, fuse_legs, multiplet_leg
+from mpsdmrg.tensor import phys_leg
 
 
 def _bond_multiplets(tensors: list[Tensor]) -> list[int]:
@@ -43,6 +44,7 @@ class MPS:
                  device = CUDA,
                  *,
                  group: Group = no_symmetry,
+                 site_sector: tuple[int, ...] | None = None,
                  max_bond_dim: int | None = None):
         '''
         Args:
@@ -61,6 +63,9 @@ class MPS:
                 implemented builds its own start state -- one singlet tensor per site, whose
                 bond legs carry every sector the physical legs to their left fuse to, capped
                 at ``max_bond_dim`` -- and ignores ``bond_dims`` and ``init_state``.
+            site_sector: the multiplet one site lives in, e.g. ``(1,)`` for a spin-1/2 site of
+                SU(2) or ``(1, 0)`` for the fundamental of SU(3); a group whose multiplets are
+                not told apart by their dimension needs it, an abelian group does not.
             init_state: kept as a copy of the caller's list; the tensors themselves are
                 canonicalized in place, so the caller's tensors are left as they were only
                 when the constructor does not rebuild them.
@@ -71,20 +76,20 @@ class MPS:
         '''
         if init_state is None and has_content(group):
             if max_bond_dim is None:
-                raise ValueError(f'{group.group_name} builds its own start state and needs a bond cap.')
+                raise ValueError(f'{group.name} builds its own start state and needs a bond cap.')
             # one singlet tensor per site: each bond carries every sector the physical legs to
             # its left fuse to, capped at max_bond_dim, so the state is a singlet and the sweep
             # starts from a bond dimension it can afford
-            phys = site_leg(group, phys_dim)
-            bonds = [site_leg(group, 1)]
+            phys = phys_leg(group, phys_dim, site_sector)
+            bonds = [multiplet_leg(group, group.trivial_sector)]
             for _ in range(L - 1):
                 bonds.append(capped_leg(fuse_legs(bonds[-1], phys), max_bond_dim))
             if not any(tuple(group.trivial_sector) in group.fusion_outcomes(sector, phys.sectors[0])
                        for sector in bonds[-1].sectors):
                 raise ValueError(
                     f'A bond of {bonds[-1].dim} states cannot close {L} sites of dimension '
-                    f'{phys_dim} to the trivial sector of {group.group_name}.')
-            bonds.append(site_leg(group, 1))
+                    f'{phys_dim} to the trivial sector of {group.name}.')
+            bonds.append(multiplet_leg(group, group.trivial_sector))
             init_state = [Tensor.rand((bonds[i].dim, phys.dim, bonds[i + 1].dim),
                                       legs=(bonds[i], phys, bonds[i + 1].conj()),
                                       qtotal=group.trivial_sector,
@@ -189,8 +194,8 @@ class MPS:
                        operators to measure, or an MPO representing a full matrix product operator.
                        A value without legs is the matrix of the operator on the physical leg of
                        the state at that site; the dictionary is then a product of one-site
-                       operators, measured exactly on the dense state (an invariant state has a
-                       dense expansion, so no multiplet structure is needed).
+                       operators, measured exactly on the dense state, which a state of a
+                       non-trivial group does not have.
             mode: 'direct' or 'env' — contraction strategy (for dict operators only; MPO always uses direct).
         Returns:
             complex: The expectation value of the operators on the MPS.
@@ -200,9 +205,16 @@ class MPS:
         if isinstance(operators, MPO):
             return self._mpo_expectation(operators)
         if any(not isinstance(operator, Tensor) or not operator.legs for operator in operators.values()):
+            if has_content(self.group):
+                # a bare matrix carries every magnetic component, while a symmetry-adapted tensor
+                # stores only the reduced data of its fusion trees
+                raise NotImplementedError(
+                    f'A bare matrix measures on a state of a trivial group; for {self.group.name} '
+                    f'pass the operator as a Tensor of the group or as an MPO.')
             matrices: dict[int, torch.Tensor] = {}
             for site, operator in operators.items():
-                matrix = operator.to_torch() if isinstance(operator, Tensor) else torch.as_tensor(operator)
+                matrix = (operator.blocks[0] if isinstance(operator, Tensor)
+                          else torch.as_tensor(operator))
                 if matrix.shape != (self.phys_dim, self.phys_dim):
                     raise ValueError(f"Operator shapes do not match the physical dimension {self.phys_dim}.")
                 if site < 0 or site >= self.L:
@@ -250,39 +262,26 @@ class MPS:
             MPS: the state after the gate, not canonicalized.
         '''
         first, second = targets
-        # a bare matrix on a symmetry-adapted leg carries every component, which only a resolved
-        # leg can store; an unresolved leg is the plain dense case
-        physical = (resolve(self.tensors[first]) if has_content(self.group)
-                    else self.tensors[first]).legs[1]
+        if has_content(self.group):
+            # a bare gate matrix carries every magnetic component, while a symmetry-adapted tensor
+            # stores only the reduced data of its fusion trees; the gate belongs on an MPO, whose
+            # bond legs carry the charge of every channel
+            raise NotImplementedError(
+                f'A bare matrix acts on a state of a trivial group; for {self.group.name} write the '
+                f'operator as an MPO, whose bond legs carry the charge of every channel.')
+        physical = self.tensors[first].legs[1]
         dim = physical.dim
         matrix = Tensor.from_torch(
             torch.as_tensor(gate, dtype=self.dtype, device=self.device).reshape(dim, dim, dim, dim),
             legs=(physical, physical, physical.conj(), physical.conj()))
-        # a bare gate matrix carries every magnetic component, so a symmetry-adapted window is
-        # resolved for the contraction and the factors are resolved again afterwards
-        window = (lambda site: resolve(self.tensors[site])) if has_content(self.group) else \
-            (lambda site: self.tensors[site])
-        merged = cached_einsum('lsr,rtu->lstu', window(first), window(second))
+        merged = cached_einsum('lsr,rtu->lstu', self.tensors[first], self.tensors[second])
         merged = cached_einsum('lstu,pqst->lpqu', merged, matrix)
         tensor, singular, rest = linalg.svd(merged, (0, 1), (2, 3), max_bond=max_bond_dim,
                                             tol=tol, direction='right')
-        if has_content(self.group):
-            tensor, rest = resolve(tensor), resolve(rest)
         tensors = list(self.tensors)
         tensors[first] = tensor
         tensors[second] = linalg.absorb(rest, singular)
         return self._from_tensors(tensors, self.group, self.dtype, self.device)
-
-    def resolve(self) -> MPS:
-        '''
-        Return the same state with every leg resolved.
-
-        Returns:
-            MPS: a state of the same amplitudes whose blocks store the dense data of their
-            charge windows, which is what a bare operator matrix acts on.
-        '''
-        return self._from_tensors([resolve(tensor) for tensor in self.tensors],
-                                  self.group, self.dtype, self.device)
 
     def apply(self,
               operator: "MPO | torch.Tensor",
@@ -305,6 +304,7 @@ class MPS:
             MPS: the state after the operator.
         Raises:
             ValueError: If the operator does not act on this state.
+            NotImplementedError: If a bare matrix is applied to a state of a non-trivial group.
         '''
         if not isinstance(operator, MPO):
             if sites is None:
@@ -320,10 +320,12 @@ class MPS:
                 raise NotImplementedError('A local operator acts on one site or on two neighbours.')
             site = targets[0]
             phys = self.tensors[site].legs[1]
-            if has_content(self.group) and not phys.resolved:
-                # a bare matrix has no fusion path to follow, so the state resolves its
-                # magnetic index into its blocks and the matrix acts on the dense data
-                return self.resolve().apply(operator, sites, max_bond_dim, tol)
+            if has_content(self.group):
+                # a bare matrix carries every magnetic component, while a symmetry-adapted tensor
+                # stores only the reduced data of its fusion trees
+                raise NotImplementedError(
+                    f'A bare matrix acts on a state of a trivial group; for {self.group.name} write '
+                    f'the operator as an MPO, whose bond legs carry the charge of every channel.')
             matrix = Tensor.from_torch(
                 torch.as_tensor(operator, dtype=self.dtype, device=self.device),
                 legs=(phys, phys.conj()))
@@ -335,8 +337,6 @@ class MPS:
                 f'An operator of {operator.L} sites of dimension {operator.physical_dim} does not '
                 f'act on a state of {self.L} sites of dimension {self.phys_dim}.')
         tensors: list[Tensor] = []
-        # a resolved state contracts against resolved operator tensors only, so every window is
-        # dense data and no reduced round trip can drop a multiplet copy
         carry = None
         for site in range(self.L):
             state, matrix = self.tensors[site], operator.tensors[site]
@@ -376,8 +376,8 @@ class MPS:
         '''
         The exact expectation of a product of one-site operators, contracted over the dense state.
 
-        An invariant state has trivial total charge, so its tensors expand into the dense basis;
-        this is the reference an adapted contraction has to reproduce, and it needs no multiplet
+        A state of a trivial group has one block per tensor, which is the whole dense array; this
+        is the reference an adapted contraction has to reproduce, and it needs no multiplet
         structure at all.
 
         Args:
@@ -385,7 +385,7 @@ class MPS:
         Returns:
             complex: the expectation value, exact up to the floating point error.
         '''
-        tensors = [tensor.to_torch() for tensor in self.tensors]
+        tensors = [tensor.blocks[0] for tensor in self.tensors]
         environment = torch.ones(1, 1, dtype=self.dtype, device=self.device)
         for site in range(self.L):
             operator = operators.get(site)
@@ -410,8 +410,9 @@ class MPS:
         for i in range(1, self.L):
             lenv = cached_einsum('bdw,bpa,dqc,wxpq->acx',
                                 lenv, self.tensors[i].conj(), self.tensors[i], mpo.tensors[i])
-        # lenv shape: (1, 1, D); pick the MPO end state (index -1)
-        return lenv[0, 0, -1].item()
+        # the MPO's right edge is a trivial leg of one component, so closing it leaves a scalar
+        edge = Tensor.ones(1, legs=(lenv.legs[2].conj(),), dtype=self.dtype, device=self.device)
+        return cached_einsum('acw,w->ac', lenv, edge).item()
 
     def _full_dir_contract(self,operators:dict[int,Tensor]):
         '''
@@ -548,7 +549,7 @@ class MPS:
                       group=self.group)
     def __repr__(self):
         return (f"MPS(L={self.L}, phys_dim={self.phys_dim}, bond_dim={self.bond_dim}, "
-            f"center={self.center}, group={self.group.group_name})")
+            f"center={self.center}, group={self.group.name})")
     def __sizeof__(self):
         return sum(t.numel() * t.element_size() for t in self.tensors)
 

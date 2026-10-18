@@ -5,10 +5,12 @@ The tensor operators of one site, as the action of SU(2) on the operators of a s
 '''
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 
 from mpsdmrg.ext import Group, Sector
-from mpsdmrg.symmetry.group.content import OperatorContent
+from mpsdmrg.symmetry.cat.content import OperatorContent
 
 
 class SU2Content(OperatorContent):
@@ -20,7 +22,7 @@ class SU2Content(OperatorContent):
     rank, so its eigenvectors give the :math:`T^{(k)}_m` up to the ladder normalization.
     '''
 
-    def tensor_operators(self, group: Group, mapping: dict[str, torch.Tensor], dim: int,
+    def tensor_operators(self, group: Group, mapping: dict[str, torch.Tensor], phys: Any,
                          dtype: torch.dtype, device: torch.device) -> dict[Sector, torch.Tensor]:
         r'''
         The rank-k tensor operators of one site, keyed by the sector ``(2k,)``.
@@ -29,7 +31,8 @@ class SU2Content(OperatorContent):
             group: the symmetry group; it needs a Clebsch-Gordan tensor, so it must be non-abelian.
             mapping: operator names to their dense matrices; the spin components ``X``, ``Y`` and
                 ``Z`` must be in it.
-            dim: physical dimension of one site.
+            phys: the physical leg of one site, whose dimension is the dimension of the spin
+                multiplet the site lives in.
             dtype, device: data type and device of the matrices.
         Returns:
             dict sector -> tensor in shape (2k + 1, d, d), the :math:`T^{(k)}_m` for m from k down
@@ -40,7 +43,8 @@ class SU2Content(OperatorContent):
         '''
         if group.is_abelian:
             raise NotImplementedError(
-                f'The tensor operators need a group with a multiplet structure, not {group.group_name}.')
+                f'The tensor operators need a group with a multiplet structure, not {group.name}.')
+        dim = phys.dim
         missing = [name for name in ('X', 'Y', 'Z') if name not in mapping]
         if missing:
             raise ValueError(f'The SU(2) tensor operators need the spin components {missing} '

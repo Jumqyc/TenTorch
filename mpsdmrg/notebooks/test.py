@@ -79,7 +79,7 @@ def aklt():
     op_names = ['X', 'Y', 'Z']
     for i, a_name in enumerate(op_names):
         for j, b_name in enumerate(op_names):
-            mapping[f'{a_name}{b_name}'] = Tensor.from_torch(op_list[i].to_torch() @ op_list[j].to_torch())
+            mapping[f'{a_name}{b_name}'] = Tensor.from_torch(op_list[i].blocks[0] @ op_list[j].blocks[0])
 
     aklt_mpo = MPO(L, phys_dim=phys_dim, mapping=mapping)
 
@@ -116,7 +116,7 @@ def uls():
     op_names = ['X', 'Y', 'Z']
     for i, a_name in enumerate(op_names):
         for j, b_name in enumerate(op_names):
-            mapping[f'{a_name}{b_name}'] = Tensor.from_torch(op_list[i].to_torch() @ op_list[j].to_torch())
+            mapping[f'{a_name}{b_name}'] = Tensor.from_torch(op_list[i].blocks[0] @ op_list[j].blocks[0])
 
     uls_h = MPO(L, phys_dim=phys_dim, mapping=mapping)
 

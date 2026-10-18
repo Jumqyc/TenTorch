@@ -26,9 +26,6 @@ def svd(t: Tensor, left: Sequence[int], right: Sequence[int],
     Returns:
         tuple: (first factor, singular values, second factor).
     '''
-    if any(leg.resolved for leg in t.legs):
-        first, values, second = _engine.svd(cast(Tensor, t).unresolve(), left, right, **kwargs)
-        return cast(Tensor, first).resolve(), values, cast(Tensor, second).resolve()
     return cast(tuple[Tensor, torch.Tensor, Tensor],
                 _engine.svd(t, left, right, **kwargs))
 
@@ -44,12 +41,4 @@ def absorb(second: Tensor, values: torch.Tensor) -> Tensor:
     Returns:
         Tensor: the second factor with every bond window scaled by its singular value.
     '''
-    leg = second.legs[0]
-    if leg.resolved:
-        # a resolved bond window stores each copy over its whole multiplet, so one singular value
-        # scales sector_dim elements rather than one
-        widths = [leg.slices[i + 1] - leg.slices[i] for i in range(len(leg.slices) - 1)]
-        dims = [second.group.sector_dim(leg.sector(i)) for i in range(len(widths))]
-        repeat = [dim for dim, width in zip(dims, widths) for _ in range(width // dim)]
-        values = values.repeat_interleave(torch.tensor(repeat, device=values.device))
     return second * values.reshape(-1, 1, 1)

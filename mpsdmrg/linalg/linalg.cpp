@@ -47,7 +47,7 @@ std::string legs_repr(const std::vector<Leg>& legs) {
 // Raises:
 //   NotImplementedError: If ``left`` is not a prefix of the legs, which a non-abelian group
 //     cannot fuse a partial tree for.
-Sector split_charge(const std::shared_ptr<Group>& group, const std::vector<Leg>& legs,
+Sector split_charge(const std::shared_ptr<FusionCategory>& group, const std::vector<Leg>& legs,
                     const BlockKey& key, const Sector& qtotal,
                     const std::vector<int64_t>& left) {
   if (left.empty() || left.size() == legs.size()) return qtotal;
@@ -56,7 +56,7 @@ Sector split_charge(const std::shared_ptr<Group>& group, const std::vector<Leg>&
     prefix = left[i] == static_cast<int64_t>(i);
   }
   if (!prefix) {
-    throw not_implemented_error("A " + group->group_name() +
+    throw not_implemented_error("A " + group->name() +
                                 " split needs the first legs in order, not " + int_tuple(left) +
                                 ".");
   }
@@ -66,8 +66,8 @@ Sector split_charge(const std::shared_ptr<Group>& group, const std::vector<Leg>&
 // The weight the isometry factor of a split at ``charge`` carries: the two factors hold one
 // fusion vertex fewer than the tensor they rebuild, so the isometry is weighted by the
 // square root of the quantum dimension of that vertex.
-double split_scale(const std::shared_ptr<Group>& group, const Sector& charge) {
-  return std::sqrt(static_cast<double>(group->sector_dim(charge)));
+double split_scale(const std::shared_ptr<FusionCategory>& group, const Sector& charge) {
+  return std::sqrt(group->quantum_dim(charge));
 }
 
 // The blocks of the two factors of one fused charge, one block per distinct state.
@@ -97,7 +97,7 @@ FactorBlocks factor_blocks(const Tensor& t, const std::vector<int64_t>& left,
     const int64_t row = left_slices[lc], rdim = part.left_dims[lc];
     Shape dims;
     for (std::size_t i = 0; i < left.size(); ++i) {
-      dims.push_back(t.legs()[left[i]].data_dim(combo.legs[i]));
+      dims.push_back(t.legs()[left[i]].multiplicity(combo.legs[i]));
     }
     dims.push_back(k);
     out.first_blocks.push_back(first_kept.slice(0, row, row + rdim).reshape(dims));
@@ -113,7 +113,7 @@ FactorBlocks factor_blocks(const Tensor& t, const std::vector<int64_t>& left,
     const int64_t col = right_slices[rc], cdim = part.right_dims[rc];
     Shape dims{k};
     for (std::size_t i = 0; i < right.size(); ++i) {
-      dims.push_back(t.legs()[right[i]].data_dim(combo.legs[i]));
+      dims.push_back(t.legs()[right[i]].multiplicity(combo.legs[i]));
     }
     out.second_blocks.push_back(second_kept.slice(1, col, col + cdim).reshape(dims));
     BlockKey key;
@@ -146,7 +146,7 @@ void check_partition(const Tensor& t, const std::vector<int64_t>& left,
 
 std::vector<SectorMatrix> sector_matrices(const Tensor& t, const std::vector<int64_t>& left,
                                           const std::vector<int64_t>& right) {
-  const std::shared_ptr<Group>& group = t.group();
+  const std::shared_ptr<FusionCategory>& group = t.group();
   const std::vector<Leg>& legs = t.legs();
   const std::size_t cut = left.size() > 0 ? left.size() - 1 : 0;
 
@@ -194,14 +194,14 @@ std::vector<SectorMatrix> sector_matrices(const Tensor& t, const std::vector<int
     for (const BlockKey& state : left_states) {
       int64_t dim = 1;
       for (std::size_t i = 0; i < left.size(); ++i) {
-        dim *= legs[left[i]].data_dim(state.legs[i]);
+        dim *= legs[left[i]].multiplicity(state.legs[i]);
       }
       left_dims.push_back(dim);
     }
     for (const BlockKey& state : right_states) {
       int64_t dim = 1;
       for (std::size_t i = 0; i < right.size(); ++i) {
-        dim *= legs[right[i]].data_dim(state.legs[i]);
+        dim *= legs[right[i]].multiplicity(state.legs[i]);
       }
       right_dims.push_back(dim);
     }
@@ -231,25 +231,17 @@ std::pair<Tensor, Tensor> assemble_split(
     const std::vector<std::pair<at::Tensor, at::Tensor>>& factors,
     const std::vector<Sector>& charges, const std::optional<std::vector<at::Tensor>>& kept,
     const Sector& first_qtotal, const Sector& second_qtotal) {
-  // the bond a split creates inherits the resolution of the tensor it came from
-  const bool split_resolved = std::all_of(t.legs().begin(), t.legs().end(),
-                                          [](const Leg &leg) { return leg.resolved(); });
-  // The new leg holds one sector per charge that keeps at least one singular value.  A resolved
-  // leg stores the kept components themselves, so its block dimension is the multiplicity; an
-  // unresolved leg stores one entry per component of the sector.
+  // The new leg holds one sector per charge that keeps at least one singular value, one entry
+  // per kept component of the sector.
   std::vector<std::pair<Sector, int64_t>> entries;
   for (std::size_t i = 0; i < charges.size(); ++i) {
     const at::Tensor* k = kept ? &(*kept)[i] : nullptr;
     if (k != nullptr && k->size(0) == 0) continue;
     const int64_t multiplicity = k != nullptr ? k->size(0) : factors[i].first.size(1);
-    entries.emplace_back(charges[i],
-                         split_resolved ? multiplicity
-                                        : multiplicity * t.group()->sector_dim(charges[i]));
+    entries.emplace_back(charges[i], multiplicity * t.group()->sector_dim(charges[i]));
   }
   const std::pair<Leg, std::vector<int64_t>> built = Leg::from_blocks(t.group(), entries, -1);
-  const Leg new_leg = split_resolved
-                          ? Leg(t.group(), built.first.sectors(), built.first.slices(), -1, true)
-                          : built.first;
+  const Leg new_leg = built.first;
   const std::vector<int64_t> &rank = built.second;
   std::map<Sector, int64_t> block_of_charge;
   for (std::size_t i = 0; i < entries.size(); ++i) block_of_charge[entries[i].first] = rank[i];
@@ -374,8 +366,9 @@ at::Tensor svdvals(const Tensor& t, const std::vector<int64_t>& left,
 
 at::Tensor norm(const Tensor& t, const std::optional<std::vector<int64_t>>& dim) {
   if (t.is_dense() || t.legs().empty()) {
-    return dim.has_value() ? at::linalg_norm(t.to_torch(), std::nullopt, at::IntArrayRef(*dim))
-                           : at::linalg_norm(t.to_torch());
+    return dim.has_value()
+               ? at::linalg_norm(t.blocks().front(), std::nullopt, at::IntArrayRef(*dim))
+               : at::linalg_norm(t.blocks().front());
   }
   if (!dim.has_value()) {
     at::Tensor total = at::zeros({}, t.blocks().front().options().dtype(at::kDouble));
@@ -388,7 +381,7 @@ at::Tensor norm(const Tensor& t, const std::optional<std::vector<int64_t>>& dim)
   }
   if (!t.group()->is_abelian()) {
     if (keep.size() != 1) {
-      throw not_implemented_error("Reducing the legs of a " + t.group()->group_name() +
+      throw not_implemented_error("Reducing the legs of a " + t.group()->name() +
                                   " tensor keeps one leg, not " +
                                   std::to_string(keep.size()) + ".");
     }
@@ -398,8 +391,8 @@ at::Tensor norm(const Tensor& t, const std::optional<std::vector<int64_t>>& dim)
     for (std::size_t bi = 0; bi < t.blocks().size(); ++bi) {
       const BlockKey& q = t.qdata()[bi];
       const double charge_dim =
-          std::sqrt(static_cast<double>(t.group()->sector_dim(
-              t.legs()[keep.front()].sector(q.legs[keep.front()]))));
+          std::sqrt(t.group()->quantum_dim(
+              t.legs()[keep.front()].sector(q.legs[keep.front()])));
       reduced.push_back(at::sqrt(at::sum(t.blocks()[bi].abs().pow(2), *dim)) / charge_dim);
     }
     return at::cat(reduced);
@@ -423,7 +416,7 @@ at::Tensor norm(const Tensor& t, const std::optional<std::vector<int64_t>>& dim)
 
 at::Tensor inner(const Tensor& a, const Tensor& b) {
   if (a.is_dense() && b.is_dense()) {
-    return at::sum(a.to_torch().conj() * b.to_torch());
+    return at::sum(a.blocks().front().conj() * b.blocks().front());
   }
   if (a.legs() != b.legs()) {
     throw value_error("An inner product needs equal legs, not " + legs_repr(a.legs()) + " and " +
@@ -440,16 +433,13 @@ at::Tensor inner(const Tensor& a, const Tensor& b) {
 }
 
 at::Tensor trace(const Tensor& t) {
-  if (t.is_dense()) return at::trace(t.to_torch());
+  if (t.is_dense()) return at::trace(t.blocks().front());
   if (t.legs().size() != 2 || t.legs()[0].slices() != t.legs()[1].slices()) {
     throw not_implemented_error("A trace needs two legs with equal block boundaries, not " +
                                 legs_repr(t.legs()) + ".");
   }
-  if (!t.group()->is_abelian()) {
-    // The Clebsch-Gordan tensors of the two trees of a dual pair of legs expand it to a
-    // dense square matrix, and the invariant contraction of the pair is its trace.
-    return at::trace(t.to_torch());
-  }
+  // A reduced block is the tree data of the dual pair, so its own diagonal is the contribution of
+  // that tree to the invariant contraction of the pair.
   at::Tensor total = at::zeros({}, t.blocks().front().options());
   for (const at::Tensor& block : t.blocks()) {
     if (block.size(0) == block.size(1)) total = total + at::einsum("aa->", {block});

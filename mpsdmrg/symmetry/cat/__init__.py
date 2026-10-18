@@ -11,9 +11,9 @@ from mpsdmrg.ext import (  # noqa: F401
     BraidingStyle, FusionStyle, Group, Sector, ZNSymmetry,
     fermion_parity, no_symmetry, su2_symmetry, su3_symmetry,
     u1_symmetry, z2_symmetry)
-from mpsdmrg.symmetry.group.content import OperatorContent
-from mpsdmrg.symmetry.group.su2 import SU2Content
-from mpsdmrg.symmetry.group.su3 import SU3Content
+from mpsdmrg.symmetry.cat.content import OperatorContent
+from mpsdmrg.symmetry.cat.su2 import SU2Content
+from mpsdmrg.symmetry.cat.su3 import SU3Content
 
 # the content that answers for a group, keyed by the type name of its group
 _CONTENTS: dict[str, OperatorContent] = {'SU2Symmetry': SU2Content(),
@@ -44,5 +44,5 @@ def content(group: Group) -> OperatorContent:
         NotImplementedError: If no content claims the type of the group.
     '''
     if not has_content(group):
-        raise NotImplementedError(f'The multiplets of {group.group_name} have no content yet.')
+        raise NotImplementedError(f'The multiplets of {group.name} have no content yet.')
     return _CONTENTS[group.type_name]

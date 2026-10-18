@@ -6,7 +6,7 @@ This chapter answers one question: how do we store and multiply a tensor that
 is constrained by a symmetry, so that we never store or multiply the parts the
 symmetry forbids?
 
-We reach the answer in three moves.
+We reach the answer in five moves.
 
 \begin{enumerate}
   \item \emph{The object and the constraint.}
@@ -24,10 +24,18 @@ We reach the answer in three moves.
   \item \emph{The data structure and the code.}
     Section~\ref{sec:container} turns that mathematics into a concrete object
     --- a tensor whose entries are dense blocks addressed by symmetry labels ---
-    and Section~\ref{sec:code} shows where that object lives in the code.
-    Section~\ref{sec:charge-flow} then exhibits the workhorse that uses it, the
-    charge-conserving contraction and singular-value split, and
-    Section~\ref{sec:anchors} closes with the numbers that verify it.
+    and Section~\ref{sec:code} shows where that object lives in the code, ending
+    with one $\SU{2}$ contraction traced from the interface down to a single
+    dense multiply.
+  \item \emph{What the weights really need.}
+    Sections~\ref{sec:category} and~\ref{sec:diagram} strip the group away: a
+    fusion category is a pair of tables --- fusion rules and a recoupling --- and
+    the contraction algorithm reads only those, so the same code contracts a
+    category whose quantum dimension is not an integer.
+  \item \emph{The workhorse, and the numbers.}
+    Section~\ref{sec:charge-flow} exhibits the charge-conserving contraction and
+    singular-value split that every sweep is built from, and
+    Section~\ref{sec:anchors} closes with the numbers that verify the claims.
 \end{enumerate}
 
 The code is layered to mirror this narrative; Section~\ref{sec:code} gives the
@@ -341,8 +349,7 @@ block structure.  Three objects do the work: \code{Leg}, \code{FusionTree}, and
     layout --- for a leg of total dimension $d$, the entries of sector $i$
     occupy rows $[\mathrm{slices}[i], \mathrm{slices}[i+1])$;
   \item \code{qconj}: the orientation, $+1$ or $-1$, telling whether the leg
-    is used as $V$ or $V^*$;
-  \item \code{resolved}: a flag distinguishing the two storage modes below.
+    is used as $V$ or $V^*$.
 \end{itemize}
 A sector $i$ on the leg carries a block of physical dimension
 $\mathrm{block\_dim}(i)$, which is $m_i \cdot \dim(s_i)$: $m_i$ degenerate
@@ -356,7 +363,7 @@ $s=(0,2,4)$ --- singlet, triplet, quintet --- with multiplicities $m=(1,2,1)$
 and orientation $+1$ is, in the reduced mode, the object
 \begin{center}
 \code{Leg}(\code{group}, \code{sectors}=[0,2,4], \code{slices}=[0,1,7,12],
-\code{qconj}=+1, \code{resolved}=False),
+\code{qconj}=+1),
 \end{center}
 with \code{dim}$=12$ and \code{multiplets}$=4$.  The fields resolve sector by
 sector as
@@ -372,9 +379,9 @@ sector as
 \end{center}
 The \emph{block dimension} of a sector is $m\cdot\dim V_s$, and \code{slices}
 holds its running total, so in the dense layout the singlet is row~$0$, the two
-triplets occupy rows $1$--$6$, and the quintet rows $7$--$11$.  The invariant
-content, however, is only the multiplicity: \code{data_dim} returns
-$(1,2,1)$ here and $(1,6,5)$ once \code{resolved}=True.  That single
+triplets occupy rows $1$--$6$, and the quintet rows $7$--$11$.  The stored
+content, however, is only the multiplicity: \code{multiplicity} returns
+$(1,2,1)$, while the block dimension is what the dense layout would use.  That
 difference --- multiplicity versus block dimension --- is where the compression
 lives.
 
@@ -443,22 +450,13 @@ bookkeeping that says where each block lives:
 A block is allowed only if its sectors fuse to \code{qtotal}; every other
 combination is absent.  This is Schur's lemma made into an address scheme.
 
-There are two storage modes, and the whole code base switches between them
-deliberately:
-
-\begin{description}
-  \item[\code{resolved}=False (the ``reduced'' or sparse route).]  Each block
-    stores only the multiplicity indices, one number per multiplet; the CG
-    tensors are kept separately in the tree.  This is maximally compressed.
-  \item[\code{resolved}=True (the ``dense-in-block'' route).]  Each block
-    stores the full physical components, i.e.\ the CG tensors have been folded
-    into the numbers.  This is what \code{to_torch} produces and what a plain
-    torch tensor is.
-\end{description}
-
-The two modes agree up to the expansion of the fusion tree, which is why a
-round trip \code{Tensor} $\to$ dense $\to$ \code{Tensor} is exact to floating
-point (Section~\ref{sec:anchors}).
+Every tensor is stored in one mode, the \emph{reduced} one: each block holds
+only the multiplicity indices, one number per multiplet, and the CG tensors are
+kept separately in the fusion tree.  The physical components of a block are
+recovered by expanding its tree, which is what \code{stored_dense} caches; a
+contraction never materialises them, it weighs each output tree by the
+recoupling factor of Section~\ref{sec:charge-flow} and multiplies the reduced
+blocks directly.
 
 \begin{figure}[htbp]
   \centering
@@ -506,43 +504,64 @@ The implementation is a stack of four layers, each importing only the layer
 below it, mirroring Sections~\ref{sec:lie}--\ref{sec:container}:
 
 \begin{enumerate}
-  \item \textbf{Group} (\path{mpsdmrg/symmetry/group/}).  A \code{Group}
-    knows its sectors and how they combine.  Its interface is exactly the
-    mathematics of Sections~\ref{sec:lie}--\ref{sec:we}:
+  \item \textbf{Fusion category} (\path{mpsdmrg/symmetry/cat/cat.h}).  A
+    \code{FusionCategory} knows its labels and how they combine, and it carries
+    the data a symmetric network recouples with:
     \begin{itemize}
       \item \code{fusion_outcomes(a, b)} --- the list of $c$ in
         \eqref{eq:fusion};
       \item \code{n_symbol(a, b, c)} --- the multiplicity $N^{c}_{ab}$;
       \item \code{can_fuse_to(a, b, c)} --- whether $N^{c}_{ab}>0$;
-      \item \code{fusion_tensor(a, b, c, device)} --- the CG tensor
-        \eqref{eq:cg}, normalised to $\lVert C\rVert^2=\dim V_c$;
-      \item \code{sector_dim(a)} and \code{sector_of_dimension(d)} --- the
-        dimension of a sector and its inverse;
-      \item \code{invariant_form(sector, device)} --- the metric $D^{s}$ of
-        \eqref{eq:channel};
+      \item \code{associator(a, b, c, d, e, f)} --- the amplitudes $F$ of
+        Section~\ref{sec:charge-flow} that rewrite the coupling $(ab)c\to d$ through
+        $e$ into $a(bc)\to d$ through $f$, one entry per combination of the four
+        multiplicities, so that a graph contraction reads each copy on its own;
+      \item \code{braiding(a, b, c)} --- what exchanging the two legs of one
+        vertex costs;
+      \item \code{sector_dim(a)} --- the dimension of a label, the number of
+        states in one copy of its multiplet;
+      \item \code{quantum_dim(a)} --- the same number as a real, the weight a
+        closed loop carries; it equals \code{sector_dim} for a group and may be
+        non-integer for a general category;
+      \item \code{fusion_channels(a, b)} --- the outcomes of \eqref{eq:fusion}
+        with their multiplicities, in one query;
+      \item \code{is_trivial} --- whether the category is the trivial one;
+      \item \code{clear_caches()} --- drop the memo tables a category keeps;
+      \item \code{fusion_tensor(a, b, c, device)} --- the dense realization of
+        one vertex, the CG tensor \eqref{eq:cg} for a group, normalised to
+        $\lVert C\rVert^2=\dim V_c$;
       \item \code{dual_sector(a)}, \code{dual_sign(a)}, \code{dual_phase(a)}
-        --- the conjugate sector and its Frobenius--Schur data.
+        --- the conjugate label and its Frobenius--Schur data.
     \end{itemize}
-    The concrete groups are subclasses: \code{u1_symmetry} and
-    \code{z2_symmetry} (abelian), \code{su2_symmetry} and \code{su3_symmetry}
-    (non-abelian).
+    The tensor engine includes this header only, so what a concrete symmetry is
+    stays behind the interface.  A group is the subclass
+    (\path{mpsdmrg/symmetry/cat/group.h}) whose associator and braiding follow
+    from its CG calculus: \code{Group::associator} is the overlap of the two
+    fusion trees in the CG basis, the $6j$ symbol, and \code{Group::braiding}
+    is the exchange sign; a group adds the CG-basis metric
+    \code{invariant_form(sector, device)}, the metric $D^{s}$ of
+    \eqref{eq:channel}, which a category with no CG basis does not have.  The
+    concrete groups are subclasses of it:
+    \code{u1_symmetry} and \code{z2_symmetry} (abelian), \code{su2_symmetry}
+    and \code{su3_symmetry} (non-abelian).
     Abelian groups have $\dim V_s=1$ for all $s$, so their fusion trees are
     trivial and the machinery reduces to integer charge bookkeeping.
-  \item \textbf{Leg and FusionTree} (\path{mpsdmrg/symmetry/group/tree.cpp}).
+  \item \textbf{Leg and FusionTree} (\path{mpsdmrg/symmetry/tree/tree.cpp}).
     The \code{Leg} and \code{FusionTree} of Section~\ref{sec:container}, plus
-    the constructors \code{site_leg} (a leg of physical dimension $d$, resolved
-    into sectors), \code{bond_leg} (a leg built from explicit sectors), and
-    \code{fuse_legs}.  The cached dense expansion of a tree lives here
-    (\code{stored_dense}).
+    the constructors \code{site_leg} (a leg of $d$ copies of the trivial sector, an abelian
+    group only), \code{multiplet_leg} (a leg of one multiplet, named by its sector),
+    \code{bond_leg} (a leg built from explicit sectors), and \code{fuse_legs}.  The cached
+    dense expansion of a tree lives here (\code{stored_dense}).
   \item \textbf{Tensor} (\path{mpsdmrg/tensor/tensor.cpp}).  The
-    \code{Tensor} container, its \code{from_torch} and \code{to_torch}
-    conversions, its \code{resolve} and \code{unresolve} methods, and the
+    \code{Tensor} container, its \code{from_torch} constructor, and the
     contraction engine \code{cached_einsum}.  A contraction is planned once (the \code{opt_einsum}
     contraction path is cached) and then executed block by block: for each
     allowed combination of input blocks the engine (a) reshapes by the fusion
     trees, (b) multiplies the small dense blocks with \code{at::einsum}, and
-    (c) re-weights by the CG tree factors.  Tree expansions and weights are
-    themselves cached, so the per-block cost is one dense multiply.
+    (c) re-weights each output tree by its recoupling factor, read off the
+    associator and the braiding where the layout is covered and from the CG
+    expansion otherwise.  Tree expansions and weights are themselves cached,
+    so the per-block cost is one dense multiply.
   \item \textbf{Linalg} (\path{mpsdmrg/linalg/}).  The symmetry-aware linear
     algebra: \code{svd}, \code{qr}, \code{rq}, \code{norm}, \code{inner},
     \code{trace}, and \code{absorb}.  These call the group layer to split a
@@ -616,8 +635,7 @@ from the output legs, not copied from the operands.
 
 \textbf{The weight is the overlap of the trees.}  The engine folds the dense
 expansions of $A$ and $B$ over the shared leg (\code{fold_operands}) and weights
-each output tree by its overlap with that fold (\code{tree_weight}), one scalar
-per tree:
+each output tree by its recoupling factor, one scalar per tree:
 \begin{equation}
   C^{(2,2,c)} \;=\; a_c\, b_c\, w_c \;\cdot\;
   \bigl[\text{CG expansion of the output tree}\bigr].
@@ -627,25 +645,285 @@ has unit norm).  For $c=2$ the overlap re-couples the three triplet pairings,
 so $w_2$ is the $6j$ symbol of $\SU{2}$ --- the coefficient that re-expresses
 the operand trees in the output tree's coupling order.  This is the general
 case: every output tree is weighted by such a recoupling factor, computed once
-by \code{tree_weight} and cached, so the per-block cost of the contraction stays
-a single dense multiply (\code{at::einsum}).  The tree-and-weight bookkeeping is
-the algorithm of \cite{Weichselbaum_2012}.
+per tree, so the per-block cost of the contraction stays a single dense multiply
+(\code{at::einsum}).
+
+The factor itself is read from the category: the two operands are permuted into
+the output's leg order with one associator and one braiding per swap of adjacent
+legs, their shared couplings are matched, and the junction where the two free
+parts meet contributes one associator and the loop weight of the shared block
+(Section~\ref{sec:diagram}).  The overlap of the dense expansions
+(\code{stored_dense} and \code{tree_weight}) remains as the fallback for a shape
+the categorical rule does not cover --- a leg both operands keep, or a fusion
+multiplicity that pairs the associators into matrices over copies.  The
+tree-and-weight bookkeeping is the algorithm of \cite{Weichselbaum_2012}.
 
 Above these four sits the model layer (\path{mpsdmrg/mps.py},
 \path{mpsdmrg/mpo.py}, \path{mpsdmrg/broomstick.py}), which builds the
 site/bond legs of a physical system and drives the DMRG sweeps; it never talks
 to matrices directly, only through the \code{Tensor} API.
 
-\emph{The two routes, end to end.}  A tensor enters through
-\code{Tensor.from_torch} and is stored reduced (multiplicities plus trees).
-Every algebraic operation (\code{cached_einsum}, \code{svd}, \code{qr}) is
-written to work on the reduced form.  When an operation genuinely needs the
-physical components --- taking a norm, writing a dense checkpoint, or
-contracting with an operator whose tree is not expressible --- the code calls
-\code{resolve} to fold the trees into the blocks, computes on the resolved
-form, and \code{unresolve}s afterwards.  The two representations are the same
-object seen from two sides, and the layer boundary is the single pair
-\code{resolve}/\code{unresolve}.
+\emph{The route, end to end.}  A tensor enters through \code{Tensor.from_torch}
+and is stored reduced (multiplicities plus trees).  Every algebraic operation
+(\code{cached_einsum}, \code{svd}, \code{qr}) is written to work on the reduced
+form, and the layer boundary is that form: the physical components of a block
+are never materialised, only the tree expansion of a single output tree is, and
+only where the categorical rule declines a layout
+(Section~\ref{sec:diagram}) does the dense expansion come back.
+
+\section{From the group picture to a category}
+\label{sec:category}
+
+Everything up to here was built on a group: a block is addressed by a
+\code{FusionTree}, whose dense value is a Clebsch--Gordan expansion, and every
+weight is an overlap in that basis.  A group is not the smallest input the
+weights need, and this section separates the two: it walks one exact fusion
+through the engine and marks which ingredient the weight consumes, and which is
+only a convenient way of writing that ingredient down.
+
+\paragraph{One exact fusion, with numbers.}
+Take three spin-one legs, $a=b=c=1$, in the sector labels of
+Section~\ref{sec:fusion} (the label is $s=2J$, so a spin-one leg is $2$ and
+\code{sector_dim(s) = s + 1}).  Coupling the first two legs gives
+$1\otimes1=0\oplus1\oplus2$, and the total fixes the third coupling; the two
+orders in which the three legs can be coupled are related by
+\begin{equation}
+  \bigl|(ab)c\to d\bigr\rangle
+  \;=\;\sum_{f}
+  F^{abc}_{d}(e,f)\,\bigl|a(bc)\to d\bigr\rangle ,
+  \label{eq:F}
+\end{equation}
+and the exchange of the two legs of one vertex by the braiding $R^{ab}_{c}$
+(Figure~\ref{fig:tree}).  In the engine these are
+\code{FusionCategory::associator} and \code{FusionCategory::braiding}.  For
+$d=2$ and the three legs $2,2,2$ the associator is the symmetric matrix
+\begin{equation}
+  F^{2 2 2}_{2}(e,f)=
+  \begin{pmatrix}
+    \tfrac13 & -\tfrac{1}{\sqrt3} & \tfrac{\sqrt5}{3}\\[2pt]
+    -\tfrac{1}{\sqrt3} & \tfrac12 & \tfrac{\sqrt5}{2\sqrt3}\\[2pt]
+    \tfrac{\sqrt5}{3} & \tfrac{\sqrt5}{2\sqrt3} & \tfrac16
+  \end{pmatrix},
+  \qquad e,f\in\{0,2,4\},
+  \label{eq:F-example}
+\end{equation}
+and the braiding for the same pair of legs is
+$R^{2 2}_{0}=+1$, $R^{2 2}_{2}=-1$, $R^{2 2}_{4}=+1$: the symmetric coupling is
+even under exchange, the antisymmetric one odd, and the symmetric $f=4$ even
+again.  Both tables are what the categorical route reads, and the checks of
+Section~\ref{sec:anchors} pin them to machine precision.
+
+\paragraph{What the weight actually consumes.}
+Nothing in Equations~\eqref{eq:F} and \eqref{eq:F-example} refers to a
+Clebsch--Gordan coefficient.  The engine's \code{Group} happens to compute the
+two tables \emph{from} them --- \code{Group::associator} is the dense overlap of
+the two coupling orders and \code{Group::braiding} the overlap of a vertex with
+its own leg exchange (\path{mpsdmrg/symmetry/cat/group.cpp}) --- but the
+interface never asks for a vertex, only for these numbers.  Measuring the call
+graph makes the split explicit: what a symmetric contraction of the engine needs
+is exactly
+\begin{enumerate}
+  \item \code{fusion_outcomes(a, b)} and \code{n_symbol(a, b, c)} --- the fusion
+    rules with their multiplicities, i.e.\ which couplings are allowed at all;
+  \item \code{quantum_dim(c)} --- the weight of a closed loop, and
+    \code{sector_dim(c)} --- the extent of one block, equal to it for a group;
+  \item \code{associator} --- the $F$ of \eqref{eq:F}, one entry per combination
+    of the four multiplicities;
+  \item \code{braiding} --- the $R$ of Figure~\ref{fig:tree};
+  \item \code{dual_sector}, \code{dual_sign} --- the cup and the cap, i.e.\ which
+    label is the conjugate of which and what closing a pair of dual legs costs.
+\end{enumerate}
+and what it does \emph{not} need is the Clebsch--Gordan tensor, the invariant
+form, or integer dimensions.  Those belong to the group that supplies the
+associator and the braiding, not to the contraction that consumes them.
+
+\begin{figure}[htbp]
+  \centering
+  \input{fig-tree}
+  \caption{The recoupling $\eqref{eq:F}$ as a tensor diagram.  Left: the coupling
+  order $(ab)c\to d$ through $e$.  Right: the same total charge through $f$.
+  The amplitude of the move is the associator $F^{abc}_{d}(e,f)$; exchanging the
+  two legs of either vertex multiplies by the braiding.  A general category is
+  exactly this pair of tables.}
+  \label{fig:tree}
+\end{figure}
+
+\paragraph{The same machine without a group.}
+The Fibonacci category is the sharp test of that claim.  It has two labels,
+$1$ and $\tau$, the fusion rule
+\begin{equation}
+  \tau\otimes\tau \;=\; 1\oplus\tau,\qquad
+  \tau\otimes 1=\tau ,
+  \label{eq:fib}
+\end{equation}
+and the quantum dimension $d_{\tau}=\varphi=(1+\sqrt5)/2$, which is not an
+integer and not the dimension of any block; $d_1=1$.  There is no
+Clebsch--Gordan tensor to overlap, so the category defines the associator and the
+braiding directly (\path{mpsdmrg/symmetry/cat/fibonacci}) and is, in the
+vocabulary of \code{cat.h}, of \code{FusionStyle::general}, so
+\code{carries_multiplicity()} is true even though every multiplicity is $1$.
+Nothing in the list above is missing, so the same diagram algorithm of
+Section~\ref{sec:diagram} applies --- the loop weight is $\varphi$ where a group
+would have had an integer, and the fusion of two $\tau$'s resolves into two
+channels (Figure~\ref{fig:exact}).
+
+\begin{figure}[htbp]
+  \centering
+  \input{fig-exact}
+  \caption{Two fusion rules side by side.  $\SU{2}$ labels a leg by $s=2J$ and
+  knows how to expand every vertex into Clebsch--Gordan coefficients; the
+  categorical route only ever asks for the outcomes and their weights.
+  Fibonacci has no such expansion --- $\tau\otimes\tau$ has two channels and its
+  quantum dimension is irrational --- yet supplies the same two tables, so the
+  contraction algorithm runs unchanged.}
+  \label{fig:exact}
+\end{figure}
+
+\section{The diagram algorithm}
+\label{sec:diagram}
+
+This is the algorithm \code{diagram\_weight}
+(\path{mpsdmrg/tensor/diagram.cpp}) runs, and the one the engine calls per
+output block from \code{mpsdmrg/tensor/tensor.cpp}.
+
+\paragraph{The two objects.}
+A chain of $n$ legs has couplings $c_1,\dots,c_{n-2}$ --- a nested chain
+$l_0l_1l_2\dots$, so $c_k$ is the charge of the first $k+1$ legs --- and one
+total charge, the coupling after the last pair.  That is all a chain is, and it
+is also the layout the engine hands over: the operand's legs, the coupled charge
+of every inner vertex, and its total.  The weight of one output block is the
+contraction of the two operand chains glued along their shared legs with the
+output chain,
+\begin{equation}
+  W \;=\; \bigl\langle Y_{\mathrm{out}}\,\bigr|\,
+  Y_L\bowtie Y_R\bigr\rangle ,
+  \label{eq:diagram}
+\end{equation}
+with the conventions of Section~\ref{sec:contract-example}: every tree is
+normalised to the quantum dimension of its own coupling, a leg with
+\code{qconj = -1} carries the duality matrix, the operands' magnetic axes are
+summed with weight one, and the output's magnetic axis is pinned at
+\code{reference_index}.
+
+\paragraph{Move one: one adjacent swap.}
+Only one primitive is needed.  Swapping the legs $x_1,x_2$ of a chain at
+position $p$ is one move of the coupling $c_p$; its amplitude is a braiding and
+two associators (Figure~\ref{fig:swap}),
+\begin{equation}
+  M(c_p,c'_p) \;=\; \sum_{f}
+  F^{x_0 x_1 x_2}_{c_2}\bigl(c_p,f\bigr)\,R^{x_1x_2}_{f}\,
+  F^{x_0 x_2 x_1}_{c_2}\bigl(c'_p,f\bigr) ,
+  \label{eq:swap}
+\end{equation}
+summed over the intermediate charge $f$ of the exchanged pair; for $p=0$ there
+is no neighbouring charge and the swap is the pure braiding $R$.  The function
+\code{move\_matrix} returns \eqref{eq:swap} as a small matrix over the old and
+the new coupling, and every entry is a single associator or braiding value.
+
+\begin{figure}[htbp]
+  \centering
+  \input{fig-swap}
+  \caption{One adjacent swap, \eqref{eq:swap}: the two legs exchange by a
+  braiding, bracketed on both sides by the associators that pull the third leg
+  back into place.  The whole diagram algorithm is this move, applied until the
+  legs are in the order the output wants.}
+  \label{fig:swap}
+\end{figure}
+
+\paragraph{Move two: a permutation is a product of swaps.}
+\code{permute\_chain} sorts the legs into the requested order with insertion
+sort, and carries a \emph{set} of states rather than one: a chain together with
+a coupling tuple is moved by applying \eqref{eq:swap} at each swap and summing
+over the couplings the swap can land on.  The result is
+\begin{equation}
+  \bigl\{\,c \;\longmapsto\; \text{amplitude}\,\bigr\},
+  \label{eq:states}
+\end{equation}
+one entry per coupling tuple the chain can carry in the new leg order, with the
+amplitude a product of the moves that produced it.  Both the zero-, one- and
+two-shared-leg cases and the general layout go through this same routine; it is
+also the reason a chain is stored as a tuple of couplings rather than as a dense
+tensor.
+
+\paragraph{The glue.}
+The two operands are permuted so that their shared legs come first and their free
+legs follow in the output's order: the first legs of the moved chains are the
+glued ones, the tail is the free part.  Gluing is then a matching condition ---
+the shared block's couplings must agree on both sides --- and a single closed
+loop, the shared block itself, whose label $b$ is the total charge of the glued
+part (Figure~\ref{fig:diagram}).  Closing that loop is what the engine pays for
+with the weight of the block, so the junction scale carries
+\begin{equation}
+  \frac{1}{\sqrt{d_{b}}}
+  \qquad\text{and, when the left free part has three legs,}\qquad
+  F^{b\,f_0 f_1}_{c_{s+1}}\bigl(c_{s},\phi\bigr),
+  \label{eq:junction}
+\end{equation}
+where $s$ is the number of glued legs, $b=c_{s}$ is their total charge (the
+shared block), $c_{s+1}$ is the coupling the left chain carries there, and
+$\phi$ is the frame --- the coupling the free part takes in the recoupled tree.
+The one associator moves the left free chain from its chain coupling $c_{s+1}$
+through $c_{s}$ into $\phi$; the right free part needs none, because the chain
+move of \eqref{eq:states} already carries it.  A pair whose dual leg lies on the
+left also carries the self-duality sign of that label, which is how a
+half-integer glued leg keeps the right weight.
+
+\begin{figure}[htbp]
+  \centering
+  \input{fig-diagram}
+  \caption{Equation~\eqref{eq:diagram} as a network: two chains glued along some
+  of their legs, and the output chain that caps the free ends.  The glued legs
+  are put first by \code{permute\_chain}, so the shared part is a block at the
+  head of both chains.}
+  \label{fig:diagram}
+\end{figure}
+
+\paragraph{The joined chain.}
+The free parts of the two operands form one chain, in the order (left free legs,
+right free legs).  A coupling tuple only names a block in one and the same leg
+order, so that joined chain is moved once more into the \emph{output's} leg order
+with \eqref{eq:states}, and the weight of one output block is the coefficient of
+that block's own coupling tuple:
+\begin{equation}
+  W \;=\; \sum_{\text{state pairs}}\ \sum_{\phi}\
+  \sigma\;\cdot\;\text{(left amplitude)}\cdot\text{(right amplitude)}
+  \;\cdot\;\frac{1}{\sqrt{d_{b}}}\,F\bigl(\phi\bigr)\;\cdot\;
+  \bigl[\text{joined amplitude for that coupling tuple}\bigr],
+  \label{eq:weight}
+\end{equation}
+with $\sigma$ the duality sign of \eqref{eq:junction} and $F(\phi)=1$ when the
+frame is empty.  Every factor on the right is a fusion rule, an associator, a
+braiding or a quantum dimension; no Clebsch--Gordan coefficient and no dense
+contraction appears.
+
+\begin{figure}[htbp]
+  \centering
+  \input{fig-junction}
+  \caption{The junction.  The glued part closes into a loop of the shared block,
+  which carries the weight $1/\sqrt{d_{\mathrm{blk}}}$; the left free part is
+  recoupled into the frame by one associator, and a glued pair whose duality sits
+  on the left contributes the self-duality sign of that label.  Everything else
+  in \eqref{eq:weight} is the chain move of Figure~\ref{fig:swap}.}
+  \label{fig:junction}
+\end{figure}
+
+\paragraph{When it declines, and what is measured exact.}
+\code{diagram\_weight} returns false --- and the caller keeps the dense fallback
+--- for a shape it does not model: a leg that both operands keep in the output
+(which would be counted twice), a fusion multiplicity that pairs the associators
+into matrices over copies rather than a scalar, or a joined chain whose length
+does not match the couplings it produced.  Those guards are structural, not a
+characterisation of coverage.  Measured exact: the layouts the library issues in
+a sweep (every step of the $L=6$ SU(2) Heisenberg contraction), every shape with
+one glued leg on randomised operands, and two or more glued legs when the left
+operand keeps at least one spectator leg.  Measured wrong, and \emph{not}
+guarded: a left operand with four spectator legs
+(\code{abcde,af->bcdef}), a left operand whose coupled block takes three glued
+legs out of a longer chain (\code{abcde,ead->bc}), and a fully glued left
+operand at two glued legs on some spin assignments.  Outside the measured set a
+caller must not rely on the categorical route until the rule is extended to
+those layouts or \code{diagram\_weight} learns to recognise and decline them.
+
 
 \section{Charge flow: contraction and splitting}
 \label{sec:charge-flow}
@@ -679,12 +957,46 @@ right.
 \paragraph{Applying an operator.}  Contracting a single-site operator into an
 MPS site changes the physical leg's charge by the operator's charge.  Because
 the total charge is conserved, that change must propagate to the neighbouring
-bonds: the bond charges ``flow'' to compensate.  The code implements this by
-fusing the operator's sector with the site leg (\code{fuse_legs}) and letting
-the contraction engine carry the new charges through.  For a two-site
-operator, the \code{OperatorContent.channel} object of \eqref{eq:channel} is
-used directly, so the fused operator is built once per sector, not once per
-site.
+bonds: the bond charges ``flow'' to compensate.  The code implements this as an
+ordinary contraction: the gate enters as an extra leg, \code{cached_einsum}
+merges it into the site (and, for a two-site gate, into its neighbour), and the
+singular-value split of Section~\ref{sec:charge-flow} puts the result back into
+canonical form --- the split is what produces the new bond charges, so no
+separate charge bookkeeping is needed.
+
+\emph{Example ($S_x$ on a spin-$\tfrac12$ site).}  A spin-$\tfrac12$ physical
+leg is one multiplet in sector $1$ ($\dim V_1=2$).  The spin components
+$\{S_x,S_y,S_z\}$ form a triplet, sector $2$, so the operator they belong to is
+an invariant rank-$3$ tensor with legs $(\mathrm{out}=1,\ \mathrm{operator}=2,
+\ \mathrm{in}=1)$ fusing to trivial charge, which by \eqref{eq:we} is
+$\sqrt{3/2}\,C^{121}$ (Section~\ref{sec:we}).  The code builds this multiplet
+once, per sector, with \code{OperatorContent.tensor_operators}
+(\path{mpsdmrg/symmetry/cat/su2}): for sector $(2,)$ it returns a tensor of
+shape $(3,2,2)$ whose three slices are the spherical components, scaled so the
+invariant channel satisfies $\lVert C_s\rVert^2 = \dim s = 3$.  Two slices are
+the ladder matrices $\sigma_+,\sigma_-$ and the third the diagonal $\sigma_z$,
+up to normalisation; the Cartesian component is the real combination
+\begin{equation}
+  S_x \;=\; \tfrac12\,\sigma_x \;=\; \tfrac12\,(\sigma_+ + \sigma_-)
+  \;=\; \tfrac12\begin{pmatrix}0&1\\1&0\end{pmatrix}.
+\end{equation}
+
+$S_x$ alone is one component of a charge-$2$ triplet, not a charge-definite
+operator, so a bare matrix cannot act on a reduced (symmetry-adapted) leg: it
+mixes the two magnetic components of the single multiplet.  For a site tensor $A$ with physical index
+$p\in\{\uparrow,\downarrow\}$ and bond indices $\ell,r$,
+\begin{equation}
+  (S_x A)_{p\,\ell\,r}
+  \;=\; \sum_{p'} (S_x)_{pp'}\, A_{p'\,\ell\,r}
+  \;=\; \tfrac12 A_{\bar p\,\ell\,r},
+\end{equation}
+where $\bar p$ flips the spin, i.e.\ $(S_x A)_\uparrow=\tfrac12 A_\downarrow$
+and $(S_x A)_\downarrow=\tfrac12 A_\uparrow$.  A bare matrix is therefore not an
+object of a symmetric network: its entries are the magnetic components a
+reduced block does not store, so the code refuses it on a state whose group has
+content (\path{mpsdmrg/mps.py}) and asks for the operator as an MPO, whose bond
+legs carry the charge of every channel.  An invariant channel such as $C_s$ of
+\eqref{eq:channel} is an object of the network and stays on the reduced route.
 
 \paragraph{Projection.}  Contracting an MPS and its conjugate (or an MPO into
 an MPS) is a pure network contraction; the engine of Section~\ref{sec:code}
@@ -714,9 +1026,8 @@ symmetry-aware \code{svd} proceeds in three steps:
 Because each charge is decomposed independently and then truncated against a
 single global threshold, sectors that are dynamically irrelevant are dropped
 altogether.  Finally \code{absorb} folds the singular values back into the
-isometry; on a resolved bond, each singular value is repeated once per
-component of its multiplet (a value for sector $s$ is replicated $\dim V_s$
-times), which is exactly the CG expansion of the reduced form.
+second factor, one value per kept multiplet, which is the unit the truncation
+bound counts.
 
 The three steps look identical for every group; only the fusion tables and the
 CG tensors differ.  For an abelian group every block is $1\times1$ and the
@@ -760,6 +1071,11 @@ code: $\SU{2}$ sector $s=2j$, $\SU{3}$ sector $(p,q)$.
   \item \emph{Absorption.}  Without repeating singular values over a multiplet,
     the sizes disagree ($4$ versus $2$) whenever a kept sector has
     $\dim V_q>1$; \code{absorb} fixes exactly this.
+  \item \emph{The categorical route.}  With the Categorical weight in place,
+    the table of the $22$ layouts of one $L=6$ $\SU{2}$ Heisenberg sweep is
+    reproduced to $\max|\Delta| = 1.0\times10^{-15}$, and the associator of
+    three spin-one legs at total $2$ is exactly \eqref{eq:F-example} with the
+    braidings $R^{22}_{0}=+1$, $R^{22}_{2}=-1$, $R^{22}_{4}=+1$.
   \item \emph{Where the time goes.}  A length-$10$, bond-$32$ sweep issues
     $1.8\times10^5$ CUDA kernels averaging $2.3\,\mu$s, $2.3\times10^4$
     device-to-device copies, and $1.6\times10^5$ block slices; device time is

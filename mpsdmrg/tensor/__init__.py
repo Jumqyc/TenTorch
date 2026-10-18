@@ -2,8 +2,8 @@
 
 Exposes ``Tensor``, the symmetry-adapted container whose blocks carry the fusion trees of the
 group layer and the ``cached_einsum`` contraction over them.  The leg algebra a model
-layer needs -- the leg of a bare dimension, a bond leg, fusion and the cap -- is
-re-exported here, so nothing above the tensor layer names a leg type.
+layer needs -- the leg of a bare dimension, the leg of one multiplet, a bond leg, fusion and
+the cap -- is re-exported here, so nothing above the tensor layer names a leg type.
 """
 from __future__ import annotations
 
@@ -14,11 +14,40 @@ import opt_einsum
 import torch
 
 from mpsdmrg.ext import _engine
-from mpsdmrg.ext import Tensor  # noqa: F401
-from mpsdmrg.ext import bond_leg, capped_leg, fuse_legs, site_leg  # noqa: F401
+from mpsdmrg.ext import Group, Tensor  # noqa: F401
+from mpsdmrg.ext import bond_leg, capped_leg, fuse_legs, multiplet_leg, site_leg  # noqa: F401
 from mpsdmrg.ext import cached_einsum as _engine_einsum
 
 _PLANS: dict[tuple, list] = {}
+
+
+def phys_leg(group: Group, phys_dim: int, site_sector: tuple[int, ...] | None = None) -> Any:
+    '''
+    The physical leg of one site.
+
+    Args:
+        group: the symmetry group of the chain.
+        phys_dim: the dimension one site has, the dimension the leg must have.
+        site_sector: the multiplet one site lives in; a group whose multiplets are not told
+            apart by their dimension needs it, an abelian group does not.
+    Returns:
+        The leg of that site.
+    Raises:
+        ValueError: If a multiplet-carrying group is given without ``site_sector``, or if the
+            named multiplet does not have dimension ``phys_dim``.
+    '''
+    if site_sector is None:
+        if not group.is_abelian:
+            raise ValueError(
+                f'{group.name} names a site by its multiplet, not by its dimension: pass '
+                f'site_sector, e.g. (1,) for a spin-1/2 site of SU(2) or (1, 0) for the '
+                f'fundamental of SU(3).')
+        return site_leg(group, phys_dim)
+    leg = multiplet_leg(group, site_sector)
+    if leg.dim != phys_dim:
+        raise ValueError(f'The multiplet {tuple(site_sector)} has dimension {leg.dim}, '
+                         f'not {phys_dim}.')
+    return leg
 
 
 def _clear_caches() -> None:
@@ -84,27 +113,6 @@ def cached_einsum(spec: str, *tensors: Any) -> Tensor:
     Returns:
       The contraction.
     '''
-    # the Clebsch-Gordan paths weigh reduced blocks, while a resolved operand stores its
-    # components densely, so a mixed contraction brings the resolved side to reduced data first
-    if not all(isinstance(t, Tensor) and all(leg.resolved for leg in t.legs) for t in tensors):
-        tensors = tuple(t.unresolve() if isinstance(t, Tensor)
-                        and any(leg.resolved for leg in t.legs) else t for t in tensors)
     if len(tensors) > 2 and any(isinstance(t, Tensor) and not t.is_dense for t in tensors):
         return _pairwise(spec, tensors)
     return _engine_einsum(spec, *tensors)
-
-
-def resolve(tensor: Tensor) -> Tensor:
-    '''
-    The same tensor with every leg marked resolved.
-
-    Args:
-      tensor: a tensor whose total charge is known, so that its dense expansion exists.
-
-    Returns:
-      A tensor with the same legs up to the resolved flag and the same dense expansion, whose
-      blocks now store the component data a bare operator matrix needs to act on it.
-    '''
-    legs = tuple(
-        _engine.Leg(leg.group, leg.sectors, leg.slices, leg.qconj, True) for leg in tensor.legs)
-    return Tensor.from_torch(tensor.to_torch(), legs=legs, qtotal=tensor.qtotal)
