@@ -46,8 +46,6 @@ at::Tensor FusionCategory::invariant_form(const Sector&, const c10::Device&) con
   throw not_implemented_error("Category " + name_ + " does not define an invariant form.");
 }
 
-bool FusionCategory::categorical_chain_rule() const { return true; }
-
 at::Tensor FusionCategory::fusion_tensor(const Sector&, const Sector&, const Sector&,
                                          const c10::Device&, int64_t) const {
   throw not_implemented_error("Category " + name_ + " has no Clebsch-Gordan tensor.");

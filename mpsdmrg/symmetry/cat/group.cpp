@@ -8,15 +8,6 @@
 
 namespace sym {
 
-namespace {
-
-// One integer naming the device a cached tensor lives on.
-int64_t device_code(const c10::Device& device) {
-  return static_cast<int64_t>(device.type()) * 1000 + device.index();
-}
-
-}  // namespace
-
 Group::Group(std::string type_name, FusionStyle fusion_style, BraidingStyle braiding_style,
              Sector trivial_sector, std::string name)
     : FusionCategory(std::move(type_name), fusion_style, braiding_style, std::move(trivial_sector),

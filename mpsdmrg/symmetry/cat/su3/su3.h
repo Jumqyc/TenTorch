@@ -54,8 +54,7 @@ class SU3Symmetry : public Group {
   std::vector<Sector> fusion_outcomes(const Sector& a, const Sector& b) const override;
   int64_t sector_dim(const Sector& a) const override;
   // SU(3) pairs the associators of a vertex with multiplicity into matrices over its copy spaces,
-  // so the chain closed form does not apply and the diagram weight declines for this category.
-  bool categorical_chain_rule() const override { return false; }
+  // which the diagram weight contracts copy by copy.
   at::Tensor fusion_tensor(const Sector& a, const Sector& b, const Sector& c,
                            const c10::Device& device, int64_t copy = 0) const override;
   int64_t n_symbol(const Sector& a, const Sector& b, const Sector& c) const override;

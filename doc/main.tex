@@ -14,6 +14,17 @@
 \newcommand{\code}[1]{\texttt{\detokenize{#1}}}
 \newcommand{\SU}[1]{\mathrm{SU}(#1)}
 
+% Sector colours of the worked examples: the colour of a charge, wherever it appears,
+% is the sector it belongs to. Blue is j=0, orange j=1/2, green j=1, purple j=3/2.
+\definecolor{secZero}{RGB}{0,114,178}
+\definecolor{secHalf}{RGB}{213,94,0}
+\definecolor{secOne}{RGB}{0,158,115}
+\definecolor{secThreeHalf}{RGB}{123,78,168}
+\newcommand{\secZ}[1]{\textcolor{secZero}{#1}}
+\newcommand{\secH}[1]{\textcolor{secHalf}{#1}}
+\newcommand{\secO}[1]{\textcolor{secOne}{#1}}
+\newcommand{\secT}[1]{\textcolor{secThreeHalf}{#1}}
+
 % The left-nested rank-3 fusion tree ((V_1 V_2) V_3) -> 0, labelled by the two leg
 % charges it fuses (#1, #2), the third leg charge (#3) and the inner charge (#4).
 \newcommand{\fusiontreepic}[4]{%

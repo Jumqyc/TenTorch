@@ -339,12 +339,6 @@ namespace sym
       return static_cast<int64_t>(std::hash<std::string>{}(text));
     }
 
-    // The code that identifies a device among the tables of the engine.
-    int64_t device_code(const c10::Device &device)
-    {
-      return static_cast<int64_t>(device.type()) * 1000 + (device.has_index() ? device.index() : -1);
-    }
-
     // A stable identity for a group object. The table of identities keeps the object alive, so a
     // released group cannot hand its address to the next one.
     int64_t group_id(const std::shared_ptr<FusionCategory> &group)
@@ -1662,38 +1656,15 @@ namespace sym
 #endif
         // The categorical route covers a two-operand contraction that glues at least one leg: the
         // operands are permuted so their shared legs come first, their shared couplings are
-        // matched, and the junction between the two free parts is one associator times the loop
-        // weight of the shared block, read off the category's F and R symbols.
-        std::vector<int64_t> shared_left;
-        std::vector<int64_t> shared_right;
-        std::vector<int8_t> left_dual;
-        std::vector<int8_t> right_dual;
-        std::vector<int8_t> out_dual;
-        std::vector<int64_t> out_left_axis(labels[0].size(), -1);
-        std::vector<int64_t> out_right_axis(labels[1].size(), -1);
+        // matched, and the junction between the two free parts is the recoupling of the category's
+        // associators and braidings.
+        PairTree left_tree;
+        PairTree right_tree;
+        Gluing glue;
         if (n_operands == 2) {
-          for (const Leg& leg : tensors[0].legs()) left_dual.push_back(leg.qconj() == -1 ? 1 : 0);
-          for (const Leg& leg : tensors[1].legs()) right_dual.push_back(leg.qconj() == -1 ? 1 : 0);
-          for (const Leg& leg : out_legs) out_dual.push_back(leg.qconj() == -1 ? 1 : 0);
-          // The axis each operand's leg occupies in the output, so the operands' free legs can be
-          // listed in the output's order; a leg the output keeps and both operands share has an
-          // axis here too, and is excluded from the glued legs below.
-          for (std::size_t axis = 0; axis < labels[0].size(); ++axis) {
-            const auto in_out = std::find(out.begin(), out.end(), labels[0][axis]);
-            if (in_out != out.end()) out_left_axis[axis] = in_out - out.begin();
-          }
-          for (std::size_t axis = 0; axis < labels[1].size(); ++axis) {
-            const auto in_out = std::find(out.begin(), out.end(), labels[1][axis]);
-            if (in_out != out.end()) out_right_axis[axis] = in_out - out.begin();
-          }
-          for (std::size_t axis = 0; axis < labels[0].size(); ++axis) {
-            if (out_left_axis[axis] >= 0) continue;
-            const int64_t label = labels[0][axis];
-            const auto in_right = std::find(labels[1].begin(), labels[1].end(), label);
-            if (in_right == labels[1].end()) continue;
-            shared_left.push_back(static_cast<int64_t>(axis));
-            shared_right.push_back(in_right - labels[1].begin());
-          }
+          left_tree = pair_tree(tensors[0].legs(), operand_trees[0]);
+          right_tree = pair_tree(tensors[1].legs(), operand_trees[1]);
+          glue = glue_legs(labels[0], labels[1], out);
         }
         // ``set_dense_path`` is the debug build's escape to the dense route, so a check can
         // evaluate the same operands on both routes; a normal build never takes that branch.
@@ -1705,15 +1676,10 @@ namespace sym
             combo.copies.push_back(group->carries_multiplicity() ? tree.copies()
                                                                  : std::vector<int64_t>{});
             std::complex<double> categorical = 0.0;
+            int decline = 0;
             if (categorical_route &&
-                diagram_weight(group, operand_trees[0].sectors(), operand_trees[0].inner(),
-                               operand_trees[0].coupled(), operand_trees[1].sectors(),
-                               operand_trees[1].inner(), operand_trees[1].coupled(),
-                               tree.sectors(), tree.inner(), tree.coupled(),
-                               operand_trees[0].copies(), operand_trees[1].copies(),
-                               tree.copies(), left_dual, right_dual, out_dual, shared_left,
-                               shared_right,
-                               out_left_axis, out_right_axis, device, categorical)) {
+                (decline = diagram_weight(group, left_tree, right_tree, pair_tree(out_legs, tree),
+                                          glue, device, categorical)) == 0) {
               combo.scalars.push_back(categorical);
               continue;
             }
@@ -1727,12 +1693,10 @@ namespace sym
 #else
             throw not_implemented_error(
                 "this build has no dense route: the categorical route declined this contraction "
-                "(guard " + std::to_string(sym::diagram_weight_decline()) + ", " +
-                std::to_string(shared_left.size()) + " glued, left " +
-                std::to_string(tensors[0].legs().size()) + ", right " +
-                std::to_string(tensors[1].legs().size()) + ", out " +
-                std::to_string(out_legs.size()) +
-                ", route attempted: " + std::to_string(categorical_route ? 1 : 0) +
+                "(guard " + std::to_string(decline) + ", " + std::to_string(n_operands) +
+                " operands, " + std::to_string(glue.left.size()) + " glued, " +
+                std::to_string(out_legs.size()) + " out, route attempted: " +
+                std::to_string(categorical_route ? 1 : 0) +
                 "), so rebuild with DENSEPATH=1 to fall back to it");
 #endif
           }

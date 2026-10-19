@@ -34,6 +34,11 @@ class not_implemented_error : public std::runtime_error {
   using std::runtime_error::runtime_error;
 };
 
+// One integer naming the device a cached tensor lives on.
+inline int64_t device_code(const c10::Device& device) {
+  return static_cast<int64_t>(device.type()) * 1000 + device.index();
+}
+
 // The sector as a Python tuple, so it stays a hashable key on the Python side.
 inline py::tuple to_python(const Sector& sector) {
   py::tuple out(sector.size());
@@ -95,7 +100,7 @@ class FusionCategory {
                                    const c10::Device& device, int64_t copy = 0) const;
   // The associator: the amplitudes that rewrite the coupling ((a b) c) -> d into (a (b c)) -> d
   // through the channels e = (a b) and f = (b c).  The result carries one amplitude per
-  // combination of the multiplicities, in the shape (N^e_ab, N^f_bc, N^d_ec, N^d_af), so that a
+  // combination of the multiplicities, in the shape (N^e_ab, N^d_ec, N^f_bc, N^d_af), so that a
   // graph contraction reads the amplitude of every copy combination on its own; it is an empty
   // tensor when the move is impossible.
   virtual at::Tensor associator(const Sector& a, const Sector& b, const Sector& c, const Sector& d,
@@ -115,13 +120,6 @@ class FusionCategory {
   // which is how an inner product is read without a Clebsch-Gordan tensor.
   virtual at::Tensor invariant_form(const Sector& a, const c10::Device& device) const;
 
-  // Whether the chain closed form of the diagram weight is exact for this category.
-  //
-  // That form multiplies one scalar per recoupling step and folds the duality of a glued pair in
-  // through ``dual_sign``.  A category whose associators pair into matrices over its copy spaces
-  // needs the copy contraction instead, and reports false here so the diagram weight declines and
-  // the caller keeps its Clebsch-Gordan route.
-  virtual bool categorical_chain_rule() const;
   // Drop whatever memo tables the category keeps; a category with none need not override it.
   virtual void clear_caches() const {}
   /// The component of a coupled multiplet the reduced blocks are stored at.

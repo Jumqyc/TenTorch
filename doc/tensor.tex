@@ -151,30 +151,32 @@ A block is fixed by a charge on each leg. It is nonzero only when the tree can b
 \begin{example}
 Let $G=\mathsf{SU}(2)$ and consider an invariant rank-3 tensor $T\in V_1\otimes V_2\otimes V_3$ with
 \begin{align}
-    V_1 = 7\cdot(0)\oplus 5\cdot(\tfrac12)\oplus 3\cdot(1)\oplus 1\cdot(\tfrac32),\qquad
-    V_2 = (\tfrac12),\qquad
+    V_1 = 7\cdot\secZ{(0)}\oplus 5\cdot\secH{(\tfrac12)}\oplus 3\cdot\secO{(1)}\oplus 1\cdot\secT{(\tfrac32)},\qquad
+    V_2 = \secH{(\tfrac12)},\qquad
     V_3 = V_1^*.
 \end{align}
-The bond spaces have dimension $7+5\cdot 2+3\cdot 3+1\cdot 4=30$, so a dense array for $T$ has
+Every charge carries the colour of its sector: \textcolor{secZero}{$j=0$}, \textcolor{secHalf}{$j=\tfrac12$}, \textcolor{secOne}{$j=1$}, \textcolor{secThreeHalf}{$j=\tfrac32$}. The bond spaces have dimension $7+5\cdot 2+3\cdot 3+1\cdot 4=30$, so a dense array for $T$ has
 \begin{align}
     30\times 2\times 30 = 1800 \text{ entries},\qquad 1800\times 16\ \mathrm{B} = 28.8\ \mathrm{kB}
 \end{align}
 in complex double precision. Of the $4\times 1\times 4=16$ combinations of leg charges only six can fuse to the trivial charge $a=0$; those six are
 \begin{center}
-    \begin{tabular}{m{2.6cm}cc}
+    % Each tree is 32pt above and below its baseline, so a row carries 3.6em of extra
+    % depth; the first row also takes a zero-width strut to clear the header rule.
+    \begin{tabular}{ccc}
         tree & vector entries & stored numbers \\
         \hline
-        \fusiontreepic{$0$}{$\tfrac12$}{$\tfrac12$}{$\tfrac12$} & $7\cdot 2\cdot 10 = 140$ & $7\cdot 1\cdot 5 = 35$ \\[2em]
-        \fusiontreepic{$\tfrac12$}{$\tfrac12$}{$0$}{$0$} & $10\cdot 2\cdot 7 = 140$ & $5\cdot 1\cdot 7 = 35$ \\[2em]
-        \fusiontreepic{$\tfrac12$}{$\tfrac12$}{$1$}{$1$} & $10\cdot 2\cdot 9 = 180$ & $5\cdot 1\cdot 3 = 15$ \\[2em]
-        \fusiontreepic{$1$}{$\tfrac12$}{$\tfrac12$}{$\tfrac12$} & $9\cdot 2\cdot 10 = 180$ & $3\cdot 1\cdot 5 = 15$ \\[2em]
-        \fusiontreepic{$1$}{$\tfrac12$}{$\tfrac32$}{$\tfrac32$} & $9\cdot 2\cdot 4 = 72$ & $3\cdot 1\cdot 1 = 3$ \\[2em]
-        \fusiontreepic{$\tfrac32$}{$\tfrac12$}{$1$}{$1$} & $4\cdot 2\cdot 9 = 72$ & $1\cdot 1\cdot 3 = 3$ \\
+        \fusiontreepic{\secZ{$0$}}{\secH{$\tfrac12$}}{\secH{$\tfrac12$}}{\secH{$\tfrac12$}}\rule{0pt}{3.6em} & $\secZ{7}\cdot\secH{2}\cdot\secH{10} = 140$ & $\secZ{7}\cdot\secH{1}\cdot\secH{5} = 35$ \\[3.6em]
+        \fusiontreepic{\secH{$\tfrac12$}}{\secH{$\tfrac12$}}{\secZ{$0$}}{\secZ{$0$}} & $\secH{10}\cdot\secH{2}\cdot\secZ{7} = 140$ & $\secH{5}\cdot\secH{1}\cdot\secZ{7} = 35$ \\[3.6em]
+        \fusiontreepic{\secH{$\tfrac12$}}{\secH{$\tfrac12$}}{\secO{$1$}}{\secO{$1$}} & $\secH{10}\cdot\secH{2}\cdot\secO{9} = 180$ & $\secH{5}\cdot\secH{1}\cdot\secO{3} = 15$ \\[3.6em]
+        \fusiontreepic{\secO{$1$}}{\secH{$\tfrac12$}}{\secH{$\tfrac12$}}{\secH{$\tfrac12$}} & $\secO{9}\cdot\secH{2}\cdot\secH{10} = 180$ & $\secO{3}\cdot\secH{1}\cdot\secH{5} = 15$ \\[3.6em]
+        \fusiontreepic{\secO{$1$}}{\secH{$\tfrac12$}}{\secT{$\tfrac32$}}{\secT{$\tfrac32$}} & $\secO{9}\cdot\secH{2}\cdot\secT{4} = 72$ & $\secO{3}\cdot\secH{1}\cdot\secT{1} = 3$ \\[3.6em]
+        \fusiontreepic{\secT{$\tfrac32$}}{\secH{$\tfrac12$}}{\secO{$1$}}{\secO{$1$}} & $\secT{4}\cdot\secH{2}\cdot\secO{9} = 72$ & $\secT{1}\cdot\secH{1}\cdot\secO{3} = 3$ \\
         \hline
         total & $784$ & $106$
     \end{tabular}
 \end{center}
-Each row of the table is one block, drawn in the first column as a fusion tree: it fuses $V_1$ with $V_2$ first, carries the inner charge $b$ on the edge between the two vertices, and fuses the result with $V_3$ to the trivial charge $0$ at the root, while its leaves are labelled by the leg charges $a_1,a_2,a_3$.
+Each row of the table is one block, drawn in the first column as a fusion tree: it fuses $V_1$ with $V_2$ first, carries the inner charge $b$ on the edge between the two vertices, and fuses the result with $V_3$ to the trivial charge $0$ at the root, while its leaves are labelled by the leg charges $a_1,a_2,a_3$. The colours show why the products in a row look as they do: the three factors of a row are the block dimensions of the three legs, so they carry the colours of the three leaves, and the factors of the stored count are the multiplicities of the same three legs.
 
 The two number columns count different things. The second is the size of the block if it were stored densely, the product of its three leg blocks; the third is the number of numbers the engine actually stores, one per triple of multiplets. The factor between them is $d_{a_1}d_{a_2}d_{a_3}$, the number of components each multiplet carries, which the Clebsch--Gordan coefficients of $b=a_1\otimes a_2$ rebuild from that single number.
 
@@ -189,4 +191,32 @@ The doubling is where the tree enters the numbers. Take the leg charges $(\tfrac
 What the tree does not change is how much is stored. The engine keeps one shape, the left-nested chain, so the only freedom is which leg sits at which position, and permuting the legs permutes the labels: every order gives eleven blocks and $171$ numbers. The tree decides which intermediate charge a block carries, and that charge decides which Clebsch--Gordan coefficient weights it; the two blocks that share a set of leg charges are exactly the pair an associator mixes when the tree is changed, which is what makes that mixing well defined.
 
 Where the tree does change the cost is in a contraction, because the intermediate charge sets the dimension of the bond that is summed over. Fusing the bond leg with a spin-$\tfrac12$ leg gives a bond of dimension $60$, fusing the two spin-$\tfrac12$ legs gives $4$, and fusing the two bond legs gives $900$. The same contraction therefore costs very differently depending on where the tree puts its vertices, and choosing the tree is choosing the order of the sums.
+\end{example}
+
+\begin{example}
+Every example so far was multiplicity-free. In $\mathsf{SU}(2)$ a product of two irreps contains each irrep at most once, so the inner charges fix the tree. $\mathsf{SU}(3)$ does not have that property, and the smallest tensor that shows the difference is three octets,
+\begin{align}
+    T\in 8\otimes 8\otimes 8,\qquad T\ \text{invariant}.
+\end{align}
+The dense array has $8\cdot 8\cdot 8=512$ entries, $8.2\ \mathrm{kB}$ in complex double precision. There is one leg-charge combination, $(8,8,8)$, and one inner charge: of the terms of
+\begin{align}
+    8\otimes 8=1\oplus 8\oplus 8\oplus 10\oplus\overline{10}\oplus 27
+\end{align}
+only $8$ fuses with the third octet to the trivial charge. The tensor still has two blocks, because the octet occurs twice on the right-hand side: the first vertex has two independent ways to couple the two octets to an octet, and the rest of the tree is common to both. The engine keeps them apart with a copy index $\kappa\in\{0,1\}$ at the vertex, which joins the leg charges and the inner charges in the block key,
+\begin{align}
+    (a_1,a_2,a_3\mid b\mid \kappa_1,\kappa_2)&=(8,8,8\mid 8\mid 0,0),\\
+    (a_1,a_2,a_3\mid b\mid \kappa_1,\kappa_2)&=(8,8,8\mid 8\mid 1,0),
+\end{align}
+the second copy index being zero because $8\otimes 8$ reaches the trivial charge once. Drawn, the two trees are the same picture and differ only in the copy index at the first vertex:
+\begin{center}
+    \begin{tabular}{cc}
+        \fusiontreepic{$8$}{$8$}{$8$}{$8$} & \fusiontreepic{$8$}{$8$}{$8$}{$8$} \\
+        $\kappa_1=0$ & $\kappa_1=1$
+    \end{tabular}
+\end{center}
+Each block is a single number, so $T$ stores two numbers, $32\ \mathrm{B}$, against $8.2\ \mathrm{kB}$ for the dense array: the symmetry removes a factor $256$.
+
+The copy index is the part of the label that storage would lose first. Without it the two blocks carry the same leg charges and the same inner charges, they are one block, and $T$ would be a single number, one of the two invariants. In general, for fixed leg charges and fixed inner charges the number of trees is the product of the multiplicities $n(b_L,b_R\to b_v)$ over the vertices, so a vertex that couples $k$ times multiplies the number of blocks by $k$.
+
+For $\mathsf{SU}(2)$ every multiplicity is one, which is why none of the block keys above carried anything after the inner charges. In $\mathsf{SU}(3)$ the copy index is a genuine part of the label: two blocks that differ only in it are exactly the pair a recoupling mixes, so the associator acts on them as a matrix in the copy space rather than as a scalar.
 \end{example}

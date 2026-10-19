@@ -2,54 +2,78 @@
 #include <complex>
 #include <cstdint>
 #include <memory>
+#include <tuple>
 #include <vector>
 
-#include "../symmetry/cat/cat.h"
+#include "../symmetry/tree/tree.h"
 
 namespace sym {
 
+// A splitting tree in TensorKit's normal form: the sector of every leg, one duality flag per leg,
+// the coupled charge of every inner vertex, the copy label of every vertex, and the sector the
+// tree couples to.  The leg sectors are the ones the engine's chain already carries, dualised
+// where the leg carries a dual.
+struct PairTree {
+  std::vector<Sector> uncoupled;
+  std::vector<bool> isdual;
+  std::vector<Sector> inner;
+  std::vector<int64_t> vertices;
+  Sector coupled;
+
+  bool operator<(const PairTree& other) const {
+    return std::tie(uncoupled, isdual, inner, vertices, coupled) <
+           std::tie(other.uncoupled, other.isdual, other.inner, other.vertices, other.coupled);
+  }
+};
+
+// How the legs of a two-operand contraction line up: the operand axes the two glue along, in the
+// left operand's leg order, and the output axis of every leg of each operand, minus one for a leg
+// that is glued instead of free.
+struct Gluing {
+  std::vector<int64_t> left;
+  std::vector<int64_t> right;
+  std::vector<int64_t> out_left;
+  std::vector<int64_t> out_right;
+
+  bool operator<(const Gluing& other) const {
+    return std::tie(left, right, out_left, out_right) <
+           std::tie(other.left, other.right, other.out_left, other.out_right);
+  }
+};
+
+// The diagram tree of one operand: its fusion tree, on the legs whose charges it holds.
+PairTree pair_tree(const std::vector<Leg>& legs, const FusionTree& tree);
+
+// The leg alignment of a two-operand contraction, read off the label every leg carries in each
+// operand and in the output.  Args:
+//   left_labels, right_labels: the label of every operand leg, in leg order.
+//   out_labels: the label of every output leg, in output order.
+Gluing glue_legs(const std::vector<int64_t>& left_labels, const std::vector<int64_t>& right_labels,
+                 const std::vector<int64_t>& out_labels);
+
 // The categorical weight of one output tree: the pairing of the two operands glued along their
 // shared legs with the output tree, evaluated from the associator, the braiding and the quantum
-// dimensions alone.  The operands and the output are left-nested chains, so a leg list, the
-// coupled charge of every inner vertex and the total charge describe each one completely.
+// dimensions alone.  The operands and the output are left-nested chains, so a tree describes each
+// one completely.
 //
 // Args:
 //   group: the fusion category the sectors belong to.
-//   left_legs, right_legs: the sector of every leg of the two operands, in leg order.
-//   left_inner, right_inner: the coupled charge of every inner vertex of the operand chain,
-//     `legs.size() - 2` of them; the coupled charge of the last vertex is `coupled`.
-//   left_coupled, right_coupled: the sector every operand leg fuses to.
-//   out_legs, out_inner, out_coupled: the same three descriptions of the output chain.
-//   shared_left, shared_right: the operand axes the two glue along, in the left's leg order.
-//   left_dual, right_dual, out_dual: one flag per leg of each operand and of the output, 1 when
-//     that leg carries the dual of its charges.
-//   out_left_axis, out_right_axis: the output axis of every operand leg, -1 when it is glued
-//     instead of free.
+//   left, right, out: the trees of the two operands and of the output.
+//   glue: the leg alignment of the three; its leg lists must be the ones the trees were built on.
 //   device: the device the category symbols are built on.
+//   weight: set to the weight when the block is evaluated, untouched otherwise.
 // Returns:
-//   True and `weight` when the block is evaluated.  False for a shape this routine does not
-//   cover (a leg both operands keep while the output names it), so the caller can fall back to
-//   the dense route.
-bool diagram_weight(const std::shared_ptr<FusionCategory>& group,
-                    const std::vector<Sector>& left_legs, const std::vector<Sector>& left_inner,
-                    const Sector& left_coupled, const std::vector<Sector>& right_legs,
-                    const std::vector<Sector>& right_inner, const Sector& right_coupled,
-                    const std::vector<Sector>& out_legs, const std::vector<Sector>& out_inner,
-                    const Sector& out_coupled, const std::vector<int64_t>& left_copies,
-                    const std::vector<int64_t>& right_copies,
-                    const std::vector<int64_t>& out_copies,
-                    const std::vector<int8_t>& left_dual, const std::vector<int8_t>& right_dual,
-                    const std::vector<int8_t>& out_dual,
-                    const std::vector<int64_t>& shared_left,
-                    const std::vector<int64_t>& shared_right,
-                    const std::vector<int64_t>& out_left_axis,
-                    const std::vector<int64_t>& out_right_axis, const c10::Device& device,
-                    std::complex<double>& weight);
+//   0 when the block is evaluated, otherwise the guard that declined it, so the caller keeps its
+//   Clebsch-Gordan route:
+//     1  the output does not name every free leg of both operands exactly once
+//     2  a move of the recoupling is impossible
+//     10 a sector of the diagram is not its own dual
+//     11 a glued pair carries the dual on both sides or on neither
+int diagram_weight(const std::shared_ptr<FusionCategory>& group, const PairTree& left,
+                   const PairTree& right, const PairTree& out, const Gluing& glue,
+                   const c10::Device& device, std::complex<double>& weight);
 
-// Drop the cached per-tree weights.
+// Drop the cached weights.
 void clear_weight_cache();
-
-// The guard that declined the last call to ``diagram_weight``, 0 when no guard did.
-int diagram_weight_decline();
 
 }  // namespace sym
