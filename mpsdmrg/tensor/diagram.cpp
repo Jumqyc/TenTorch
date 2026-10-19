@@ -1,6 +1,7 @@
 #include "diagram.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -21,23 +22,74 @@ int diagram_weight_decline() { return g_weight_decline; }
 
 namespace {
 
-// The recoupling matrix of one adjacent swap: rows over the old coupling, columns over the new.
-using SwapMatrix = std::map<Sector, std::map<Sector, std::complex<double>>>;
+// The recoupling matrix of one adjacent swap: the entries of one swap are the copy label of the
+// rewritten vertex and of the vertex after it, and the labels the swap turns them into, so the key
+// is (old, after, fresh, after').  A label of minus one means the swap leaves that copy alone.  A
+// multiplicity-free category has the single entry (0, 0, 0, 0).
+using CopyEntry = std::map<std::array<int64_t, 4>, std::complex<double>>;
+using SwapMatrix = std::map<Sector, std::map<Sector, CopyEntry>>;
 
-// A chain during the permutation: its inner couplings, the coupled charge excluded, and its
-// coefficient.
+// A chain during the permutation: its inner couplings, the coupled charge excluded, the copy label
+// of every vertex (one per coupling, the coupled charge included), and its coefficient.
 struct ChainState {
   std::vector<Sector> inner;
+  std::vector<int64_t> copies;
   std::complex<double> value;
 };
 
-// The single entry of a one-element symbol tensor, real or complex.  False when the category
-// pairs the symbol into a matrix over fusion copies, which this routine does not evaluate.
-bool symbol_scalar(const at::Tensor& symbol, std::complex<double>& out) {
-  if (symbol.numel() != 1) return false;
-  const c10::complex<double> value = symbol.item().toComplexDouble();
-  out = std::complex<double>(value.real(), value.imag());
-  return true;
+// A splitting tree in TensorKit's normal form: the sector of every leg, one duality flag per leg,
+// the couplings, the copy label of every vertex, and the sector the tree couples to.  The leg
+// sectors are the ones the engine's chain already carries, dualised where the leg carries a dual.
+struct PairTree {
+  std::vector<Sector> uncoupled;
+  std::vector<int8_t> isdual;
+  std::vector<Sector> inner;
+  std::vector<int64_t> vertices;
+  Sector coupled;
+};
+
+// One evaluated pair: the tree that stayed in the codomain, the tree the bends moved into the
+// domain, and the coefficient of the whole move.
+struct TreeTerm {
+  PairTree kept;
+  PairTree other;
+  std::complex<double> value;
+};
+
+// The two associators of a swap and the braiding of the exchanged charge, contracted into the
+// amplitudes of the four vertices the swap touches.
+at::Tensor contract_swap(const at::Tensor& first, const at::Tensor& exchange,
+                         const at::Tensor& second) {
+  return at::einsum("abcd,cr,pqrd->abpq", {first, exchange, second});
+}
+
+// The nonzero entries of a copy tensor, one-based labels, as (axis labels) -> value.
+CopyEntry copy_entry(const at::Tensor& tensor) {
+  CopyEntry entry;
+  const at::Tensor flat = tensor.contiguous();
+  std::vector<int64_t> labels(static_cast<std::size_t>(flat.dim()), 1);
+  while (true) {
+    at::Tensor scalar = flat;
+    // Selecting always drops axis zero, so the next select reads the label of the next axis.
+    for (std::size_t axis = 0; axis < labels.size(); ++axis) {
+      scalar = scalar.select(0, labels[axis] - 1);
+    }
+    const c10::complex<double> value = scalar.item<c10::complex<double>>();
+    if (value.real() != 0.0 || value.imag() != 0.0) {
+      std::array<int64_t, 4> key{0, 0, 0, 0};
+      for (std::size_t axis = 0; axis < labels.size() && axis < 4; ++axis) {
+        key[axis] = labels[axis] - 1;
+      }
+      entry[key] = std::complex<double>(value.real(), value.imag());
+    }
+    std::size_t axis = 0;
+    for (; axis < labels.size(); ++axis) {
+      if (++labels[axis] <= flat.size(axis)) break;
+      labels[axis] = 1;
+    }
+    if (axis == labels.size()) break;
+  }
+  return entry;
 }
 
 // One adjacent swap of the legs (position, position + 1) of a chain, both couplings read off the
@@ -49,10 +101,14 @@ std::optional<SwapMatrix> move_matrix(
   const Sector left = legs[position];
   const Sector right = legs[position + 1];
   if (position == 0) {
+    // Swapping the first two legs only relabels the copy of their vertex; the label of the vertex
+    // after it is untouched, which the zero entries say.  The braiding's second axis is the label
+    // the swapped vertex takes.
     const Sector old = inner.empty() ? coupled : inner[0];
-    std::complex<double> exchange;
-    if (!symbol_scalar(group->braiding(left, right, old, device), exchange)) return std::nullopt;
-    out[old][old] = exchange;
+    const CopyEntry entry = copy_entry(group->braiding(left, right, old, device));
+    for (const auto& [labels, value] : entry) {
+      out[old][old][{labels[0], -1, labels[1], -1}] += value;
+    }
     return out;
   }
   const Sector before = position == 1 ? legs[0] : inner[position - 2];
@@ -60,24 +116,20 @@ std::optional<SwapMatrix> move_matrix(
   for (const Sector& f : group->fusion_outcomes(left, right)) {
     const std::vector<Sector> tail = group->fusion_outcomes(before, f);
     if (std::find(tail.begin(), tail.end(), after) == tail.end()) continue;
-    std::complex<double> exchange;
-    if (!symbol_scalar(group->braiding(left, right, f, device), exchange)) return std::nullopt;
+    const at::Tensor exchange = group->braiding(left, right, f, device);
     for (const Sector& old : group->fusion_outcomes(before, left)) {
       const std::vector<Sector> old_tail = group->fusion_outcomes(old, right);
       if (std::find(old_tail.begin(), old_tail.end(), after) == old_tail.end()) continue;
-      std::complex<double> first;
-      if (!symbol_scalar(group->associator(before, left, right, after, old, f, device), first)) {
-        return std::nullopt;
-      }
+      const at::Tensor first = group->associator(before, left, right, after, old, f, device);
       for (const Sector& fresh : group->fusion_outcomes(before, right)) {
         const std::vector<Sector> fresh_tail = group->fusion_outcomes(fresh, left);
         if (std::find(fresh_tail.begin(), fresh_tail.end(), after) == fresh_tail.end()) continue;
-        std::complex<double> second;
-        if (!symbol_scalar(group->associator(before, right, left, after, fresh, f, device),
-                           second)) {
-          return std::nullopt;
+        const at::Tensor second =
+            group->associator(before, right, left, after, fresh, f, device);
+        const CopyEntry entry = copy_entry(contract_swap(first, exchange, second));
+        for (const auto& [labels, value] : entry) {
+          out[old][fresh][labels] += value;
         }
-        out[old][fresh] += first * exchange * second;
       }
     }
   }
@@ -88,14 +140,17 @@ std::optional<SwapMatrix> move_matrix(
 // not a permutation of the legs or a symbol is not a scalar.
 std::optional<std::vector<ChainState>> permute_chain(
     const std::vector<Sector>& legs, const std::vector<Sector>& inner, const Sector& coupled,
-    const std::vector<int64_t>& order, const std::shared_ptr<FusionCategory>& group,
-    const c10::Device& device) {
+    const std::vector<int64_t>& copies, const std::vector<int64_t>& order,
+    const std::shared_ptr<FusionCategory>& group, const c10::Device& device) {
   if (order.size() != legs.size()) return std::nullopt;
+  if (!copies.empty() && copies.size() != legs.size() - 1) return std::nullopt;
   std::vector<int64_t> arrangement(legs.size());
   for (size_t axis = 0; axis < arrangement.size(); ++axis) {
     arrangement[axis] = static_cast<int64_t>(axis);
   }
-  std::vector<ChainState> states{{inner, std::complex<double>(1.0, 0.0)}};
+  const std::vector<int64_t> initial =
+      copies.empty() ? std::vector<int64_t>(legs.size() - 1, 0) : copies;
+  std::vector<ChainState> states{{inner, initial, std::complex<double>(1.0, 0.0)}};
   for (size_t wanted = 0; wanted < order.size(); ++wanted) {
     size_t at = wanted;
     while (at < arrangement.size() && arrangement[at] != order[wanted]) ++at;
@@ -112,14 +167,24 @@ std::optional<std::vector<ChainState>> permute_chain(
         // The first swap of a two-leg chain couples the two legs, so the moved state gains that
         // coupling instead of rewriting an existing one.
         const Sector old = slot < state.inner.size() ? state.inner[slot] : coupled;
+        const int64_t old_copy = state.copies.at(slot);
+        const int64_t after_copy = slot + 1 < state.copies.size() ? state.copies.at(slot + 1) : 1;
         const auto row = matrix->find(old);
         if (row == matrix->end()) continue;
-        for (const auto& [fresh, factor] : row->second) {
-          ChainState moved = state;
-          // A two-leg chain has no inner vertex, so its swap leaves the coupling list empty.
-          if (slot < moved.inner.size()) moved.inner[slot] = fresh;
-          moved.value *= factor;
-          next.push_back(std::move(moved));
+        for (const auto& [fresh, entry] : row->second) {
+          for (const auto& [labels, factor] : entry) {
+            if (labels[0] != old_copy) continue;
+            if (labels[1] != -1 && labels[1] != after_copy) continue;
+            ChainState moved = state;
+            // A two-leg chain has no inner vertex, so its swap leaves the coupling list empty.
+            if (slot < moved.inner.size()) moved.inner[slot] = fresh;
+            if (labels[2] != -1) moved.copies[slot] = labels[2];
+            if (labels[3] != -1 && slot + 1 < moved.copies.size()) {
+              moved.copies[slot + 1] = labels[3];
+            }
+            moved.value *= factor;
+            next.push_back(std::move(moved));
+          }
         }
       }
       states = std::move(next);
@@ -130,110 +195,131 @@ std::optional<std::vector<ChainState>> permute_chain(
   return states;
 }
 
-// The operand's legs in the order its chain is moved to: the shared legs first, then the free
-// legs sorted by the axis each one occupies in the output.
-std::vector<int64_t> moved_order(const std::vector<int64_t>& shared,
-                                 const std::vector<int64_t>& out_axis) {
-  std::vector<int64_t> order = shared;
-  std::vector<int64_t> free_axes;
-  for (int64_t axis = 0; axis < static_cast<int64_t>(out_axis.size()); ++axis) {
-    if (out_axis[axis] >= 0) free_axes.push_back(axis);
+// The empty tree: no legs, coupled to the trivial sector.
+PairTree empty_tree(const std::shared_ptr<FusionCategory>& group) {
+  PairTree tree;
+  tree.coupled = group->trivial_sector();
+  return tree;
+}
+
+// Whether two trees are the same basis element of one fusion space: the legs, their dualities, the
+// couplings and the vertex labels.  The coupled sector is kept out of it, because a bend leaves the
+// two trees of a pair coupled to a channel of its own.
+bool same_shape(const PairTree& one, const PairTree& other) {
+  return one.uncoupled == other.uncoupled && one.isdual == other.isdual &&
+         one.inner == other.inner && one.vertices == other.vertices;
+}
+
+// The same identity including the coupled sector, which two trees of the same block share.
+bool same_tree(const PairTree& one, const PairTree& other) {
+  return same_shape(one, other) && one.coupled == other.coupled;
+}
+
+// The Frobenius-Schur phase of a sector: the sign of the associator that carries the sector, its
+// dual and two units, which is how TensorKit defines it.  Bending a dual leg costs it.
+double frobenius_schur_phase(const std::shared_ptr<FusionCategory>& group, const Sector& sector,
+                             const c10::Device& device) {
+  const Sector unit = group->trivial_sector();
+  const at::Tensor symbol =
+      group->associator(sector, group->dual_sector(sector), sector, sector, unit, unit, device);
+  if (symbol.numel() == 0) return 1.0;
+  return symbol.reshape({-1}).select(0, 0).item<c10::complex<double>>().real() < 0.0 ? -1.0 : 1.0;
+}
+
+// One bend, TensorKit's ``bendright``: the last leg of ``first`` leaves as the dual leg of
+// ``second``, and both trees then couple to the channel the split vertex sat under.  The copy
+// labels come from the associator of that vertex: its first axis is the label the leg leaves
+// behind and its second is the label the new vertex of ``second`` takes.
+std::vector<std::pair<std::pair<PairTree, PairTree>, std::complex<double>>> bend_right(
+    const std::shared_ptr<FusionCategory>& group, const PairTree& first, const PairTree& second,
+    const c10::Device& device) {
+  std::vector<std::pair<std::pair<PairTree, PairTree>, std::complex<double>>> out;
+  const int64_t n1 = static_cast<int64_t>(first.uncoupled.size());
+  const int64_t n2 = static_cast<int64_t>(second.uncoupled.size());
+  if (n1 == 0) return out;
+  const Sector& c = first.coupled;
+  const Sector a =
+      n1 == 1 ? group->trivial_sector() : (n1 == 2 ? first.uncoupled[0] : first.inner.back());
+  const Sector& b = first.uncoupled.back();
+  double scale = std::sqrt(group->quantum_dim(b));
+  if (first.isdual.back() != 0) {
+    scale *= frobenius_schur_phase(group, group->dual_sector(b), device);
   }
-  std::stable_sort(free_axes.begin(), free_axes.end(),
-                   [&out_axis](int64_t one, int64_t two) { return out_axis[one] < out_axis[two]; });
-  order.insert(order.end(), free_axes.begin(), free_axes.end());
-  return order;
+  const at::Tensor symbol =
+      group->associator(a, b, group->dual_sector(b), a, c, group->trivial_sector(), device);
+  if (symbol.numel() == 0) return out;
+  PairTree head;
+  head.uncoupled.assign(first.uncoupled.begin(), first.uncoupled.end() - 1);
+  head.isdual.assign(first.isdual.begin(), first.isdual.end() - 1);
+  if (n1 > 2) head.inner.assign(first.inner.begin(), first.inner.end() - 1);
+  if (n1 > 1) head.vertices.assign(first.vertices.begin(), first.vertices.end() - 1);
+  head.coupled = a;
+  const int64_t head_label = n1 > 1 ? first.vertices.back() : 0;
+  for (const auto& [labels, value] : copy_entry(symbol)) {
+    if (labels[0] != head_label) continue;
+    PairTree grown;
+    grown.uncoupled = second.uncoupled;
+    grown.uncoupled.push_back(group->dual_sector(b));
+    grown.isdual = second.isdual;
+    grown.isdual.push_back(first.isdual.back() == 0 ? 1 : 0);
+    if (n2 > 1) {
+      grown.inner = second.inner;
+      grown.inner.push_back(c);
+    }
+    if (n2 > 0) {
+      grown.vertices = second.vertices;
+      grown.vertices.push_back(labels[1]);
+    }
+    grown.coupled = a;
+    out.push_back({{head, grown}, scale * value});
+  }
+  return out;
 }
 
-// The couplings of the left free part that let its chain fuse to the shared block's own charge.
-std::vector<std::vector<Sector>> free_frames(const std::vector<Sector>& legs, const Sector& block,
-                                             const std::shared_ptr<FusionCategory>& group) {
-  if (legs.size() < 2) return {{}};
-  std::vector<std::vector<Sector>> frames;
-  std::vector<Sector> prefix;
-  std::function<void(int64_t, const Sector&)> extend = [&](int64_t axis, const Sector& reached) {
-    if (axis >= static_cast<int64_t>(legs.size()) - 1) {
-      const std::vector<Sector> fused = group->fusion_outcomes(reached, legs.back());
-      if (std::find(fused.begin(), fused.end(), block) != fused.end()) frames.push_back(prefix);
-      return;
-    }
-    const std::vector<Sector> outcomes = axis == 1 ? group->fusion_outcomes(legs[0], legs[1])
-                                                   : group->fusion_outcomes(reached, legs[axis]);
-    for (const Sector& outcome : outcomes) {
-      prefix.push_back(outcome);
-      extend(axis + 1, outcome);
-      prefix.pop_back();
-    }
-  };
-  extend(1, legs[0]);
-  return frames;
-}
-
-// The couplings a chain carries once one of its legs stops coming from an operand of its own:
-// fusing the running total with each following leg in turn, and ending on the output's total.
-std::vector<std::vector<Sector>> concat_frames(const std::vector<Sector>& legs,
-                                               const Sector& start, const Sector& total,
-                                               const std::shared_ptr<FusionCategory>& group) {
-  std::vector<std::vector<Sector>> frames;
-  std::vector<Sector> prefix;
-  std::function<void(std::size_t, const Sector&)> extend = [&](std::size_t index,
-                                                              const Sector& current) {
-    for (const Sector& fused : group->fusion_outcomes(current, legs[index])) {
-      if (index + 1 == legs.size()) {
-        if (fused == total) frames.push_back(prefix);
-      } else {
-        prefix.push_back(fused);
-        extend(index + 1, fused);
-        prefix.pop_back();
+// Every pair a tree reaches when ``count`` of its codomain legs are bent away, with the coefficient
+// of the bends.
+std::vector<std::pair<std::pair<PairTree, PairTree>, std::complex<double>>> repartition(
+    const std::shared_ptr<FusionCategory>& group, const PairTree& first, const PairTree& second,
+    int64_t count, const c10::Device& device) {
+  std::vector<std::pair<std::pair<PairTree, PairTree>, std::complex<double>>> states{
+      {{first, second}, std::complex<double>(1.0, 0.0)}};
+  const int64_t steps = static_cast<int64_t>(first.uncoupled.size()) - count;
+  for (int64_t step = 0; step < steps && !states.empty(); ++step) {
+    std::vector<std::pair<std::pair<PairTree, PairTree>, std::complex<double>>> grown;
+    for (const auto& [pair, value] : states) {
+      for (const auto& [moved, coefficient] : bend_right(group, pair.first, pair.second, device)) {
+        grown.push_back({moved, value * coefficient});
       }
     }
-  };
-  if (!legs.empty()) extend(0, start);
-  return frames;
-}
-
-// The coupling an operand's chain carries at one position of its shared prefix.  A prefix that
-// runs to the operand's last leg ends on that leg's total charge, which the tree keeps outside
-// its inner list.
-std::optional<Sector> prefix_coupling(const std::vector<Sector>& inner, const Sector& coupled,
-                                      int64_t index) {
-  if (index < static_cast<int64_t>(inner.size())) return inner[index];
-  if (index == static_cast<int64_t>(inner.size())) return coupled;
-  return std::nullopt;
-}
-
-// The couplings of a chain at one index, with the last leg's total charge standing in for the
-// entry the inner list does not carry.
-const Sector& chain_coupling(const std::vector<Sector>& inner, const Sector& coupled, int64_t index) {
-  return index < static_cast<int64_t>(inner.size()) ? inner[index] : coupled;
-}
-
-// The scalar the junction carries: the loop weight of the shared block, and the recoupling that
-// moves the block through the left free chain one vertex at a time, each step one associator.
-// Empty when a step's associator is not a scalar.
-std::optional<std::complex<double>> junction_scale(
-    const Sector& block, const std::vector<Sector>& inner, const Sector& coupled,
-    const std::vector<Sector>& frame, const std::vector<Sector>& free_legs, int64_t shared,
-    const std::shared_ptr<FusionCategory>& group, const c10::Device& device) {
-  // The block that closes the loop also fixes the local frame, and a loop whose pair carries the
-  // duality on the left does not fuse back to the trivial sector without the self-duality sign.
-  const double loop = 1.0 / std::sqrt(group->quantum_dim(block));
-  std::complex<double> product = 1.0;
-  Sector previous = free_legs.empty() ? block : free_legs[0];
-  for (std::size_t step = 0; step < frame.size() && step + 1 < free_legs.size(); ++step) {
-    std::complex<double> one;
-    const Sector& after = chain_coupling(inner, coupled, shared + static_cast<int64_t>(step));
-    const Sector& before = chain_coupling(inner, coupled, shared - 1 + static_cast<int64_t>(step));
-    const at::Tensor symbol =
-        group->associator(block, previous, free_legs[step + 1], after, before, frame[step], device);
-    // An empty symbol says this fusion channel does not exist, so the frame contributes nothing:
-    // the recoupling runs over the frames whose whole chain of associators exists.
-    if (symbol.numel() == 0) return std::complex<double>(0.0, 0.0);
-    if (!symbol_scalar(symbol, one)) return std::nullopt;
-    product *= one;
-    previous = frame[step];
+    states = std::move(grown);
   }
-  return product * loop;
+  return states;
+}
+
+// Bring a tree into the leg order ``target`` by the braiding of every adjacent swap.
+std::vector<std::pair<PairTree, std::complex<double>>> permute_tree(
+    const std::shared_ptr<FusionCategory>& group, const PairTree& tree,
+    const std::vector<int64_t>& target, const c10::Device& device) {
+  std::vector<std::pair<PairTree, std::complex<double>>> out;
+  if (tree.uncoupled.empty()) {
+    out.push_back({tree, std::complex<double>(1.0, 0.0)});
+    return out;
+  }
+  const auto states =
+      permute_chain(tree.uncoupled, tree.inner, tree.coupled, tree.vertices, target, group, device);
+  if (!states.has_value()) return out;
+  for (const ChainState& state : *states) {
+    PairTree moved;
+    for (int64_t axis : target) {
+      moved.uncoupled.push_back(tree.uncoupled[axis]);
+      moved.isdual.push_back(tree.isdual[axis]);
+    }
+    moved.inner = state.inner;
+    moved.vertices = state.copies;
+    moved.coupled = tree.coupled;
+    out.push_back({moved, state.value});
+  }
+  return out;
 }
 
 // One integer naming the device a cached weight belongs to.
@@ -247,8 +333,9 @@ using WeightKey = std::tuple<const FusionCategory*, std::vector<Sector>, std::ve
                              Sector, std::vector<Sector>, std::vector<Sector>, Sector,
                              std::vector<Sector>, std::vector<Sector>, Sector,
                              std::vector<int64_t>, std::vector<int64_t>, std::vector<int64_t>,
-                             std::vector<int64_t>, std::vector<int64_t>, std::vector<int8_t>,
-                             std::vector<int64_t>, std::vector<int64_t>, int64_t>;
+                             std::vector<int8_t>, std::vector<int8_t>, std::vector<int8_t>,
+                             std::vector<int64_t>, std::vector<int64_t>, std::vector<int64_t>,
+                             std::vector<int64_t>, int64_t>;
 
 std::map<WeightKey, std::optional<std::complex<double>>>& weight_cache() {
   static std::map<WeightKey, std::optional<std::complex<double>>> cache;
@@ -259,166 +346,126 @@ std::map<WeightKey, std::optional<std::complex<double>>>& weight_cache() {
 constexpr std::size_t kWeightCacheLimit = 1U << 20U;
 
 std::optional<std::complex<double>> compute_diagram_weight(
-    const std::shared_ptr<FusionCategory>& group, const std::vector<Sector>& left_legs, const std::vector<Sector>& left_inner,
-                    const Sector& left_coupled, const std::vector<Sector>& right_legs,
-                    const std::vector<Sector>& right_inner, const Sector& right_coupled,
-                    const std::vector<Sector>& out_legs, const std::vector<Sector>& out_inner,
-                    const Sector& out_coupled, const std::vector<int64_t>& left_copies,
-                    const std::vector<int64_t>& right_copies,
-                    const std::vector<int64_t>& out_copies,
-                    const std::vector<int64_t>& shared_left,
-                    const std::vector<int64_t>& shared_right,
-                    const std::vector<int8_t>& shared_dual,
-                    const std::vector<int64_t>& out_left_axis,
-                    const std::vector<int64_t>& out_right_axis, const c10::Device& device) {
-  const int64_t shared = static_cast<int64_t>(shared_left.size());
+    const std::shared_ptr<FusionCategory>& group, const std::vector<Sector>& left_legs,
+    const std::vector<Sector>& left_inner, const Sector& left_coupled,
+    const std::vector<Sector>& right_legs, const std::vector<Sector>& right_inner,
+    const Sector& right_coupled, const std::vector<Sector>& out_legs,
+    const std::vector<Sector>& out_inner, const Sector& out_coupled,
+    const std::vector<int64_t>& left_copies, const std::vector<int64_t>& right_copies,
+    const std::vector<int64_t>& out_copies, const std::vector<int8_t>& left_dual,
+    const std::vector<int8_t>& right_dual, const std::vector<int8_t>& out_dual,
+    const std::vector<int64_t>& shared_left, const std::vector<int64_t>& shared_right,
+    const std::vector<int64_t>& out_left_axis, const std::vector<int64_t>& out_right_axis,
+    const c10::Device& device) {
   g_weight_decline = 0;
-  if (!group->categorical_chain_rule()) {
-    g_weight_decline = 6;
+  // The weight below is exact only while the duality acts as the identity on every sector the
+  // diagram touches: a non-self-dual sector carries the phase of the conjugate basis into the
+  // recoupling, which this form does not model yet, so the caller keeps its Clebsch-Gordan route.
+  const auto identity_duality = [&group](const Sector& sector) {
+    return group->dual_sector(sector) == sector;
+  };
+  for (const std::vector<Sector>* tree : {&left_legs, &left_inner, &right_legs, &right_inner,
+                                         &out_legs, &out_inner}) {
+    for (const Sector& sector : *tree) {
+      if (!identity_duality(sector)) {
+        g_weight_decline = 10;
+        return std::nullopt;
+      }
+    }
+  }
+  if (!identity_duality(left_coupled) || !identity_duality(right_coupled) ||
+      !identity_duality(out_coupled)) {
+    g_weight_decline = 10;
     return std::nullopt;
   }
-  const int64_t left_free = static_cast<int64_t>(left_legs.size()) - shared;
-  const int64_t right_free = static_cast<int64_t>(right_legs.size()) - shared;
-  // A scalar output reaches this routine either as no legs at all or as a single trivial one,
-  // depending on how the caller enumerated its trees; neither carries a coupling tuple.
-  const bool scalar_output =
-      out_legs.empty() || (out_legs.size() == 1 && out_legs[0] == group->trivial_sector());
-  // A leg both operands keep in the output batches instead of gluing, which this routine does
-  // not model: its free legs would be counted twice.
-  if (scalar_output ? left_free + right_free != 0
-                    : static_cast<int64_t>(out_legs.size()) != left_free + right_free) {
+  // The two trees of a glued pair are compared after a bend has moved the leg into the domain, so
+  // they line up only when the pair carries the dual on exactly one side.  A pair that carries it
+  // on both or on neither needs the metric of the identified leg, which this form does not model.
+  const int64_t shared = static_cast<int64_t>(shared_left.size());
+  for (int64_t index = 0; index < shared; ++index) {
+    const int8_t left_flag = left_dual[shared_left[index]];
+    const int8_t right_flag = right_dual[shared_right[index]];
+    if (left_flag == right_flag) {
+      g_weight_decline = 11;
+      return std::nullopt;
+    }
+  }
+  // The free legs of both operands, in the order the output lists them.
+  const auto ordered = [](const std::vector<int64_t>& position) {
+    std::vector<int64_t> free;
+    for (int64_t axis = 0; axis < static_cast<int64_t>(position.size()); ++axis) {
+      if (position[axis] >= 0) free.push_back(axis);
+    }
+    std::stable_sort(free.begin(), free.end(), [&position](int64_t one, int64_t two) {
+      return position[one] < position[two];
+    });
+    return free;
+  };
+  const std::vector<int64_t> free_left = ordered(out_left_axis);
+  const std::vector<int64_t> free_right = ordered(out_right_axis);
+  const int64_t alpha = static_cast<int64_t>(free_left.size());
+  const int64_t beta = static_cast<int64_t>(free_right.size());
+  // The output names every free leg of both operands exactly once: a leg the output keeps and both
+  // operands share would be counted twice, which this routine does not model.
+  if (static_cast<int64_t>(out_legs.size()) != alpha + beta ||
+      alpha + shared != static_cast<int64_t>(left_legs.size()) ||
+      beta + shared != static_cast<int64_t>(right_legs.size())) {
     g_weight_decline = 1;
     return std::nullopt;
   }
-  const std::vector<int64_t> order_left = moved_order(shared_left, out_left_axis);
-  const std::vector<int64_t> order_right = moved_order(shared_right, out_right_axis);
-  const auto left_states =
-      permute_chain(left_legs, left_inner, left_coupled, order_left, group, device);
-  const auto right_states =
-      permute_chain(right_legs, right_inner, right_coupled, order_right, group, device);
-  if (!left_states.has_value() || !right_states.has_value()) {
+  // A bend takes the last leg of the codomain, so the legs that leave it are put at its end: the
+  // left keeps its free legs and bends its shared ones, the right keeps its shared ones and bends
+  // its free ones, and the output keeps its left free legs and bends its right ones.
+  std::vector<int64_t> left_order(free_left);
+  for (auto it = shared_left.rbegin(); it != shared_left.rend(); ++it) left_order.push_back(*it);
+  std::vector<int64_t> right_order(shared_right);
+  for (auto it = free_right.rbegin(); it != free_right.rend(); ++it) right_order.push_back(*it);
+  std::vector<int64_t> joined;
+  for (int64_t axis : free_left) joined.push_back(out_left_axis[axis]);
+  for (int64_t axis : free_right) joined.push_back(out_right_axis[axis]);
+  std::vector<int64_t> out_order(joined);
+  std::reverse(out_order.begin() + alpha, out_order.end());
+
+  const PairTree left_tree{left_legs, left_dual, left_inner, left_copies, left_coupled};
+  const PairTree right_tree{right_legs, right_dual, right_inner, right_copies, right_coupled};
+  const PairTree out_tree{out_legs, out_dual, out_inner, out_copies, out_coupled};
+  std::vector<TreeTerm> left_terms;
+  std::vector<TreeTerm> right_terms;
+  std::vector<TreeTerm> out_terms;
+  const auto collect = [&](const PairTree& tree, const std::vector<int64_t>& order, int64_t keep,
+                           std::vector<TreeTerm>& terms) {
+    for (const auto& [moved, value] : permute_tree(group, tree, order, device)) {
+      for (const auto& [pair, coefficient] :
+           repartition(group, moved, empty_tree(group), keep, device)) {
+        terms.push_back(TreeTerm{pair.first, pair.second, value * coefficient});
+      }
+    }
+  };
+  collect(left_tree, left_order, alpha, left_terms);
+  collect(right_tree, right_order, shared, right_terms);
+  collect(out_tree, out_order, alpha, out_terms);
+  if (left_terms.empty() || right_terms.empty() || out_terms.empty()) {
     g_weight_decline = 2;
     return std::nullopt;
   }
-  std::vector<Sector> moved_left;
-  for (int64_t axis : order_left) moved_left.push_back(left_legs[axis]);
-  const std::vector<Sector> free_legs(moved_left.begin() + shared, moved_left.end());
-  // The joined chain carries the left free legs before the right's while the output lists them
-  // in its own order, and a coupling tuple only names a block in one and the same leg order, so
-  // every state is moved into the output's order before it is matched.  Each operand reports the
-  // output axis of each of its free legs, which places the joined legs.
-  std::vector<Sector> joined_legs(free_legs);
-  std::vector<int64_t> joined_axis;
-  for (int64_t index = shared; index < static_cast<int64_t>(order_left.size()); ++index) {
-    joined_axis.push_back(out_left_axis[order_left[index]]);
-  }
-  for (int64_t index = shared; index < static_cast<int64_t>(order_right.size()); ++index) {
-    joined_legs.push_back(right_legs[order_right[index]]);
-    joined_axis.push_back(out_right_axis[order_right[index]]);
-  }
-  std::vector<int64_t> to_output(joined_legs.size(), 0);
-  for (size_t index = 0; index < joined_axis.size(); ++index) {
-    to_output[joined_axis[index]] = static_cast<int64_t>(index);
-  }
-  // A glued pair carries the duality matrix on one of its two legs, and each dual leg on the left
-  // contributes the self-duality sign of its own charge to the closed loop.
-  double duality = 1.0;
-  for (size_t index = 0; index < shared_dual.size() && index < shared_left.size(); ++index) {
-    if (shared_dual[index] != 0) duality *= group->dual_sign(left_legs[shared_left[index]]);
-  }
+  // The two operands meet in the shared tree, whose coupled sector is a channel of each of them, so
+  // only its shape is compared; the free parts of both are the same basis elements as the output's,
+  // coupled sector included.  The shared block closes with the quantum dimension of its channel, and
+  // a shared coupling is read through the conjugate basis, so each one carries the category's
+  // duality scalar.
   std::complex<double> total = 0.0;
-  // Nothing is glued, so the contraction is an outer product: its chain is the two operands'
-  // chains concatenated through the left operand's own total charge, and the weight is the
-  // recoupling that moves that chain into the output's leg order.
-  if (shared == 0) {
-    std::vector<Sector> right_joined;
-    for (int64_t index = shared; index < static_cast<int64_t>(order_right.size()); ++index) {
-      right_joined.push_back(right_legs[order_right[index]]);
-    }
-    std::complex<double> outer = 0.0;
-    for (const ChainState& left : *left_states) {
-      for (const ChainState& right : *right_states) {
-        std::vector<std::vector<Sector>> frames;
-        if (right_free == 0) {
-          frames.push_back({});
-        } else {
-          frames = concat_frames(right_joined, left_coupled, out_coupled, group);
-        }
-        for (const std::vector<Sector>& frame : frames) {
-          std::vector<Sector> inner(left.inner);
-          if (right_free > 0) inner.push_back(left_coupled);
-          inner.insert(inner.end(), frame.begin(), frame.end());
-          const auto moved =
-              permute_chain(joined_legs, inner, out_coupled, to_output, group, device);
-          if (!moved.has_value()) return std::nullopt;
-          for (const ChainState& state : *moved) {
-            if (state.inner == out_inner) outer += left.value * right.value * state.value;
-          }
-        }
-      }
-    }
-    return duality * outer;
-  }
-  for (const ChainState& left : *left_states) {
-    const int64_t left_count = static_cast<int64_t>(left.inner.size());
-    for (const ChainState& right : *right_states) {
-      const int64_t right_count = static_cast<int64_t>(right.inner.size());
-      // Every coupling inside the shared block has to agree.
-      bool agrees = true;
-      for (int64_t index = 0; index < shared - 1 && agrees; ++index) {
-        const auto one = prefix_coupling(left.inner, left_coupled, index);
-        const auto two = prefix_coupling(right.inner, right_coupled, index);
-        agrees = one.has_value() && two.has_value() && *one == *two;
-      }
-      if (!agrees) continue;
-      const Sector& block = shared == 1               ? moved_left[0]
-                            : left_free == 0          ? left_coupled
-                            : shared - 2 < left_count ? left.inner[shared - 2]
-                                                      : left_coupled;
-      const int64_t from = std::min(shared - 1, right_count);
-      const std::vector<Sector> tail(right.inner.begin() + from, right.inner.end());
-      for (const std::vector<Sector>& frame : free_frames(free_legs, block, group)) {
-        const auto scale =
-            junction_scale(block, left.inner, left_coupled, frame, free_legs, shared,
-                           group, device);
-        if (!scale.has_value()) {
-          g_weight_decline = 3;
-          return std::nullopt;
-        }
-        // A scalar output carries no coupling tuple, so nothing else pins the term down: it is
-        // kept exactly when the two operands' totals can fuse to the output's total charge.
-        if (scalar_output) {
-          for (const Sector& fused : group->fusion_outcomes(block, right_coupled)) {
-            if (fused == out_coupled) total += left.value * right.value * *scale;
-          }
-          continue;
-        }
-        // The junction coupling sits between the two free parts; a right operand with no free leg
-        // leaves the joined chain inside the left's free part, with no room for it.
-        const size_t drop = free_legs.size() < 2 ? 2 - free_legs.size() : 0;
-        std::vector<Sector> joined(frame);
-        if (right_free > 0) joined.push_back(block);
-        joined.insert(joined.end(), tail.begin(), tail.end());
-        joined.erase(joined.begin(), joined.begin() + std::min(drop, joined.size()));
-        // A chain over count legs carries count - 2 couplings; anything else is a shape this
-        // routine does not model, so the caller keeps its dense fallback.
-        if (joined.size() + 2 != joined_legs.size()) {
-          g_weight_decline = 4;
-          return std::nullopt;
-        }
-        const auto moved =
-            permute_chain(joined_legs, joined, out_coupled, to_output, group, device);
-        if (!moved.has_value()) {
-          g_weight_decline = 5;
-          return std::nullopt;
-        }
-        for (const ChainState& state : *moved) {
-          if (state.inner == out_inner) total += left.value * right.value * *scale * state.value;
-        }
+  for (const TreeTerm& one : left_terms) {
+    for (const TreeTerm& two : right_terms) {
+      if (!same_shape(one.other, two.kept)) continue;
+      for (const TreeTerm& three : out_terms) {
+        if (!same_tree(one.kept, three.kept) || !same_tree(two.other, three.other)) continue;
+        // The shared block closes with the quantum dimension of the channel it couples to.
+        std::complex<double> factor = group->quantum_dim(two.kept.coupled);
+        total += one.value * two.value * three.value * factor;
       }
     }
   }
-  return duality * total;
+  return total;
 }
 }  // namespace
 
@@ -434,17 +481,19 @@ bool diagram_weight(const std::shared_ptr<FusionCategory>& group,
                     const Sector& out_coupled, const std::vector<int64_t>& left_copies,
                     const std::vector<int64_t>& right_copies,
                     const std::vector<int64_t>& out_copies,
+                    const std::vector<int8_t>& left_dual, const std::vector<int8_t>& right_dual,
+                    const std::vector<int8_t>& out_dual,
                     const std::vector<int64_t>& shared_left,
                     const std::vector<int64_t>& shared_right,
-                    const std::vector<int8_t>& shared_dual,
                     const std::vector<int64_t>& out_left_axis,
                     const std::vector<int64_t>& out_right_axis, const c10::Device& device,
                     std::complex<double>& weight) {
   const WeightKey key{group.get(),   left_legs,      left_inner,     left_coupled,
                       right_legs,    right_inner,    right_coupled,  out_legs,
                       out_inner,     out_coupled,    left_copies,    right_copies,
-                      out_copies,    shared_left,    shared_right,   shared_dual,
-                      out_left_axis, out_right_axis,  weight_device_code(device)};
+                      out_copies,    left_dual,      right_dual,     out_dual,
+                      shared_left,   shared_right,   out_left_axis,  out_right_axis,
+                      weight_device_code(device)};
   auto& cache = weight_cache();
   const auto found = cache.find(key);
   if (found != cache.end()) {
@@ -455,8 +504,8 @@ bool diagram_weight(const std::shared_ptr<FusionCategory>& group,
   const std::optional<std::complex<double>> result =
       compute_diagram_weight(group, left_legs, left_inner, left_coupled, right_legs, right_inner,
                              right_coupled, out_legs, out_inner, out_coupled, left_copies,
-                             right_copies, out_copies, shared_left, shared_right, shared_dual,
-                             out_left_axis, out_right_axis, device);
+                             right_copies, out_copies, left_dual, right_dual, out_dual,
+                             shared_left, shared_right, out_left_axis, out_right_axis, device);
   if (cache.size() >= kWeightCacheLimit) cache.clear();
   cache.emplace(key, result);
   if (!result.has_value()) return false;

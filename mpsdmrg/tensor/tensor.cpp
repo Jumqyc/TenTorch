@@ -1666,10 +1666,15 @@ namespace sym
         // weight of the shared block, read off the category's F and R symbols.
         std::vector<int64_t> shared_left;
         std::vector<int64_t> shared_right;
-        std::vector<int8_t> shared_dual;
+        std::vector<int8_t> left_dual;
+        std::vector<int8_t> right_dual;
+        std::vector<int8_t> out_dual;
         std::vector<int64_t> out_left_axis(labels[0].size(), -1);
         std::vector<int64_t> out_right_axis(labels[1].size(), -1);
         if (n_operands == 2) {
+          for (const Leg& leg : tensors[0].legs()) left_dual.push_back(leg.qconj() == -1 ? 1 : 0);
+          for (const Leg& leg : tensors[1].legs()) right_dual.push_back(leg.qconj() == -1 ? 1 : 0);
+          for (const Leg& leg : out_legs) out_dual.push_back(leg.qconj() == -1 ? 1 : 0);
           // The axis each operand's leg occupies in the output, so the operands' free legs can be
           // listed in the output's order; a leg the output keeps and both operands share has an
           // axis here too, and is excluded from the glued legs below.
@@ -1688,7 +1693,6 @@ namespace sym
             if (in_right == labels[1].end()) continue;
             shared_left.push_back(static_cast<int64_t>(axis));
             shared_right.push_back(in_right - labels[1].begin());
-            shared_dual.push_back(tensors[0].legs()[axis].qconj() == -1 ? 1 : 0);
           }
         }
         // ``set_dense_path`` is the debug build's escape to the dense route, so a check can
@@ -1707,7 +1711,8 @@ namespace sym
                                operand_trees[1].inner(), operand_trees[1].coupled(),
                                tree.sectors(), tree.inner(), tree.coupled(),
                                operand_trees[0].copies(), operand_trees[1].copies(),
-                               tree.copies(), shared_left, shared_right, shared_dual,
+                               tree.copies(), left_dual, right_dual, out_dual, shared_left,
+                               shared_right,
                                out_left_axis, out_right_axis, device, categorical)) {
               combo.scalars.push_back(categorical);
               continue;

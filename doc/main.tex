@@ -2,6 +2,8 @@
 
 \usepackage{amsmath}
 \usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{array}
 \usepackage[margin=1in]{geometry}
 \usepackage{hyperref}
 \usepackage{tikz}
@@ -11,6 +13,64 @@
 
 \newcommand{\code}[1]{\texttt{\detokenize{#1}}}
 \newcommand{\SU}[1]{\mathrm{SU}(#1)}
+
+% The left-nested rank-3 fusion tree ((V_1 V_2) V_3) -> 0, labelled by the two leg
+% charges it fuses (#1, #2), the third leg charge (#3) and the inner charge (#4).
+\newcommand{\fusiontreepic}[4]{%
+  \begin{tikzpicture}[thick, scale=0.88, every node/.style={font=\small, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
+    \node (e) at (1,2.25) {};
+    \node (a) at (0,0) {#1};
+    \node (b) at (1,0) {#2};
+    \node (c) at (2,0) {#3};
+    \node[circle, fill, inner sep=1.5pt] (v1) at (0.5,0.75) {};
+    \node[circle, fill, inner sep=1.5pt] (v2) at (1,1.5) {};
+    \draw (a) -- (v1); \draw (b) -- (v1);
+    \draw (v1) -- (v2) node[midway, left] {#4};
+    \draw (c) -- (v2);
+    \draw (e) -- (v2);
+    \node (d) at (1.25,2.15) {$0$};
+  \end{tikzpicture}}
+
+% The left-nested rank-4 fusion tree (((V_1 V_2) V_3) V_4) -> 0, labelled by the four leg
+% charges (#1..#4) and the two inner charges (#5 below #6).
+\newcommand{\fusiontreeivladder}[6]{%
+  \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
+    \node (a) at (0,0) {#1};
+    \node (b) at (1.0,0) {#2};
+    \node (c) at (2.0,0) {#3};
+    \node (d) at (3.0,0) {#4};
+    \node[circle, fill, inner sep=1.5pt] (v1) at (0.5,0.75) {};
+    \node[circle, fill, inner sep=1.5pt] (v2) at (1.25,1.5) {};
+    \node[circle, fill, inner sep=1.5pt] (v3) at (2.0,2.25) {};
+    \draw (a) -- (v1); \draw (b) -- (v1);
+    \draw (v1) -- (v2) node[midway, left] {#5};
+    \draw (c) -- (v2);
+    \draw (v2) -- (v3) node[midway, left] {#6};
+    \draw (d) -- (v3);
+    \node[anchor=west] (e) at (2.25,2.25) {$0$};
+  \end{tikzpicture}}
+
+% The balanced rank-4 fusion tree ((V_1 V_2)(V_3 V_4)) -> 0, labelled by the four leg
+% charges (#1..#4) and the inner charges of the left (#5) and right (#6) pairs.
+\newcommand{\fusiontreeivbalanced}[6]{%
+  \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
+    \node (a) at (0,0) {#1};
+    \node (b) at (1.0,0) {#2};
+    \node (c) at (2.0,0) {#3};
+    \node (d) at (3.0,0) {#4};
+    \node[circle, fill, inner sep=1.5pt] (v1) at (0.5,0.75) {};
+    \node[circle, fill, inner sep=1.5pt] (v2) at (2.5,0.75) {};
+    \node[circle, fill, inner sep=1.5pt] (v3) at (1.5,1.5) {};
+    \draw (a) -- (v1); \draw (b) -- (v1);
+    \draw (c) -- (v2); \draw (d) -- (v2);
+    \draw (v1) -- (v3) node[midway, left] {#5};
+    \draw (v2) -- (v3) node[midway, right] {#6};
+    \node[anchor=west] (e) at (1.75,1.5) {$0$};
+  \end{tikzpicture}}
+
+\theoremstyle{definition}
+\newtheorem{definition}{Definition}[chapter]
+\newtheorem{example}{Example}[chapter]
 
 \title{Documentation for the Tensor Library}
 \date{\today}
