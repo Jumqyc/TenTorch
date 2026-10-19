@@ -134,10 +134,6 @@ class FusionTree {
   // The couplings ``c_0, ..., c_{n-1}``, where ``c_k`` couples legs 0 to k.
   std::vector<Sector> chain() const;
 
-  // The Clebsch-Gordan expansion of the tree in its own magnetic indices.  Returns shape
-  // ``(d_0, ..., d_{n-1}, d_coupled)`` with ``d_k = sector_dim(sectors[k])``.
-  at::Tensor to_dense_block(const c10::Device& device) const;
-
   std::string repr() const;
   bool operator==(const FusionTree& other) const;
   bool operator!=(const FusionTree& other) const { return !(*this == other); }

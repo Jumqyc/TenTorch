@@ -2,10 +2,20 @@
 // associator and the braiding, so no other categorical data has to be supplied.
 #include "group.h"
 
+#include <cstdint>
 #include <utility>
 #include <vector>
 
 namespace sym {
+
+namespace {
+
+// One integer naming the device a cached tensor lives on.
+int64_t device_code(const c10::Device& device) {
+  return static_cast<int64_t>(device.type()) * 1000 + device.index();
+}
+
+}  // namespace
 
 Group::Group(std::string type_name, FusionStyle fusion_style, BraidingStyle braiding_style,
              Sector trivial_sector, std::string name)
@@ -14,6 +24,11 @@ Group::Group(std::string type_name, FusionStyle fusion_style, BraidingStyle brai
 
 at::Tensor Group::associator(const Sector& a, const Sector& b, const Sector& c, const Sector& d,
                              const Sector& e, const Sector& f, const c10::Device& device) const {
+  const auto key = std::make_tuple(std::array<Sector, 6>{a, b, c, d, e, f}, device_code(device));
+  const auto found = associator_cache_.find(key);
+  if (found != associator_cache_.end()) {
+    return found->second;
+  }
   // One amplitude per combination of the multiplicities of the four vertices that meet in the
   // move: ((a b) c) -> d through e = (a b), against (a (b c)) -> d through f = (b c).  The result
   // is shaped (N^e_ab, N^d_ec, N^f_bc, N^d_af).
@@ -44,11 +59,21 @@ at::Tensor Group::associator(const Sector& a, const Sector& b, const Sector& c, 
   // overlap of two trees carries that dimension once.
   const at::Tensor overlap = at::matmul(at::stack(left, 0).flatten(1),
                                         at::stack(right, 0).conj().flatten(1).transpose(0, 1));
-  return (overlap / quantum_dim(d)).reshape({copies_ab, copies_ec, copies_bc, copies_af});
+  const at::Tensor value =
+      (overlap / quantum_dim(d)).reshape({copies_ab, copies_ec, copies_bc, copies_af});
+  if (associator_cache_.size() >= kCacheLimit) {
+    associator_cache_.clear();
+  }
+  return associator_cache_.emplace(key, value).first->second;
 }
 
 at::Tensor Group::braiding(const Sector& a, const Sector& b, const Sector& c,
                            const c10::Device& device) const {
+  const auto key = std::make_tuple(std::array<Sector, 3>{a, b, c}, device_code(device));
+  const auto found = braiding_cache_.find(key);
+  if (found != braiding_cache_.end()) {
+    return found->second;
+  }
   const auto options = at::TensorOptions().dtype(fusion_dtype()).device(device);
   if (!can_fuse_to(a, b, c) || !can_fuse_to(b, a, c)) {
     return at::zeros({n_symbol(a, b, c), n_symbol(b, a, c)}, options);
@@ -64,8 +89,19 @@ at::Tensor Group::braiding(const Sector& a, const Sector& b, const Sector& c,
   }
   // The dense tree of the engine is normalized to the quantum dimension of its coupling, as in
   // the associator.
-  return at::matmul(at::stack(straight, 0).flatten(1),
-                    at::stack(swapped, 0).conj().flatten(1).transpose(0, 1)) / quantum_dim(c);
+  const at::Tensor value = at::matmul(at::stack(straight, 0).flatten(1),
+                                      at::stack(swapped, 0).conj().flatten(1).transpose(0, 1)) /
+                           quantum_dim(c);
+  if (braiding_cache_.size() >= kCacheLimit) {
+    braiding_cache_.clear();
+  }
+  return braiding_cache_.emplace(key, value).first->second;
+}
+
+void Group::clear_caches() const {
+  FusionCategory::clear_caches();
+  associator_cache_.clear();
+  braiding_cache_.clear();
 }
 
 void bind_group(py::module_& m) {

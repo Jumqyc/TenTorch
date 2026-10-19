@@ -913,19 +913,24 @@ contraction appears.
 \end{figure}
 
 \paragraph{When it declines, and what is measured exact.}
-\code{diagram\_weight} returns false --- and the caller keeps the dense fallback
---- for a shape it does not model: a leg that both operands keep in the output
-(which would be counted twice), a fusion multiplicity that pairs the associators
-into matrices over copies rather than a scalar, or a joined chain whose length
-does not match the couplings it produced.  Those guards are structural: they
-name what the surgery assumes, not how far it has been measured.  Measured exact:
-the layouts the library issues in a sweep (every step of the $L=6$ SU(2)
-Heisenberg contraction, $1.1\times10^{-15}$), a left free part of four legs
-(\code{abcde,af->bcdef}, $2.8\times10^{-16}$), a left operand whose coupled block
-takes three glued legs out of a longer chain (\code{abcde,ead->bc}), a fully
-glued pair (\code{ab,ac->bc}), and twenty randomised layouts with up to five
-free and three glued legs on both sides ($1.3\times10^{-15}$, counting only the
-shapes that are not empty).
+On a two-operand contraction \code{diagram\_weight} computes every layout the
+engine forms: the joined chain is built for any number of glued legs, an outer
+product with no glued leg is the two chains concatenated through the left
+operand's total charge, and a scalar output keeps a term exactly when the two
+operands' totals can fuse to the output's total.  It still declines --- and the
+caller keeps the dense fallback --- for a leg that both operands keep in the
+output (which would be counted twice) and for a fusion multiplicity that pairs
+the associators into matrices over copies rather than a scalar.  Those guards
+are structural: they name what the surgery assumes, not how far it has been
+measured.  Measured in a build with the dense route compiled out
+(\code{DENSEPATH=0}), so the numbers are the route's own and no fallback can
+produce them: the $22$ layouts of one $L=6$ SU(2) Heisenberg sweep
+($1.1\times10^{-15}$), the four shapes that used to decline
+(\code{abcde,af->bcdef} $4.4\times10^{-16}$, \code{abcde,ead->bc}
+$3.3\times10^{-16}$, \code{abd,ce->abcde} $5.6\times10^{-16}$,
+\code{ab,ac->bc} $3.3\times10^{-16}$), the scalar norm of a tensor in the total
+sector $(2,)$, and twenty randomised layouts with up to five free and three
+glued legs on both sides.
 
 \section{Charge flow: contraction and splitting}
 \label{sec:charge-flow}

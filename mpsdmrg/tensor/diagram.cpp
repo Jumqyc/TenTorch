@@ -7,10 +7,18 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 namespace sym {
+// The guard that declined the last categorical weight, 0 when the weight was evaluated.  A build
+// without a dense route reports it, so a shrinking coverage names itself.
+int g_weight_decline = 0;
+
+// Which guard declined the last call to ``diagram_weight``, 0 when none did.
+int diagram_weight_decline() { return g_weight_decline; }
+
 namespace {
 
 // The recoupling matrix of one adjacent swap: rows over the old coupling, columns over the new.
@@ -34,10 +42,9 @@ bool symbol_scalar(const at::Tensor& symbol, std::complex<double>& out) {
 
 // One adjacent swap of the legs (position, position + 1) of a chain, both couplings read off the
 // associator and the braiding.  Empty when a symbol is not a scalar.
-std::optional<SwapMatrix> move_matrix(const std::vector<Sector>& legs,
-                                      const std::vector<Sector>& inner, const Sector& coupled,
-                                      int64_t position, const std::shared_ptr<FusionCategory>& group,
-                                      const c10::Device& device) {
+std::optional<SwapMatrix> move_matrix(
+    const std::vector<Sector>& legs, const std::vector<Sector>& inner, const Sector& coupled,
+    int64_t position, const std::shared_ptr<FusionCategory>& group, const c10::Device& device) {
   SwapMatrix out;
   const Sector left = legs[position];
   const Sector right = legs[position + 1];
@@ -162,6 +169,29 @@ std::vector<std::vector<Sector>> free_frames(const std::vector<Sector>& legs, co
   return frames;
 }
 
+// The couplings a chain carries once one of its legs stops coming from an operand of its own:
+// fusing the running total with each following leg in turn, and ending on the output's total.
+std::vector<std::vector<Sector>> concat_frames(const std::vector<Sector>& legs,
+                                               const Sector& start, const Sector& total,
+                                               const std::shared_ptr<FusionCategory>& group) {
+  std::vector<std::vector<Sector>> frames;
+  std::vector<Sector> prefix;
+  std::function<void(std::size_t, const Sector&)> extend = [&](std::size_t index,
+                                                              const Sector& current) {
+    for (const Sector& fused : group->fusion_outcomes(current, legs[index])) {
+      if (index + 1 == legs.size()) {
+        if (fused == total) frames.push_back(prefix);
+      } else {
+        prefix.push_back(fused);
+        extend(index + 1, fused);
+        prefix.pop_back();
+      }
+    }
+  };
+  if (!legs.empty()) extend(0, start);
+  return frames;
+}
+
 // The coupling an operand's chain carries at one position of its shared prefix.  A prefix that
 // runs to the operand's last leg ends on that leg's total charge, which the tree keeps outside
 // its inner list.
@@ -194,43 +224,82 @@ std::optional<std::complex<double>> junction_scale(
     std::complex<double> one;
     const Sector& after = chain_coupling(inner, coupled, shared + static_cast<int64_t>(step));
     const Sector& before = chain_coupling(inner, coupled, shared - 1 + static_cast<int64_t>(step));
-    if (!symbol_scalar(group->associator(block, previous, free_legs[step + 1], after, before,
-                                         frame[step], device),
-                       one)) {
-      return std::nullopt;
-    }
+    const at::Tensor symbol =
+        group->associator(block, previous, free_legs[step + 1], after, before, frame[step], device);
+    // An empty symbol says this fusion channel does not exist, so the frame contributes nothing:
+    // the recoupling runs over the frames whose whole chain of associators exists.
+    if (symbol.numel() == 0) return std::complex<double>(0.0, 0.0);
+    if (!symbol_scalar(symbol, one)) return std::nullopt;
     product *= one;
     previous = frame[step];
   }
   return product * loop;
 }
 
-}  // namespace
+// One integer naming the device a cached weight belongs to.
+int64_t weight_device_code(const c10::Device& device) {
+  return static_cast<int64_t>(device.type()) * 1000 + device.index();
+}
 
-bool diagram_weight(const std::shared_ptr<FusionCategory>& group,
-                    const std::vector<Sector>& left_legs, const std::vector<Sector>& left_inner,
+// The weight of a tree triple does not depend on the blocks that carry it, and a sweep asks for
+// the same triples over and over, so the answers are kept per group, layout and device.
+using WeightKey = std::tuple<const FusionCategory*, std::vector<Sector>, std::vector<Sector>,
+                             Sector, std::vector<Sector>, std::vector<Sector>, Sector,
+                             std::vector<Sector>, std::vector<Sector>, Sector,
+                             std::vector<int64_t>, std::vector<int64_t>, std::vector<int64_t>,
+                             std::vector<int64_t>, std::vector<int64_t>, std::vector<int8_t>,
+                             std::vector<int64_t>, std::vector<int64_t>, int64_t>;
+
+std::map<WeightKey, std::optional<std::complex<double>>>& weight_cache() {
+  static std::map<WeightKey, std::optional<std::complex<double>>> cache;
+  return cache;
+}
+
+// The number of weights one process keeps before the table is dropped.
+constexpr std::size_t kWeightCacheLimit = 1U << 20U;
+
+std::optional<std::complex<double>> compute_diagram_weight(
+    const std::shared_ptr<FusionCategory>& group, const std::vector<Sector>& left_legs, const std::vector<Sector>& left_inner,
                     const Sector& left_coupled, const std::vector<Sector>& right_legs,
                     const std::vector<Sector>& right_inner, const Sector& right_coupled,
                     const std::vector<Sector>& out_legs, const std::vector<Sector>& out_inner,
-                    const Sector& out_coupled, const std::vector<int64_t>& shared_left,
+                    const Sector& out_coupled, const std::vector<int64_t>& left_copies,
+                    const std::vector<int64_t>& right_copies,
+                    const std::vector<int64_t>& out_copies,
+                    const std::vector<int64_t>& shared_left,
                     const std::vector<int64_t>& shared_right,
                     const std::vector<int8_t>& shared_dual,
                     const std::vector<int64_t>& out_left_axis,
-                    const std::vector<int64_t>& out_right_axis, const c10::Device& device,
-                    std::complex<double>& weight) {
+                    const std::vector<int64_t>& out_right_axis, const c10::Device& device) {
   const int64_t shared = static_cast<int64_t>(shared_left.size());
+  g_weight_decline = 0;
+  if (!group->categorical_chain_rule()) {
+    g_weight_decline = 6;
+    return std::nullopt;
+  }
   const int64_t left_free = static_cast<int64_t>(left_legs.size()) - shared;
   const int64_t right_free = static_cast<int64_t>(right_legs.size()) - shared;
+  // A scalar output reaches this routine either as no legs at all or as a single trivial one,
+  // depending on how the caller enumerated its trees; neither carries a coupling tuple.
+  const bool scalar_output =
+      out_legs.empty() || (out_legs.size() == 1 && out_legs[0] == group->trivial_sector());
   // A leg both operands keep in the output batches instead of gluing, which this routine does
   // not model: its free legs would be counted twice.
-  if (shared < 1 || static_cast<int64_t>(out_legs.size()) != left_free + right_free) return false;
+  if (scalar_output ? left_free + right_free != 0
+                    : static_cast<int64_t>(out_legs.size()) != left_free + right_free) {
+    g_weight_decline = 1;
+    return std::nullopt;
+  }
   const std::vector<int64_t> order_left = moved_order(shared_left, out_left_axis);
   const std::vector<int64_t> order_right = moved_order(shared_right, out_right_axis);
   const auto left_states =
       permute_chain(left_legs, left_inner, left_coupled, order_left, group, device);
   const auto right_states =
       permute_chain(right_legs, right_inner, right_coupled, order_right, group, device);
-  if (!left_states.has_value() || !right_states.has_value()) return false;
+  if (!left_states.has_value() || !right_states.has_value()) {
+    g_weight_decline = 2;
+    return std::nullopt;
+  }
   std::vector<Sector> moved_left;
   for (int64_t axis : order_left) moved_left.push_back(left_legs[axis]);
   const std::vector<Sector> free_legs(moved_left.begin() + shared, moved_left.end());
@@ -258,6 +327,38 @@ bool diagram_weight(const std::shared_ptr<FusionCategory>& group,
     if (shared_dual[index] != 0) duality *= group->dual_sign(left_legs[shared_left[index]]);
   }
   std::complex<double> total = 0.0;
+  // Nothing is glued, so the contraction is an outer product: its chain is the two operands'
+  // chains concatenated through the left operand's own total charge, and the weight is the
+  // recoupling that moves that chain into the output's leg order.
+  if (shared == 0) {
+    std::vector<Sector> right_joined;
+    for (int64_t index = shared; index < static_cast<int64_t>(order_right.size()); ++index) {
+      right_joined.push_back(right_legs[order_right[index]]);
+    }
+    std::complex<double> outer = 0.0;
+    for (const ChainState& left : *left_states) {
+      for (const ChainState& right : *right_states) {
+        std::vector<std::vector<Sector>> frames;
+        if (right_free == 0) {
+          frames.push_back({});
+        } else {
+          frames = concat_frames(right_joined, left_coupled, out_coupled, group);
+        }
+        for (const std::vector<Sector>& frame : frames) {
+          std::vector<Sector> inner(left.inner);
+          if (right_free > 0) inner.push_back(left_coupled);
+          inner.insert(inner.end(), frame.begin(), frame.end());
+          const auto moved =
+              permute_chain(joined_legs, inner, out_coupled, to_output, group, device);
+          if (!moved.has_value()) return std::nullopt;
+          for (const ChainState& state : *moved) {
+            if (state.inner == out_inner) outer += left.value * right.value * state.value;
+          }
+        }
+      }
+    }
+    return duality * outer;
+  }
   for (const ChainState& left : *left_states) {
     const int64_t left_count = static_cast<int64_t>(left.inner.size());
     for (const ChainState& right : *right_states) {
@@ -280,32 +381,86 @@ bool diagram_weight(const std::shared_ptr<FusionCategory>& group,
         const auto scale =
             junction_scale(block, left.inner, left_coupled, frame, free_legs, shared,
                            group, device);
-        if (!scale.has_value()) return false;
-        // A scalar output carries no coupling tuple, so the junction charge has to be its total.
-        if (out_legs.empty()) {
-          if (block == out_coupled) total += left.value * right.value * *scale;
+        if (!scale.has_value()) {
+          g_weight_decline = 3;
+          return std::nullopt;
+        }
+        // A scalar output carries no coupling tuple, so nothing else pins the term down: it is
+        // kept exactly when the two operands' totals can fuse to the output's total charge.
+        if (scalar_output) {
+          for (const Sector& fused : group->fusion_outcomes(block, right_coupled)) {
+            if (fused == out_coupled) total += left.value * right.value * *scale;
+          }
           continue;
         }
-        // A free part shorter than two legs has no room for the junction coupling, and the joined
-        // chain indeed starts one entry later for every leg it lacks.
+        // The junction coupling sits between the two free parts; a right operand with no free leg
+        // leaves the joined chain inside the left's free part, with no room for it.
         const size_t drop = free_legs.size() < 2 ? 2 - free_legs.size() : 0;
         std::vector<Sector> joined(frame);
-        joined.push_back(block);
+        if (right_free > 0) joined.push_back(block);
         joined.insert(joined.end(), tail.begin(), tail.end());
         joined.erase(joined.begin(), joined.begin() + std::min(drop, joined.size()));
         // A chain over count legs carries count - 2 couplings; anything else is a shape this
         // routine does not model, so the caller keeps its dense fallback.
-        if (joined.size() + 2 != joined_legs.size()) return false;
+        if (joined.size() + 2 != joined_legs.size()) {
+          g_weight_decline = 4;
+          return std::nullopt;
+        }
         const auto moved =
             permute_chain(joined_legs, joined, out_coupled, to_output, group, device);
-        if (!moved.has_value()) return false;
+        if (!moved.has_value()) {
+          g_weight_decline = 5;
+          return std::nullopt;
+        }
         for (const ChainState& state : *moved) {
           if (state.inner == out_inner) total += left.value * right.value * *scale * state.value;
         }
       }
     }
   }
-  weight = duality * total;
+  return duality * total;
+}
+}  // namespace
+
+void clear_weight_cache() {
+  weight_cache().clear();
+}
+
+bool diagram_weight(const std::shared_ptr<FusionCategory>& group,
+                    const std::vector<Sector>& left_legs, const std::vector<Sector>& left_inner,
+                    const Sector& left_coupled, const std::vector<Sector>& right_legs,
+                    const std::vector<Sector>& right_inner, const Sector& right_coupled,
+                    const std::vector<Sector>& out_legs, const std::vector<Sector>& out_inner,
+                    const Sector& out_coupled, const std::vector<int64_t>& left_copies,
+                    const std::vector<int64_t>& right_copies,
+                    const std::vector<int64_t>& out_copies,
+                    const std::vector<int64_t>& shared_left,
+                    const std::vector<int64_t>& shared_right,
+                    const std::vector<int8_t>& shared_dual,
+                    const std::vector<int64_t>& out_left_axis,
+                    const std::vector<int64_t>& out_right_axis, const c10::Device& device,
+                    std::complex<double>& weight) {
+  const WeightKey key{group.get(),   left_legs,      left_inner,     left_coupled,
+                      right_legs,    right_inner,    right_coupled,  out_legs,
+                      out_inner,     out_coupled,    left_copies,    right_copies,
+                      out_copies,    shared_left,    shared_right,   shared_dual,
+                      out_left_axis, out_right_axis,  weight_device_code(device)};
+  auto& cache = weight_cache();
+  const auto found = cache.find(key);
+  if (found != cache.end()) {
+    if (!found->second.has_value()) return false;
+    weight = *found->second;
+    return true;
+  }
+  const std::optional<std::complex<double>> result =
+      compute_diagram_weight(group, left_legs, left_inner, left_coupled, right_legs, right_inner,
+                             right_coupled, out_legs, out_inner, out_coupled, left_copies,
+                             right_copies, out_copies, shared_left, shared_right, shared_dual,
+                             out_left_axis, out_right_axis, device);
+  if (cache.size() >= kWeightCacheLimit) cache.clear();
+  cache.emplace(key, result);
+  if (!result.has_value()) return false;
+  weight = *result;
   return true;
 }
 

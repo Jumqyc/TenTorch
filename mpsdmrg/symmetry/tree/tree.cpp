@@ -260,26 +260,6 @@ std::vector<Sector> FusionTree::chain() const {
   return out;
 }
 
-at::Tensor FusionTree::to_dense_block(const c10::Device& device) const {
-  const auto options = at::TensorOptions().dtype(group_->fusion_dtype()).device(device);
-  const std::vector<Sector> couplings = chain();
-  at::Tensor out = at::eye(group_->sector_dim(sectors_.front()), options);
-  // the expansion is the contraction of the vertex of every visited coupling, its last axis
-  // the running magnetic index of the coupling chain
-  for (std::size_t i = 1; i < sectors_.size(); ++i) {
-    const at::Tensor table = group_->fusion_tensor(couplings[i - 1], sectors_[i], couplings[i],
-                                                   device, copies_.at(i - 1));
-    const int64_t m = out.size(-1);
-    const int64_t a = table.size(1);
-    const int64_t b = table.size(2);
-    std::vector<int64_t> shape(out.sizes().begin(), out.sizes().end() - 1);
-    shape.push_back(a);
-    shape.push_back(b);
-    out = at::matmul(out.reshape({-1, m}), table.reshape({m, a * b})).reshape(shape);
-  }
-  return out;
-}
-
 std::string FusionTree::repr() const {
   const std::string base = "FusionTree(sectors=" + sectors_repr(sectors_) + ", inner=" +
                            sectors_repr(inner_) + ", coupled=" + sector_repr(coupled_);

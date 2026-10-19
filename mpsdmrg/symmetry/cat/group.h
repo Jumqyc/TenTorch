@@ -3,8 +3,11 @@
 // for the group implementations and for the bindings.
 #pragma once
 
+#include <array>
+#include <map>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "cat.h"
@@ -24,6 +27,17 @@ class Group : public FusionCategory {
   // The braiding of a group is what exchanging the two legs of one vertex costs.
   at::Tensor braiding(const Sector& a, const Sector& b, const Sector& c,
                       const c10::Device& device) const override;
+
+  // Both tables are pure functions of their sectors, and one contraction asks for the same
+  // entry many times over, so the last answers are kept per device.
+  void clear_caches() const override;
+
+ private:
+  // The number of entries one table may hold before it is dropped.
+  static constexpr std::size_t kCacheLimit = 1U << 16U;
+
+  mutable std::map<std::tuple<std::array<Sector, 6>, int64_t>, at::Tensor> associator_cache_;
+  mutable std::map<std::tuple<std::array<Sector, 3>, int64_t>, at::Tensor> braiding_cache_;
 };
 
 class AbelianGroup : public Group {

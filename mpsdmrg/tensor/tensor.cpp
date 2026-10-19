@@ -26,6 +26,8 @@ namespace sym
     // Set only by a debug build; see ``set_dense_path``.
     bool g_dense_path = false;
 
+#ifdef DENSEPATH
+
     // The sector sizes and values in one plain vector, so a sequence of sectors can be a cache
     // key without ambiguity between two of them.
     std::vector<int64_t> flatten(const std::vector<Sector> &sectors)
@@ -70,6 +72,8 @@ namespace sym
     // and dropped wholesale when the table is full.
     std::unordered_map<DenseKey, at::Tensor, DenseKeyHash> stored_dense_cache;
     constexpr std::size_t stored_dense_limit = 8192;
+
+#endif
 
     // The device and dtype every freshly allocated block buffer takes.
     c10::Device &default_device()
@@ -178,6 +182,8 @@ namespace sym
       }
     }
 
+#ifdef DENSEPATH
+
     // The last axis of ``tensor`` at one index, with the axis removed.
     at::Tensor take_last(const at::Tensor &tensor, int64_t index)
     {
@@ -185,6 +191,8 @@ namespace sym
       select.emplace_back(index);
       return at::indexing::get_item(tensor, select);
     }
+
+#endif
 
     // One entry of a block buffer at a point, with every axis removed.
     at::Tensor scalar_at(const at::Tensor &tensor, const std::vector<int64_t> &point)
@@ -281,6 +289,8 @@ namespace sym
       equation += "->" + label_string(out);
       return at::einsum(equation, operands);
     }
+
+#ifdef DENSEPATH
 
     // Fold the dense expansions of the operands into one buffer over the free coupled indices,
     // so that the output tree is a single reduction against it.
@@ -382,6 +392,10 @@ namespace sym
       key.push_back(-1);
     }
 
+#endif
+
+#ifdef DENSEPATH
+
     // The tree-dependent work of a contraction. The same trees come back at every site and at every
     // Lanczos step, so the fold of the operand expansions and the weight of an output tree are
     // computed once and then handed out: both are read-only, only the block values are multiplied
@@ -414,7 +428,33 @@ namespace sym
       return weight_cache.emplace(key, tree_weight(output, folded, out, folded_labels)).first->second;
     }
 
+#endif
+
   } // namespace
+
+#ifdef DENSEPATH
+  // The Clebsch-Gordan expansion of one tree in its own magnetic indices: the contraction of the
+  // vertex of every visited coupling. Returns shape ``(d_0, ..., d_{n-1}, d_coupled)``.
+  at::Tensor dense_block(const FusionTree &tree, const c10::Device &device)
+  {
+    const auto options = at::TensorOptions().dtype(tree.group()->fusion_dtype()).device(device);
+    const std::vector<Sector> couplings = tree.chain();
+    at::Tensor out = at::eye(tree.group()->sector_dim(tree.sectors().front()), options);
+    // the expansion is the contraction of the vertex of every visited coupling, its last axis
+    // the running magnetic index of the coupling chain
+    for (std::size_t i = 1; i < tree.sectors().size(); ++i) {
+      const at::Tensor table = tree.group()->fusion_tensor(
+          couplings[i - 1], tree.sectors()[i], couplings[i], device, tree.copies().at(i - 1));
+      const int64_t m = out.size(-1);
+      const int64_t a = table.size(1);
+      const int64_t b = table.size(2);
+      std::vector<int64_t> shape(out.sizes().begin(), out.sizes().end() - 1);
+      shape.push_back(a);
+      shape.push_back(b);
+      out = at::matmul(out.reshape({-1, m}), table.reshape({m, a * b})).reshape(shape);
+    }
+    return out;
+  }
 
   at::Tensor stored_dense(const std::vector<Leg> &legs, const FusionTree &tree,
                           const c10::Device &device)
@@ -443,7 +483,7 @@ namespace sym
     {
       return found->second;
     }
-    at::Tensor out = tree.to_dense_block(device);
+    at::Tensor out = dense_block(tree, device);
     // a leg that carries duals stores the magnetic index flipped and carries the phase (-1)^m
     for (std::size_t i = 0; i < legs.size(); ++i)
     {
@@ -471,6 +511,8 @@ namespace sym
     folded_cache.clear();
     weight_cache.clear();
   }
+
+#endif
 
   void set_defaults(const std::string &device, const std::string &dtype)
   {
@@ -1536,6 +1578,9 @@ namespace sym
       std::vector<Sector> totals;
       std::vector<std::vector<int64_t>> copies;
       std::vector<at::Tensor> weights;
+      // The categorical weights as host scalars; an equal length with ``inners`` marks a
+      // combination whose accumulation needs no device scalar at all.
+      std::vector<std::complex<double>> scalars;
     };
     std::vector<Combo> combinations;
     std::vector<std::size_t> option_sizes;
@@ -1583,12 +1628,14 @@ namespace sym
         }
       } else {
         std::vector<FusionTree> operand_trees;
+#ifdef DENSEPATH
         std::vector<at::Tensor> operands;
         std::vector<int64_t> folded_labels;
         std::vector<int64_t> tree_key;
         at::Tensor folded;
         bool folded_ready = false;
         tree_key.push_back(fingerprint(spec));
+#endif
         for (std::size_t o = 0; o < n_operands; ++o) {
           const int64_t bi = candidates[o][pick[o]];
           operand_trees.push_back(FusionTree::from_blocks(group, tensors[o].legs(),
@@ -1598,6 +1645,7 @@ namespace sym
         // The Clebsch-Gordan expansion of the operands is what the dense route weighs an output
         // tree with; the categorical route reads that weight off the associator and the braiding
         // instead, so a category without a Clebsch-Gordan tensor never builds the expansion.
+#ifdef DENSEPATH
         const auto ensure_folded = [&]() {
           if (folded_ready)
             return;
@@ -1611,6 +1659,7 @@ namespace sym
           folded_labels = pair.second;
           folded_ready = true;
         };
+#endif
         // The categorical route covers a two-operand contraction that glues at least one leg: the
         // operands are permuted so their shared legs come first, their shared couplings are
         // matched, and the junction between the two free parts is one associator times the loop
@@ -1644,7 +1693,7 @@ namespace sym
         }
         // ``set_dense_path`` is the debug build's escape to the dense route, so a check can
         // evaluate the same operands on both routes; a normal build never takes that branch.
-        const bool categorical_route = n_operands == 2 && !shared_left.empty() && !dense_path();
+        const bool categorical_route = n_operands == 2 && !dense_path();
         for (const Sector& candidate : tree_totals) {
           for (const FusionTree& tree : fusion_trees(group, combo.out_sectors, candidate)) {
             combo.inners.push_back(tree.inner());
@@ -1656,23 +1705,37 @@ namespace sym
                 diagram_weight(group, operand_trees[0].sectors(), operand_trees[0].inner(),
                                operand_trees[0].coupled(), operand_trees[1].sectors(),
                                operand_trees[1].inner(), operand_trees[1].coupled(),
-                               tree.sectors(), tree.inner(), tree.coupled(), shared_left,
-                               shared_right, shared_dual, out_left_axis, out_right_axis, device,
-                               categorical)) {
-              const c10::complex<double> value(categorical.real(), categorical.imag());
-              combo.weights.push_back(
-                  at::tensor(value, at::TensorOptions().dtype(at::kComplexDouble).device(device)));
+                               tree.sectors(), tree.inner(), tree.coupled(),
+                               operand_trees[0].copies(), operand_trees[1].copies(),
+                               tree.copies(), shared_left, shared_right, shared_dual,
+                               out_left_axis, out_right_axis, device, categorical)) {
+              combo.scalars.push_back(categorical);
               continue;
             }
+#ifdef DENSEPATH
             ensure_folded();
             const at::Tensor output = take_last(stored_dense(out_legs, tree, device),
                                                 group->reference_index(tree.coupled()));
             std::vector<int64_t> weight_key = tree_key;
             append_tree(weight_key, out_legs, tree, device);
             combo.weights.push_back(cached_weight(weight_key, output, folded, out, folded_labels));
+#else
+            throw not_implemented_error(
+                "this build has no dense route: the categorical route declined this contraction "
+                "(guard " + std::to_string(sym::diagram_weight_decline()) + ", " +
+                std::to_string(shared_left.size()) + " glued, left " +
+                std::to_string(tensors[0].legs().size()) + ", right " +
+                std::to_string(tensors[1].legs().size()) + ", out " +
+                std::to_string(out_legs.size()) +
+                ", route attempted: " + std::to_string(categorical_route ? 1 : 0) +
+                "), so rebuild with DENSEPATH=1 to fall back to it");
+#endif
           }
         }
       }
+      // Every combination is kept, including the charge forbidden ones: the blocks of the result
+      // are what the combinations and their trees enumerate, so dropping one would drop a block
+      // of zeros that the dense route keeps.
       combinations.push_back(std::move(combo));
     }); });
     // Contract the combinations in groups of equal operand shapes: one einsum call per group
@@ -1729,19 +1792,45 @@ namespace sym
       for (std::size_t position = 0; position < members.size(); ++position)
       {
         const Combo &combo = combinations[members[position]];
-        const at::Tensor value = batched.defined()
-                                     ? batched.select(0, static_cast<int64_t>(position))
-                                     : reduce_blocks(combo.raw, labels, out);
+        const at::Tensor batched_value = batched.defined()
+                                             ? batched.select(0, static_cast<int64_t>(position))
+                                             : at::Tensor();
+        // The einsum that produces the block values is deferred: a tree whose weight is zero and
+        // whose block already exists needs neither the contract nor a kernel.
+        const bool scalar_weights = combo.scalars.size() == combo.inners.size();
         for (std::size_t t = 0; t < combo.inners.size(); ++t)
         {
           BlockKey key{combo.key_legs, combo.inners[t]};
           key.copies = combo.copies[t];
           if (std::find(realized.begin(), realized.end(), combo.totals[t]) == realized.end())
             realized.push_back(combo.totals[t]);
-          // The first term seeds the output block; later terms accumulate into it, and a
-          // weighted term fuses the multiply and the add into the one kernel of addcmul_.
           const auto found = blocks.find(key);
-          if (found == blocks.end())
+          const bool zero = scalar_weights && combo.scalars[t] == 0.0;
+          if (zero && found != blocks.end())
+          {
+            continue;
+          }
+          const at::Tensor value = batched_value.defined()
+                                       ? batched_value
+                                       : reduce_blocks(combo.raw, labels, out);
+          // The first term seeds the output block and later terms accumulate into it; a scalar
+          // weight rides along as the multiplier of the multiply and the add, so no scalar tensor
+          // is ever built for the categorical route.
+          if (scalar_weights)
+          {
+            const std::complex<double> &weight = combo.scalars[t];
+            const at::Scalar multiplier(c10::complex<double>(weight.real(), weight.imag()));
+            // A forbidden tree still has to bring its block into existence.
+            if (found == blocks.end())
+            {
+              blocks.emplace(key, zero ? at::zeros_like(value) : value * multiplier);
+            }
+            else
+            {
+              found->second.add_(value, multiplier);
+            }
+          }
+          else if (found == blocks.end())
           {
             blocks.emplace(key, combo.weights.empty() ? value : value * combo.weights[t]);
           }
@@ -1824,6 +1913,21 @@ namespace sym
         throw not_implemented_error(
             "A symmetry-adapted contraction needs every operand to be a Tensor, not a mix with raw arrays.");
       }
+#ifndef DENSEPATH
+      if (operands.size() > 2)
+      {
+        // Without the dense route a three-operand call has no way through: the categorical route
+        // pairs two operands at a time, so hand the call back to the pairwise plan kept in the
+        // Python layer.  The build with the dense route keeps its own contraction order.
+        py::object planner = py::module_::import("mpsdmrg.tensor").attr("_pairwise");
+        py::tuple packed(operands.size());
+        for (std::size_t index = 0; index < operands.size(); ++index)
+        {
+          packed[index] = py::cast(operands[index]);
+        }
+        return planner(spec, packed).cast<Tensor>();
+      }
+#endif
       return blocked_einsum(spec, operands);
     }
     std::vector<at::Tensor> raw;

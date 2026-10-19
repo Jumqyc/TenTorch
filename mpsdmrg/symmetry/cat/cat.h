@@ -114,6 +114,14 @@ class FusionCategory {
   // The conjugate basis of a sector paired with its own: the fully contracted one-leg tree,
   // which is how an inner product is read without a Clebsch-Gordan tensor.
   virtual at::Tensor invariant_form(const Sector& a, const c10::Device& device) const;
+
+  // Whether the chain closed form of the diagram weight is exact for this category.
+  //
+  // That form multiplies one scalar per recoupling step and folds the duality of a glued pair in
+  // through ``dual_sign``.  A category whose associators pair into matrices over its copy spaces
+  // needs the copy contraction instead, and reports false here so the diagram weight declines and
+  // the caller keeps its Clebsch-Gordan route.
+  virtual bool categorical_chain_rule() const;
   // Drop whatever memo tables the category keeps; a category with none need not override it.
   virtual void clear_caches() const {}
   /// The component of a coupled multiplet the reduced blocks are stored at.

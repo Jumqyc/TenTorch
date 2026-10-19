@@ -35,11 +35,20 @@ bool diagram_weight(const std::shared_ptr<FusionCategory>& group,
                     const Sector& left_coupled, const std::vector<Sector>& right_legs,
                     const std::vector<Sector>& right_inner, const Sector& right_coupled,
                     const std::vector<Sector>& out_legs, const std::vector<Sector>& out_inner,
-                    const Sector& out_coupled, const std::vector<int64_t>& shared_left,
+                    const Sector& out_coupled, const std::vector<int64_t>& left_copies,
+                    const std::vector<int64_t>& right_copies,
+                    const std::vector<int64_t>& out_copies,
+                    const std::vector<int64_t>& shared_left,
                     const std::vector<int64_t>& shared_right,
                     const std::vector<int8_t>& shared_dual,
                     const std::vector<int64_t>& out_left_axis,
                     const std::vector<int64_t>& out_right_axis, const c10::Device& device,
                     std::complex<double>& weight);
+
+// Drop the cached per-tree weights.
+void clear_weight_cache();
+
+// The guard that declined the last call to ``diagram_weight``, 0 when no guard did.
+int diagram_weight_decline();
 
 }  // namespace sym

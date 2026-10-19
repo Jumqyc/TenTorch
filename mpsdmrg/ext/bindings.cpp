@@ -10,6 +10,7 @@
 #include "../symmetry/cat/su3/su3.h"
 #include "../linalg/linalg.h"
 #include "../tensor/tensor.h"
+#include "../tensor/diagram.h"
 
 namespace sym {
 
@@ -21,8 +22,11 @@ void clear_caches() {
   su2_symmetry()->clear_caches();
   su3_symmetry()->clear_caches();
   fibonacci_category()->clear_caches();
+  clear_weight_cache();
+#ifdef DENSEPATH
   clear_stored_dense();
   clear_tree_caches();
+#endif
 }
 
 }  // namespace sym

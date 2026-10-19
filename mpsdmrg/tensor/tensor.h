@@ -65,6 +65,7 @@ namespace sym
   // The subscript of a sequence of labels.
   std::string label_string(const std::vector<int64_t> &labels);
 
+#ifdef DENSEPATH
   // Drop the cached CG folds and tree weights.
   void clear_tree_caches();
 
@@ -77,6 +78,7 @@ namespace sym
 
   // Drop every kept dense expansion.
   void clear_stored_dense();
+#endif
 
   // One block key as Python spells it: the leg blocks, then the coupled sectors.
   py::tuple key_to_python(const BlockKey &key);
