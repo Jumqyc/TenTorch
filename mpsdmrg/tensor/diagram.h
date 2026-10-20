@@ -72,12 +72,15 @@ Gluing glue_legs(const std::vector<int64_t>& left_labels, const std::vector<int6
 //   glue: the leg alignment of the three; its leg lists must be the ones the trees were built on.
 //   device: the device the category symbols are built on.
 //   weight: set to the weight when the block is evaluated, untouched otherwise.
+// The leg alignment is an invariant of the caller: every leg of an operand is free and named by one
+// output axis, or glued to one leg of the other operand carrying the opposite duality.  A layout that
+// breaks that, and an output tree that does not name every free leg, throw rather than decline.  A
+// recoupling that reaches no state is a zero of the weight, not a decline.
 // Returns:
-//   0 when the block is evaluated, otherwise the guard that declined it, so the caller keeps its
-//   Clebsch-Gordan route:
-//     1  the output does not name every free leg of both operands exactly once
-//     2  a move of the recoupling is impossible
-//     11 a glued pair carries the dual on both sides or on neither
+//   0 when the block is evaluated, otherwise the one shape the route cannot evaluate yet, so the
+//   caller keeps its Clebsch-Gordan route:
+//     1  a leg whose label the output drops without a partner of the other operand to glue it to
+//     12 a closed diagram whose operands are not both uncharged
 int diagram_weight(const std::shared_ptr<FusionCategory>& group, const PairTree& left,
                    const PairTree& right, const PairTree& out, const Gluing& glue,
                    const c10::Device& device, std::complex<double>& weight);

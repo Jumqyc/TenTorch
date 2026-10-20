@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <stdexcept>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -182,8 +183,12 @@ std::optional<std::vector<ChainState>> permute_chain(
     const std::vector<int64_t>& copies, const std::vector<int64_t>& order,
     const std::shared_ptr<FusionCategory>& group, const c10::Device& device) {
   ++g_stats.move_calls;
-  if (order.size() != legs.size()) return std::nullopt;
-  if (!copies.empty() && copies.size() != legs.size() - 1) return std::nullopt;
+  if (order.size() != legs.size()) {
+    throw std::logic_error("a recoupling order has to name every leg of its tree");
+  }
+  if (!copies.empty() && copies.size() != legs.size() - 1) {
+    throw std::logic_error("a recoupling needs one copy label per inner vertex");
+  }
   std::vector<int64_t> arrangement(legs.size());
   for (size_t axis = 0; axis < arrangement.size(); ++axis) {
     arrangement[axis] = static_cast<int64_t>(axis);
@@ -194,7 +199,9 @@ std::optional<std::vector<ChainState>> permute_chain(
   for (size_t wanted = 0; wanted < order.size(); ++wanted) {
     size_t at = wanted;
     while (at < arrangement.size() && arrangement[at] != order[wanted]) ++at;
-    if (at >= arrangement.size()) return std::nullopt;
+    if (at >= arrangement.size()) {
+      throw std::logic_error("a recoupling order names a leg the tree does not carry");
+    }
     while (at > wanted) {
       std::vector<Sector> current;
       for (int64_t index : arrangement) current.push_back(legs[index]);
@@ -418,57 +425,67 @@ std::vector<BendTerm> operand_terms(const std::shared_ptr<FusionCategory>& group
   return terms;
 }
 
-// The guard on the operand half of a diagram, 0 when it covers it:
-//   1  the output does not name every free leg of both operands exactly once
-//   11 a glued pair carries the dual on both sides or on neither
-int operand_guard(const PairTree& left, const PairTree& right, const Gluing& glue) {
+// The layout a diagram is built from: every leg of an operand is either named by one output axis or
+// glued to one leg of the other operand carrying the opposite duality.  A layout that breaks this is
+// a bug of the caller, so it throws; a leg the output drops without gluing it to the other operand
+// is summed over, which the pair weight cannot express, so the route declines that one.
+int check_gluing(const PairTree& left, const PairTree& right, const Gluing& glue) {
   const std::size_t shared = glue.left.size();
+  if (glue.right.size() != shared) {
+    throw std::logic_error("the two operands of a contraction glue a different number of legs");
+  }
   for (std::size_t index = 0; index < shared; ++index) {
-    if (left.isdual[glue.left[index]] == right.isdual[glue.right[index]]) return 11;
+    if (left.isdual[glue.left[index]] == right.isdual[glue.right[index]]) {
+      throw std::logic_error("a glued pair of legs has to carry the dual on one side only");
+    }
   }
-  const auto free_count = [](const std::vector<int64_t>& axis) {
-    return static_cast<std::size_t>(
-        std::count_if(axis.begin(), axis.end(), [](int64_t one) { return one >= 0; }));
+  // 1 when one operand carries a leg whose label the output drops without a partner to glue it to.
+  const auto covered = [](const std::vector<int64_t>& axis, const std::vector<int64_t>& glued) {
+    std::vector<bool> done(axis.size(), false);
+    for (std::size_t index = 0; index < axis.size(); ++index) done[index] = axis[index] >= 0;
+    for (int64_t index : glued) {
+      if (done[index]) throw std::logic_error("a leg cannot be glued and named by the output at once");
+      done[index] = true;
+    }
+    return std::all_of(done.begin(), done.end(), [](bool one) { return one; }) ? 0 : 1;
   };
-  if (free_count(glue.out_left) + shared != left.uncoupled.size() ||
-      free_count(glue.out_right) + shared != right.uncoupled.size()) {
-    return 1;
-  }
-  return 0;
+  return covered(glue.out_left, glue.left) || covered(glue.out_right, glue.right);
 }
 
-// Build the operand half of one block combination, or nothing when a guard declines the shape.
+// Build the operand half of one block combination, or nothing when the route declines the shape.
 std::optional<Diagram> make_diagram(const std::shared_ptr<FusionCategory>& group,
                                     const PairTree& left, const PairTree& right,
                                     const Gluing& glue, const c10::Device& device) {
-  g_decline = operand_guard(left, right, glue);
+  g_decline = check_gluing(left, right, glue);
   if (g_decline != 0) return std::nullopt;
   const Orders orders = diagram_orders(glue);
+  // A closed diagram has no free leg, so its two root channels have to meet each other; the chain
+  // form of the pair weight only carries that meeting for two uncharged operands, and a charged pair
+  // needs the Clebsch-Gordan projection that the dense route makes, so the block is left to it.
+  if (orders.alpha + orders.beta == 0 &&
+      (left.coupled != group->trivial_sector() || right.coupled != group->trivial_sector())) {
+    g_decline = 12;
+    return std::nullopt;
+  }
   std::vector<BendTerm> left_terms = operand_terms(group, left, orders.left, orders.alpha, device);
   std::vector<BendTerm> right_terms =
       operand_terms(group, right, orders.right, static_cast<int64_t>(glue.left.size()), device);
-  if (left_terms.empty() || right_terms.empty()) {
-    g_decline = 2;
-    return std::nullopt;
-  }
   const double phase = tree_phase(group, left) * tree_phase(group, right);
   return Diagram{group, phase, std::move(left_terms), std::move(right_terms), orders.out,
                  orders.alpha, orders.beta};
 }
 
-// The weight of one output tree against a built diagram, or nothing when a guard declines it.
+// The weight of one output tree against a built diagram, or nothing when the route declines it.
 std::optional<std::complex<double>> weigh(const Diagram& diagram, const PairTree& out,
                                           const c10::Device& device) {
   if (static_cast<int64_t>(out.uncoupled.size()) != diagram.alpha + diagram.beta) {
-    g_decline = 1;
-    return std::nullopt;
+    throw std::logic_error("an output tree has to name every free leg of the diagram");
   }
+  // A recoupling that reaches no state at all contributes nothing: its channel is forbidden, which
+  // is a zero of the weight rather than a shape the route declines.
   const std::vector<BendTerm> terms =
       operand_terms(diagram.group, out, diagram.out_order, diagram.alpha, device);
-  if (terms.empty()) {
-    g_decline = 2;
-    return std::nullopt;
-  }
+  if (terms.empty()) return std::complex<double>(0.0, 0.0);
   // The two operands meet in the shared tree, whose coupled sector is a channel of each of them, so
   // only its shape is compared; the free parts of both are the same basis elements as the output's,
   // coupled sector included.  The shared block closes with the quantum dimension of its channel.
