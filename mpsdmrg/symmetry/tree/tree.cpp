@@ -1,3 +1,249 @@
+#include "tree.h"
+
+#include <functional>
+
+#include <sstream>
+#include <stdexcept>
+#include <tuple>
+
+namespace sym::engine {
+namespace {
+
+std::string sector_repr(const Sector& sector) {
+  std::ostringstream text;
+  text << '(';
+  for (std::size_t i = 0; i < sector.size(); ++i) text << (i == 0 ? "" : ", ") << sector[i];
+  text << ')';
+  return text.str();
+}
+
+std::string list_repr(const std::vector<Sector>& sectors) {
+  std::ostringstream text;
+  text << '[';
+  for (std::size_t i = 0; i < sectors.size(); ++i) text << (i == 0 ? "" : ", ") << sector_repr(sectors[i]);
+  text << ']';
+  return text.str();
+}
+
+// The legs of a side that is empty couple to the trivial charge; every other side starts its
+// recursion from its first leg.
+void walk(const FusionCategory& group, const std::vector<LegCharge>& legs,
+          const std::vector<Sector>& stored, const std::vector<Sector>& physical, std::size_t index,
+          const Sector& coupled,
+          std::vector<Sector>& inner, std::vector<int64_t>& vertices,
+          std::vector<FusionTree>& out) {
+  if (index == legs.size()) {
+    FusionTree tree;
+    tree.sectors.reserve(legs.size());
+    tree.isdual.reserve(legs.size());
+    for (std::size_t axis = 0; axis < legs.size(); ++axis) {
+      tree.sectors.push_back(stored.at(axis));
+      tree.isdual.push_back(legs.at(axis).isdual);
+    }
+    tree.inner = inner;
+    tree.vertices = vertices;
+    tree.coupled = coupled;
+    out.push_back(std::move(tree));
+    return;
+  }
+  for (const Sector& next : group.fusion_outcomes(coupled, physical.at(index))) {
+    const bool intermediate = index + 1 < legs.size();
+    for (int64_t copy = 0; copy < group.n_symbol(coupled, physical.at(index), next); ++copy) {
+      vertices.push_back(copy);
+      if (intermediate) inner.push_back(next);
+      walk(group, legs, stored, physical, index + 1, next, inner, vertices, out);
+      if (intermediate) inner.pop_back();
+      vertices.pop_back();
+    }
+  }
+}
+
+// The sector a vertex fuses to, where ``vertex`` indexes the vertices of the side.
+const Sector& vertex_outcome(const FusionTree& tree, int64_t vertex) {
+  return vertex + 1 == tree.size() - 1 ? tree.coupled : tree.inner.at(vertex);
+}
+
+Sector vertex_left(const FusionTree& tree, int64_t vertex) {
+  return vertex == 0 ? tree.sectors.front() : tree.inner.at(vertex - 1);
+}
+
+}  // namespace
+
+bool FusionTree::operator==(const FusionTree& other) const {
+  return sectors == other.sectors && isdual == other.isdual && inner == other.inner &&
+         vertices == other.vertices && coupled == other.coupled;
+}
+
+bool FusionTree::operator<(const FusionTree& other) const {
+  return std::tie(sectors, isdual, inner, vertices, coupled) <
+         std::tie(other.sectors, other.isdual, other.inner, other.vertices, other.coupled);
+}
+
+std::string repr(const FusionTree& tree) {
+  std::ostringstream text;
+  text << list_repr(tree.sectors) << " dual [";
+  for (std::size_t i = 0; i < tree.isdual.size(); ++i) text << (i == 0 ? "" : ", ") << (tree.isdual[i] ? 1 : 0);
+  text << "] inner " << list_repr(tree.inner) << " copies [";
+  for (std::size_t i = 0; i < tree.vertices.size(); ++i) text << (i == 0 ? "" : ", ") << tree.vertices[i];
+  text << "] coupled " << sector_repr(tree.coupled);
+  return text.str();
+}
+
+std::string repr(const FusionTreePair& pair) {
+  return "codomain " + repr(pair.codomain) + " | domain " + repr(pair.domain);
+}
+
+void check_tree(const FusionTree& tree) {
+  const int64_t size = tree.size();
+  const auto fail = [](const std::string& what) { throw std::invalid_argument("fusion tree: " + what); };
+  if (static_cast<int64_t>(tree.isdual.size()) != size) fail("one duality flag per leg");
+  if (size == 0) {
+    if (!tree.inner.empty() || !tree.vertices.empty()) fail("an empty side has no vertex");
+    return;
+  }
+  if (static_cast<int64_t>(tree.vertices.size()) != size - 1) fail("one vertex per fusion");
+  if (static_cast<int64_t>(tree.inner.size()) != std::max<int64_t>(size - 2, 0)) {
+    fail("one inner coupling per prefix that is not the whole side");
+  }
+  for (const int64_t copy : tree.vertices) {
+    if (copy < 0) fail("a vertex copy is a non-negative index");
+  }
+}
+
+void check_tree(const FusionCategory& group, const FusionTree& tree) {
+  check_tree(tree);
+  const auto fail = [](const std::string& what) { throw std::invalid_argument("fusion tree: " + what); };
+  // A leg's sector is the one its space carries; the direction of the leg decides which sector it
+  // contributes to the fusion.
+  const auto physical = [&](int64_t axis) {
+    return tree.isdual.at(axis) ? group.dual_sector(tree.sectors.at(axis)) : tree.sectors.at(axis);
+  };
+  for (int64_t vertex = 0; vertex + 1 < tree.size(); ++vertex) {
+    const Sector& left = vertex == 0 ? physical(0) : tree.inner.at(vertex - 1);
+    const Sector& right = physical(vertex + 1);
+    const Sector& outcome = vertex_outcome(tree, vertex);
+    const int64_t copies = group.n_symbol(left, right, outcome);
+    if (copies == 0) {
+      fail("vertex " + std::to_string(vertex) + " fuses " + sector_repr(left) + " and " +
+           sector_repr(right) + " to " + sector_repr(outcome) + ", which the category forbids");
+    }
+    if (tree.vertices.at(vertex) >= copies) {
+      fail("vertex " + std::to_string(vertex) + " realises copy " +
+           std::to_string(tree.vertices.at(vertex)) + " of a fusion that couples " +
+           std::to_string(copies) + " times");
+    }
+  }
+}
+
+std::map<Sector, std::vector<FusionTree>> trees_by_charge(
+    const FusionCategory& group, const std::vector<std::vector<LegCharge>>& choices) {
+  // A leg of a space may carry more than one sector, so the trees are the union over the sector
+  // every leg chooses.
+  std::map<Sector, std::vector<FusionTree>> trees;
+  std::vector<LegCharge> chosen(choices.size());
+  const std::function<void(std::size_t)> pick = [&](std::size_t at) {
+    if (at == choices.size()) {
+      const auto one = trees_by_charge(group, chosen);
+      for (const auto& [charge, listed] : one) {
+        // A leg may carry the same sector on more than one summand, so the union keeps one copy of
+        // every tree.
+        for (const FusionTree& tree : listed)
+          if (std::find(trees[charge].begin(), trees[charge].end(), tree) == trees[charge].end())
+            trees[charge].push_back(tree);
+      }
+      return;
+    }
+    for (const LegCharge& option : choices.at(at)) {
+      chosen.at(at) = option;
+      pick(at + 1);
+    }
+  };
+  pick(0);
+  return trees;
+}
+
+std::map<Sector, std::vector<FusionTree>> trees_by_charge(const FusionCategory& group,
+                                                          const std::vector<LegCharge>& legs) {
+  std::map<Sector, std::vector<FusionTree>> trees;
+  if (legs.empty()) {
+    trees[group.trivial_sector()] = {};
+    trees[group.trivial_sector()].push_back(
+        FusionTree{{}, {}, {}, {}, group.trivial_sector()});
+    return trees;
+  }
+  // A tree records the sector every leg carries on its space; the direction of the leg is the
+  // duality flag, and the fusion runs on the sector the leg actually points at.
+  std::vector<Sector> stored;
+  std::vector<Sector> physical;
+  for (const LegCharge& leg : legs) {
+    stored.push_back(leg.sector);
+    physical.push_back(leg.isdual ? group.dual_sector(leg.sector) : leg.sector);
+  }
+  std::vector<Sector> inner;
+  std::vector<int64_t> vertices;
+  std::vector<FusionTree> found;
+  walk(group, legs, stored, physical, 1, physical.front(), inner, vertices, found);
+  for (FusionTree& tree : found) trees[tree.coupled].push_back(std::move(tree));
+  return trees;
+}
+
+std::vector<FusionTreePair> tree_pairs_of(const std::vector<FusionTree>& codomain,
+                                          const std::vector<FusionTree>& domain) {
+  std::vector<FusionTreePair> pairs;
+  pairs.reserve(codomain.size() * domain.size());
+  for (const FusionTree& out : codomain)
+    for (const FusionTree& in : domain) pairs.push_back(FusionTreePair{out, in});
+  return pairs;
+}
+
+std::vector<FusionTreePair> tree_pairs(const FusionCategory& group,
+                                       const std::vector<std::vector<LegCharge>>& codomain,
+                                       const std::vector<std::vector<LegCharge>>& domain) {
+  const auto out_trees = trees_by_charge(group, codomain);
+  const auto in_trees = trees_by_charge(group, domain);
+  std::vector<FusionTreePair> pairs;
+  for (const auto& [charge, out] : out_trees) {
+    const auto found = in_trees.find(charge);
+    if (found == in_trees.end()) continue;
+    for (const FusionTree& one : out)
+      for (const FusionTree& two : found->second) pairs.push_back(FusionTreePair{one, two});
+  }
+  return pairs;
+}
+
+std::vector<FusionTreePair> tree_pairs(const FusionCategory& group,
+                                       const std::vector<LegCharge>& codomain,
+                                       const std::vector<LegCharge>& domain) {
+  const auto out_trees = trees_by_charge(group, codomain);
+  const auto in_trees = trees_by_charge(group, domain);
+  std::vector<FusionTreePair> pairs;
+  // A side without legs is the unit: its single tree couples to the trivial charge, so the block's
+  // charge is the one the other side couples to.
+  if (domain.empty()) {
+    for (const auto& [charge, trees] : out_trees)
+      for (const FusionTree& tree : trees) pairs.push_back(FusionTreePair{tree, FusionTree{}});
+    return pairs;
+  }
+  if (codomain.empty()) {
+    for (const auto& [charge, trees] : in_trees)
+      for (const FusionTree& tree : trees) pairs.push_back(FusionTreePair{FusionTree{}, tree});
+    return pairs;
+  }
+  for (const auto& [charge, trees] : out_trees) {
+    const auto found = in_trees.find(charge);
+    if (found == in_trees.end()) continue;
+    for (const FusionTreePair& pair : tree_pairs_of(trees, found->second)) pairs.push_back(pair);
+  }
+  return pairs;
+}
+
+int64_t vertex_copies(const FusionCategory& group, const FusionTree& tree, int64_t vertex) {
+  return group.n_symbol(vertex_left(tree, vertex), tree.sectors.at(vertex + 1),
+                        vertex_outcome(tree, vertex));
+}
+
+}  // namespace sym::engine
+
 // The charge-adapted legs and fusion trees of the engine: the block structure of a leg, the
 // tree that fixes how its sectors fuse, and the dense Clebsch-Gordan expansion of a tree.
 #include "tree.h"

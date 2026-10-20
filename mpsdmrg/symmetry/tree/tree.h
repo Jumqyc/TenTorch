@@ -1,3 +1,114 @@
+// The fusion tree of a graded space: one side of a tensor, its legs, their dualities and the
+// couplings between them.
+#pragma once
+
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "../cat/cat.h"
+
+#include <map>
+#include <string>
+#include <utility>
+#include <vector>
+
+
+namespace sym::engine {
+
+// One leg of a fusion tree: the sector the leg carries, which is its own sector when the leg points
+// along the tensor and the dual sector when it points against it.
+struct LegCharge {
+  Sector sector;
+  bool isdual;
+
+  bool operator==(const LegCharge& other) const {
+    return sector == other.sector && isdual == other.isdual;
+  }
+  bool operator<(const LegCharge& other) const {
+    return sector != other.sector ? sector < other.sector : isdual < other.isdual;
+  }
+};
+
+// One side of a tensor: its legs, the coupling of every prefix of them, and the copy realised at
+// every fusion vertex.
+//
+//   legs      ``sectors[i]`` is the sector leg ``i`` carries in the direction it points, so a leg
+//             written in the conjugate basis already carries its dual sector and ``isdual[i]``.
+//   inner     one coupling per prefix that is not the whole side: ``inner[k]`` couples the legs up
+//             to and including leg ``k + 1``, so there are ``sectors.size() - 2`` of them.
+//   vertices  the copy realised at every fusion vertex, ``sectors.size() - 1`` of them.
+//   coupled   the charge of the whole side.
+struct FusionTree {
+  std::vector<Sector> sectors;
+  std::vector<bool> isdual;
+  std::vector<Sector> inner;
+  std::vector<int64_t> vertices;
+  Sector coupled;
+
+  int64_t size() const { return static_cast<int64_t>(sectors.size()); }
+  bool operator==(const FusionTree& other) const;
+  bool operator!=(const FusionTree& other) const { return !(*this == other); }
+  bool operator<(const FusionTree& other) const;
+};
+
+// A tensor block: the two sides of the map, which have to carry the same coupled charge.
+struct FusionTreePair {
+  FusionTree codomain;
+  FusionTree domain;
+
+  bool operator==(const FusionTreePair& other) const {
+    return codomain == other.codomain && domain == other.domain;
+  }
+  bool operator!=(const FusionTreePair& other) const { return !(*this == other); }
+  bool operator<(const FusionTreePair& other) const {
+    return codomain != other.codomain ? codomain < other.codomain : domain < other.domain;
+  }
+};
+
+// A tree written out as the fields a probe compares.
+std::string repr(const FusionTree& tree);
+std::string repr(const FusionTreePair& pair);
+
+// The structural contract of a tree, which every move preserves. Throws std::invalid_argument on a
+// tree a move built wrong, so a mistake surfaces where it is made rather than in a result.
+void check_tree(const FusionTree& tree);
+
+// The same, with the fusion structure: every coupling has to be an outcome of the pair below it and
+// every vertex copy has to be realised by the category.
+void check_tree(const FusionCategory& group, const FusionTree& tree);
+
+// Every fusion tree over ``legs``, grouped by its coupled charge and enumerated in the order the
+// category's fusion outcomes come in, so the order is a function of the category data alone.
+// Every tree of a side, where each leg may carry any of the sectors its space lists.
+std::map<Sector, std::vector<FusionTree>> trees_by_charge(
+    const FusionCategory& group, const std::vector<std::vector<LegCharge>>& choices);
+
+std::map<Sector, std::vector<FusionTree>> trees_by_charge(const FusionCategory& group,
+                                                          const std::vector<LegCharge>& legs);
+
+// Every tree pair whose two sides carry the same coupled charge: the block enumeration of a tensor
+// with ``codomain`` and ``domain`` as its legs. Pairs of one charge come out codomain-major.
+std::vector<FusionTreePair> tree_pairs(const FusionCategory& group,
+                                       const std::vector<LegCharge>& codomain,
+                                       const std::vector<LegCharge>& domain);
+
+// The pairs of two sides whose legs may each carry any of several sectors.
+std::vector<FusionTreePair> tree_pairs(const FusionCategory& group,
+                                       const std::vector<std::vector<LegCharge>>& codomain,
+                                       const std::vector<std::vector<LegCharge>>& domain);
+
+// The tree pairs of one coupled charge, in the same order ``tree_pairs`` uses.
+std::vector<FusionTreePair> tree_pairs_of(const std::vector<FusionTree>& codomain,
+                                          const std::vector<FusionTree>& domain);
+
+// The copy a fusion vertex realises, which is what sizes a block: the number of pairs of one charge.
+int64_t vertex_copies(const FusionCategory& group, const FusionTree& tree, int64_t vertex);
+
+}  // namespace sym::engine
+
 // The charge-adapted legs and fusion trees of the engine: the block structure of a leg, the
 // tree that fixes how its sectors fuse, and the dense Clebsch-Gordan expansion of a tree.
 #pragma once
