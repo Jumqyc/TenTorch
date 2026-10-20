@@ -71,6 +71,18 @@ struct TensorMap {
 at::Tensor tree_tensor(const FusionCategory& group, const FusionTree& tree,
                        const c10::Device& device, bool dress = false);
 
+// The legs of a tensor, rearranged so that the codomain carries `keep` of them: a leg that crosses
+// changes its direction, and both sides are re-expressed in each other's tree basis.
+// Args:
+//   tensor: a tensor map.
+//   keep: the number of legs the codomain carries afterwards.
+//   device: where the associator is read from.
+// Returns:
+//   The same map over rearranged legs, its blocks rebuilt in the new tree basis.
+// Raises:
+//   std::out_of_range: if `keep` does not fit the legs of the tensor.
+TensorMap repartition_tensor(const TensorMap& tensor, int64_t keep, const c10::Device& device);
+
 // The rows (or columns) one side of a block spans: every fusion tree of that charge, and for each
 // of its legs the multiplicity index the row picks along that leg.
 struct SideLayout {
@@ -136,7 +148,8 @@ TensorMap permute_tensor(const TensorMap& tensor, int64_t keep, const std::vecto
 //     legs as ``left`` has domain legs.
 // Returns:
 //   The contracted tensor, one block per charge the two operands share.
-TensorMap contract(const TensorMap& left, const TensorMap& right);
+TensorMap contract(const TensorMap& left, int64_t left_glue, const TensorMap& right,
+                   int64_t right_glue, const c10::Device& device);
 
 // The two directions between a tensor and the dictionary Python hands it around as: its legs per
 // side, each a list of (sector, multiplicity) summands plus the direction the leg points, and one
@@ -202,6 +215,11 @@ double norm(const TensorMap& tensor);
  *   std::invalid_argument: if the two tensors do not cover the same space.
  */
 std::complex<double> inner(const TensorMap& left, const TensorMap& right);
+
+// Closes the legs pairwise and returns the scalar they leave: a map is traced over its own
+// codomain and domain legs, and a diagram whose legs all point in is closed over the two bond legs
+// of every tree, keeping the entries whose indices agree.
+std::complex<double> trace(const TensorMap& tensor);
 
 /// Expose the algebra of the engine to Python.
 void bind_algebra(py::module_& m);

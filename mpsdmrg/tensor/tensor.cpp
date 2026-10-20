@@ -17,6 +17,9 @@
 namespace sym::engine {
 namespace {
 
+Sector partner_root(const FusionCategory& group, const Sector& codomain_root, const Sector& qtotal);
+std::vector<std::vector<LegCharge>> charges_of(const std::vector<Leg>& legs);
+
 // Where one summand of a leg lives along that leg's full index, which is the concatenation of its
 // summands.
 struct Entry {
@@ -236,7 +239,205 @@ struct Gathered {
   std::map<int64_t, std::complex<double>> entries;
 };
 
+// The roots a side fuses to; a side without legs fuses to the unit alone.
+std::vector<Sector> roots_of(const FusionCategory& group,
+                             const std::map<Sector, std::vector<FusionTree>>& trees) {
+  std::vector<Sector> roots;
+  for (const auto& [root, list] : trees) roots.push_back(root);
+  if (roots.empty()) roots.push_back(group.trivial_sector());
+  return roots;
+}
+
+// The rows (or columns) of a block keyed `key`: every tree of this side whose root can meet a root of
+// the other side at the key, laid out one root after another.
+struct KeyLayout {
+  std::map<Sector, std::pair<SideLayout, int64_t>> parts;
+  int64_t rows = 0;
+};
+
+// The rows (or columns) of a block keyed `key`: the trees of this side that fuse to the key.
+KeyLayout key_layout(const std::vector<Leg>& legs,
+                     const std::map<Sector, std::vector<FusionTree>>& mine, const Sector& key) {
+  KeyLayout layout;
+  if (legs.empty()) {
+    // A side without legs has one tree whatever the key is, and that tree couples to the key.
+    FusionTree empty;
+    empty.coupled = key;
+    const SideLayout part = side_layout(legs, std::vector<FusionTree>{empty});
+    layout.parts.emplace(key, std::pair<SideLayout, int64_t>{part, 0});
+    layout.rows = part.rows();
+    return layout;
+  }
+  for (const auto& [root, trees] : mine) {
+    // A block collects the trees of both sides that fuse to the same sector, which is the key.
+    if (root != key) continue;
+    SideLayout part = side_layout(legs, trees);
+    layout.parts.emplace(root, std::pair<SideLayout, int64_t>{part, layout.rows});
+    layout.rows += part.rows();
+  }
+  return layout;
+}
+
+std::pair<FusionTree, std::vector<int64_t>> key_parts(const KeyLayout& layout, int64_t row) {
+  if (row < 0 || row >= layout.rows) throw std::out_of_range("a row is out of range for its block");
+  for (auto back = layout.parts.rbegin(); back != layout.parts.rend(); ++back) {
+    if (row < back->second.second) continue;
+    const SideLayout& part = back->second.first;
+    const auto [tree, mults] = row_parts(part, row - back->second.second);
+    return {part.trees.at(tree), mults};
+  }
+  throw std::out_of_range("a row is out of range for its block");
+}
+
+int64_t key_row(const KeyLayout& layout, const FusionTree& tree, const std::vector<int64_t>& mults) {
+  const auto found = layout.parts.find(tree.coupled);
+  if (found == layout.parts.end()) {
+    std::string roots;
+    for (const auto& [root, part] : layout.parts) roots += " " + sector_repr(root);
+    throw std::out_of_range("the tree " + repr(tree) + " does not belong to this block, whose roots are" +
+                            roots);
+  }
+  const auto where = std::find(found->second.first.trees.begin(), found->second.first.trees.end(), tree);
+  if (where == found->second.first.trees.end())
+    throw std::out_of_range("the tree does not belong to this block");
+  return found->second.second + row_index(found->second.first, where - found->second.first.trees.begin(), mults);
+}
+
 }  // namespace
+
+// The legs of a tensor, rearranged so that the codomain carries `keep` of them: a leg that crosses
+// changes its direction, and the trees are re-expressed in the basis of the other side. This is the
+// move that lets two tensors meet on one side of each.
+TensorMap repartition_tensor(const TensorMap& tensor, int64_t keep, const c10::Device& device) {
+  const FusionCategory& group = *tensor.space.group;
+  const int64_t total = tensor.space.size();
+  if (keep < 0 || keep > total) {
+    throw std::out_of_range("repartition_tensor: a tensor of " + std::to_string(total) +
+                            " legs cannot carry " + std::to_string(keep) + " of them on one side");
+  }
+  if (tensor.space.codomain.empty() && tensor.space.domain.empty()) return tensor;
+
+  TensorMap out;
+  out.space.group = tensor.space.group;
+  out.qtotal = tensor.qtotal;
+  out.space.codomain = tensor.space.codomain;
+  out.space.domain = tensor.space.domain;
+  while (static_cast<int64_t>(out.space.codomain.size()) > keep) {
+    const Leg moved = out.space.codomain.back().conj();
+    out.space.codomain.pop_back();
+    out.space.domain.push_back(moved);
+  }
+  while (static_cast<int64_t>(out.space.codomain.size()) < keep) {
+    const Leg moved = out.space.domain.back().conj();
+    out.space.domain.pop_back();
+    out.space.codomain.push_back(moved);
+  }
+
+  const auto source_out = side_trees(group, tensor.space.codomain);
+  const auto source_in = side_trees(group, tensor.space.domain);
+  const auto target_out = side_trees(group, out.space.codomain);
+  const auto target_in = side_trees(group, out.space.domain);
+  std::map<Sector, KeyLayout> rows_of_key;
+  std::map<Sector, KeyLayout> columns_of_key;
+  const auto rows_at = [&](const Sector& key) -> const KeyLayout& {
+    const auto found = rows_of_key.find(key);
+    if (found != rows_of_key.end()) return found->second;
+    return rows_of_key.emplace(key, key_layout(out.space.codomain, target_out, key)).first->second;
+  };
+  const auto columns_at = [&](const Sector& key) -> const KeyLayout& {
+    const auto found = columns_of_key.find(key);
+    if (found != columns_of_key.end()) return found->second;
+    return columns_of_key.emplace(key, key_layout(out.space.domain, target_in, key)).first->second;
+  };
+
+  // The multiplicity of every leg follows it across, so both sides keep one entry per leg in order.
+  std::vector<int64_t> out_mults;
+  std::vector<int64_t> in_mults;
+  std::map<Sector, std::map<std::pair<int64_t, int64_t>, std::complex<double>>> cells;
+  std::map<Sector, std::pair<KeyLayout, KeyLayout>> layouts;
+  // The tree transformation depends on the source pair alone, so each pair is moved once and its
+  // terms are reused for every entry the block holds.
+  std::map<FusionTreePair, std::vector<PairTerm>> moves;
+  for (const auto& [root, block] : tensor.blocks) {
+    const Sector source_domain_root =
+        tensor.space.domain.empty()
+            ? group.trivial_sector()
+            : (tensor.space.codomain.empty() ? tensor.qtotal
+                                             : partner_root(group, root, tensor.qtotal));
+    const KeyLayout source_rows = key_layout(tensor.space.codomain, source_out, root);
+    const KeyLayout source_columns = key_layout(tensor.space.domain, source_in, source_domain_root);
+    if (source_rows.rows == 0 || source_columns.rows == 0) continue;
+    const at::Tensor values = block.to(at::kCPU, at::kComplexDouble).contiguous();
+    const c10::complex<double>* data = values.data_ptr<c10::complex<double>>();
+    for (int64_t row = 0; row < source_rows.rows; ++row) {
+      const auto [out_tree, row_mults] = key_parts(source_rows, row);
+      for (int64_t column = 0; column < source_columns.rows; ++column) {
+        const auto [in_tree, column_mults] = key_parts(source_columns, column);
+        const c10::complex<double> entry = data[row * source_columns.rows + column];
+        if (entry.real() == 0.0 && entry.imag() == 0.0) continue;
+        const FusionTreePair source_pair{out_tree, in_tree};
+        const auto known = moves.find(source_pair);
+        const std::vector<PairTerm>& terms =
+            known != moves.end()
+                ? known->second
+                : moves.emplace(source_pair, repartition(group, source_pair, keep, device)).first->second;
+        for (const PairTerm& term : terms) {
+          const Sector key = term.pair.codomain.coupled;
+          auto placed = layouts.find(key);
+          if (placed == layouts.end()) {
+            placed = layouts
+                         .emplace(key, std::make_pair(rows_at(key), columns_at(key)))
+                         .first;
+          }
+          // The legs the move hands to the other side keep their multiplicities, in the order the
+          // move appends them: the last leg of the crowded side first.
+          std::vector<int64_t> moved_out(row_mults);
+          std::vector<int64_t> moved_in(column_mults);
+          while (static_cast<int64_t>(moved_out.size()) > keep) {
+            moved_in.push_back(moved_out.back());
+            moved_out.pop_back();
+          }
+          while (static_cast<int64_t>(moved_out.size()) < keep) {
+            moved_out.push_back(moved_in.back());
+            moved_in.pop_back();
+          }
+          const int64_t where_row = key_row(placed->second.first, term.pair.codomain, moved_out);
+          const int64_t where_column = key_row(placed->second.second, term.pair.domain, moved_in);
+          cells[key][std::make_pair(where_row, where_column)] +=
+              std::complex<double>(entry.real(), entry.imag()) * term.coefficient;
+        }
+      }
+    }
+  }
+  const at::TensorOptions options =
+      tensor.blocks.empty()
+          ? at::TensorOptions().dtype(at::kComplexDouble)
+          : at::TensorOptions().dtype(at::kComplexDouble).device(tensor.blocks.begin()->second.device());
+  for (const auto& [key, entries] : cells) {
+    const auto& [cell_rows, cell_columns] = layouts.at(key);
+    // The cells are filled entry by entry on the host, then one copy puts the block on its device.
+    at::Tensor block = at::zeros({cell_rows.rows, cell_columns.rows},
+                                 at::TensorOptions().dtype(at::kComplexDouble));
+    auto block_entries = block.accessor<c10::complex<double>, 2>();
+    for (const auto& [where, value] : entries) {
+      block_entries[where.first][where.second] = c10::complex<double>(value.real(), value.imag());
+    }
+    out.blocks.emplace(key, options.device().is_cpu() ? block : block.to(options.device()));
+  }
+  // The bends hand a leg over at the end of the receiving side, so the tail they built is reversed;
+  // reversing it back keeps the leg order of the caller, and then the two operands of a contraction
+  // glue leg by leg.
+  const int64_t moved = std::llabs(keep - static_cast<int64_t>(tensor.space.codomain.size()));
+  if (moved < 2) return out;
+  const int64_t out_size = static_cast<int64_t>(out.space.codomain.size());
+  const int64_t in_size = static_cast<int64_t>(out.space.domain.size());
+  std::vector<int64_t> wanted(static_cast<std::size_t>(out_size + in_size));
+  for (int64_t at = 0; at < out_size + in_size; ++at) wanted.at(at) = at + 1;
+  const bool grew = out_size > static_cast<int64_t>(tensor.space.codomain.size());
+  const int64_t base = grew ? out_size - moved : out_size + in_size - moved;
+  for (int64_t at = 0; at < moved; ++at) wanted.at(base + at) = base + moved - at;
+  return permute_tensor(out, keep, wanted, device);
+}
 
 TensorMap permute_tensor(const TensorMap& tensor, int64_t keep, const std::vector<int64_t>& order,
                          const c10::Device& device) {
@@ -262,9 +463,6 @@ TensorMap permute_tensor(const TensorMap& tensor, int64_t keep, const std::vecto
   out.space.group = tensor.space.group;
   out.qtotal = tensor.qtotal;
   const int64_t codomain_size = static_cast<int64_t>(tensor.space.codomain.size());
-  // A leg that crosses from one side to the other is read in the conjugate basis, which costs the
-  // negative eigenvector of its duality matrix.
-  std::vector<double> crossing(static_cast<size_t>(n), 1.0);
   for (int64_t at = 0; at < n; ++at) {
     const int64_t leg = order.at(at) - 1;
     if (leg < 0 || leg >= n) {
@@ -274,105 +472,88 @@ TensorMap permute_tensor(const TensorMap& tensor, int64_t keep, const std::vecto
     Leg moved = from_domain ? tensor.space.domain.at(leg - codomain_size)
                             : tensor.space.codomain.at(leg);
     const bool into_domain = at >= keep;
+    // A permutation keeps every leg on its own side; turning a leg around is the adjoint of the whole
+    // tensor, which the caller does before permuting.
     if (from_domain != into_domain) {
-      const double sign = 1.0;
-      moved = moved.conj();
-      crossing.at(static_cast<size_t>(at)) = sign;
+      throw std::invalid_argument(
+          "permute_tensor: a permutation cannot move a leg to the other side; adjoint the tensor "
+          "instead");
     }
     (into_domain ? out.space.domain : out.space.codomain).push_back(moved);
   }
-  double switched = 1.0;
-  for (const double sign : crossing) switched *= sign;
+  const double switched = 1.0;
 
-  const std::map<Sector, std::vector<FusionTree>> source_out =
-      side_trees(group, tensor.space.codomain);
-  const std::map<Sector, std::vector<FusionTree>> source_in =
-      side_trees(group, tensor.space.domain);
-  const std::map<Sector, std::vector<FusionTree>> target_out =
-      side_trees(group, out.space.codomain);
-  const std::map<Sector, std::vector<FusionTree>> target_in =
-      side_trees(group, out.space.domain);
-  // A side without legs has one tree whatever the charge is: the empty tree, which couples to the
-  // unit, so the charge of the block is the one the other side names.
-  const auto trees_on = [](const std::vector<Leg>& legs,
-                           const std::map<Sector, std::vector<FusionTree>>& trees,
-                           const Sector& charge) {
-    if (legs.empty()) {
-      FusionTree empty;
-      empty.coupled = charge;
-      return std::vector<FusionTree>{empty};
-    }
-    const auto found = trees.find(charge);
-    if (found == trees.end()) return std::vector<FusionTree>{};
-    return found->second;
+  const std::map<Sector, std::vector<FusionTree>> source_out = side_trees(group, tensor.space.codomain);
+  const std::map<Sector, std::vector<FusionTree>> source_in = side_trees(group, tensor.space.domain);
+  const std::map<Sector, std::vector<FusionTree>> target_out = side_trees(group, out.space.codomain);
+  const std::map<Sector, std::vector<FusionTree>> target_in = side_trees(group, out.space.domain);
+
+  // The rows and columns of a destination block depend on its key alone, so they are built once.
+  std::map<Sector, KeyLayout> rows_of_key;
+  std::map<Sector, KeyLayout> columns_of_key;
+  const auto rows_at = [&](const Sector& key) -> const KeyLayout& {
+    const auto found = rows_of_key.find(key);
+    if (found != rows_of_key.end()) return found->second;
+    return rows_of_key
+        .emplace(key, key_layout(out.space.codomain, target_out, key))
+        .first->second;
   };
-  std::map<Sector, SideLayout> out_layouts;
-  std::map<Sector, SideLayout> in_layouts;
-  std::map<Sector, std::map<FusionTree, int64_t>> out_indices;
-  std::map<Sector, std::map<FusionTree, int64_t>> in_indices;
-  const auto layout_out = [&](const Sector& charge) -> const SideLayout& {
-    const auto found = out_layouts.find(charge);
-    if (found != out_layouts.end()) return found->second;
-    const std::vector<FusionTree> trees = trees_on(out.space.codomain, target_out, charge);
-    out_indices.emplace(charge, index_of(trees));
-    return out_layouts.emplace(charge, side_layout(out.space.codomain, trees)).first->second;
-  };
-  const auto layout_in = [&](const Sector& charge) -> const SideLayout& {
-    const auto found = in_layouts.find(charge);
-    if (found != in_layouts.end()) return found->second;
-    const std::vector<FusionTree> trees = trees_on(out.space.domain, target_in, charge);
-    in_indices.emplace(charge, index_of(trees));
-    return in_layouts.emplace(charge, side_layout(out.space.domain, trees)).first->second;
+  const auto columns_at = [&](const Sector& key) -> const KeyLayout& {
+    const auto found = columns_of_key.find(key);
+    if (found != columns_of_key.end()) return found->second;
+    return columns_of_key
+        .emplace(key, key_layout(out.space.domain, target_in, key))
+        .first->second;
   };
 
   std::map<Sector, Gathered> gathered;
-  for (const auto& [charge, block] : tensor.blocks) {
-    const std::vector<FusionTree> out_trees = trees_on(tensor.space.codomain, source_out, charge);
-    const std::vector<FusionTree> in_trees = trees_on(tensor.space.domain, source_in, charge);
-    if (out_trees.empty() || in_trees.empty()) continue;
-    const SideLayout source_rows = side_layout(tensor.space.codomain, out_trees);
-    const SideLayout source_columns = side_layout(tensor.space.domain, in_trees);
+  // The permutation of a pair of trees is the same for every entry of the block, so it is done once.
+  std::map<FusionTreePair, std::vector<PairTerm>> moves;
+  for (const auto& [root, block] : tensor.blocks) {
+    // A block is fixed by its codomain root; the domain root is the sector the two sides fuse through.
+    const Sector source_domain_root =
+        tensor.space.domain.empty()
+            ? group.trivial_sector()
+            : (tensor.space.codomain.empty() ? tensor.qtotal
+                                             : partner_root(group, root, tensor.qtotal));
+    const KeyLayout source_rows = key_layout(tensor.space.codomain, source_out, root);
+    const KeyLayout source_columns = key_layout(tensor.space.domain, source_in, source_domain_root);
+    if (source_rows.rows == 0 || source_columns.rows == 0) continue;
     const at::Tensor values = block.to(at::kCPU, at::kComplexDouble).contiguous();
     const c10::complex<double>* data = values.data_ptr<c10::complex<double>>();
-    const int64_t columns = source_columns.rows();
-    for (int64_t row = 0; row < source_rows.rows(); ++row) {
-      const auto [out_tree, out_mults] = row_parts(source_rows, row);
+    const int64_t columns = source_columns.rows;
+    if (block.numel() != source_rows.rows * columns) {
+      throw std::invalid_argument("permute_tensor: a block does not hold the rows of the trees of its charge");
+    }
+    for (int64_t row = 0; row < source_rows.rows; ++row) {
+      const auto [out_tree, out_mults] = key_parts(source_rows, row);
       for (int64_t column = 0; column < columns; ++column) {
         const c10::complex<double> stored = data[row * columns + column];
         if (stored.real() == 0.0 && stored.imag() == 0.0) continue;
-        const auto [in_tree, in_mults] = row_parts(source_columns, column);
+        const auto [in_tree, in_mults] = key_parts(source_columns, column);
         // The multiplicity index of every leg of the source, in leg order.
         std::vector<int64_t> mults = out_mults;
         mults.insert(mults.end(), in_mults.begin(), in_mults.end());
-        const FusionTreePair source{out_trees.at(out_tree), in_trees.at(in_tree)};
-        for (const PairTerm& term : permute_pair(group, source, keep, order, device)) {
-          // A side without legs couples to the unit, so the charge of the block is the one the other
-          // side names.
-          const Sector target_charge = out.space.codomain.empty() ? term.pair.domain.coupled
-                                                                  : term.pair.codomain.coupled;
-          const SideLayout& target_rows = layout_out(target_charge);
-          const SideLayout& target_columns = layout_in(target_charge);
-          const auto tree_row = out_indices.at(target_charge).find(term.pair.codomain);
-          const auto tree_column = in_indices.at(target_charge).find(term.pair.domain);
-          if (tree_row == out_indices.at(target_charge).end() ||
-              tree_column == in_indices.at(target_charge).end()) {
-            continue;
-          }
+        const FusionTreePair source{out_tree, in_tree};
+        const auto known = moves.find(source);
+        const std::vector<PairTerm>& terms =
+            known != moves.end()
+                ? known->second
+                : moves.emplace(source, permute_pair(group, source, keep, order, device)).first->second;
+        for (const PairTerm& term : terms) {
+          // A bend changes the coupled sector the pair fuses to, so the term names its own block.
+          const Sector target_charge = root;
+          const KeyLayout& target_rows = rows_at(target_charge);
+          const KeyLayout& target_columns = columns_at(source_domain_root);
           std::vector<int64_t> dest_out;
           for (int64_t at = 0; at < keep; ++at) dest_out.push_back(mults.at(order.at(at) - 1));
           std::vector<int64_t> dest_in;
           for (int64_t at = keep; at < n; ++at) dest_in.push_back(mults.at(order.at(at) - 1));
           Gathered& cell = gathered[target_charge];
-          if (std::getenv("PERMUTE_TRACE") != nullptr) {
-            std::fprintf(stderr, "gather charge %s rows %ld columns %ld codomain %zu domain %zu\n",
-                         sector_repr(target_charge).c_str(), layout_out(target_charge).rows(),
-                         layout_in(target_charge).rows(), out.space.codomain.size(),
-                         out.space.domain.size());
-          }
-          cell.rows = target_rows.rows();
-          cell.columns = target_columns.rows();
-          const int64_t dest_row = row_index(target_rows, tree_row->second, dest_out);
-          const int64_t dest_column = row_index(target_columns, tree_column->second, dest_in);
+          cell.rows = target_rows.rows;
+          cell.columns = target_columns.rows;
+          const int64_t dest_row = key_row(target_rows, term.pair.codomain, dest_out);
+          const int64_t dest_column = key_row(target_columns, term.pair.domain, dest_in);
           cell.entries[dest_row * cell.columns + dest_column] +=
               std::complex<double>(stored.real(), stored.imag()) * term.coefficient * switched;
         }
@@ -403,26 +584,142 @@ TensorMap permute_tensor(const TensorMap& tensor, int64_t keep, const std::vecto
   return out;
 }
 
-TensorMap contract(const TensorMap& left, const TensorMap& right) {
-  if (std::getenv("EINSUM_TRACE") != nullptr) {
-    std::fprintf(stderr, "contract left %zu|%zu right %zu|%zu\n", left.space.codomain.size(),
-                 left.space.domain.size(), right.space.codomain.size(), right.space.domain.size());
+// The legs from `drop` on, as a tree of their own: they are left-nested among themselves, so their
+// couplings are the tail of the couplings of the whole tree.
+FusionTree glue_suffix(const FusionTree& tree, int64_t drop) {
+  const int64_t begin = std::max<int64_t>(std::min<int64_t>(drop, tree.sectors.size()), 0);
+  FusionTree out;
+  out.sectors.assign(tree.sectors.begin() + begin, tree.sectors.end());
+  out.isdual.assign(tree.isdual.begin() + begin, tree.isdual.end());
+  const int64_t couplings = std::min<int64_t>(std::max<int64_t>(begin - 1, 0), tree.inner.size());
+  out.inner.assign(tree.inner.begin() + couplings, tree.inner.end());
+  out.vertices.assign(tree.vertices.begin() + std::min<int64_t>(begin, tree.vertices.size()),
+                      tree.vertices.end());
+  out.coupled = out.sectors.empty() ? Sector{}
+                : out.sectors.size() == 1 ? out.sectors.front()
+                                          : out.inner.back();
+  return out;
+}
+
+// The sector a leg physically carries, whichever way its side points.
+Sector physical_of(const FusionCategory& group, const FusionTree& tree, int64_t axis) {
+  return tree.isdual.at(axis) ? group.dual_sector(tree.sectors.at(axis)) : tree.sectors.at(axis);
+}
+
+// The name of a glue tree over `mults`: two operands meet when their glue legs carry the same sectors,
+// the same directions and the same couplings.
+std::string glue_name(const FusionCategory& group, const FusionTree& glue,
+                      const std::vector<int64_t>& mults) {
+  std::string key;
+  for (int64_t axis = 0; axis < static_cast<int64_t>(glue.sectors.size()); ++axis) {
+    for (const int64_t component : physical_of(group, glue, axis))
+      key += std::to_string(component) + ",";
+    // The two glued trees are the same legs seen from opposite sides, so their duality flags differ
+    // by construction and only the physical sectors and the multiplicities identify the pair.
+    key += "." + std::to_string(mults.at(axis)) + ";";
   }
-  if (left.space.domain.size() != right.space.codomain.size()) {
-    throw std::invalid_argument("contract: the two tensors glue a different number of legs");
+  for (const Sector& coupling : glue.inner) {
+    for (const int64_t component : coupling) key += std::to_string(component) + ",";
+    key += "/";
   }
+  for (const int64_t vertex : glue.vertices) key += std::to_string(vertex) + ",";
+  return key;
+}
+
+// Two trees over two leg lists, as the trees over the joined list: the junction couples the root of
+// the first tree with the first leg of the second, and every allowed coupling is a separate basis
+// vector of the joined side.
+std::vector<FusionTree> join_trees(const FusionCategory& group, const FusionTree& first,
+                                   const FusionTree& second) {
+  if (first.sectors.empty()) return {second};
+  if (second.sectors.empty()) return {first};
+  const Sector first_root = physical_of(group, first, first.sectors.size() - 1);
+  const Sector second_leg = physical_of(group, second, 0);
+  std::vector<FusionTree> joined;
+  for (const Sector& junction : group.fusion_outcomes(first_root, second_leg)) {
+    FusionTree tree;
+    tree.sectors = first.sectors;
+    tree.sectors.insert(tree.sectors.end(), second.sectors.begin(), second.sectors.end());
+    tree.isdual = first.isdual;
+    tree.isdual.insert(tree.isdual.end(), second.isdual.begin(), second.isdual.end());
+    tree.vertices = first.vertices;
+    tree.vertices.insert(tree.vertices.end(), second.vertices.begin(), second.vertices.end());
+    tree.inner = first.inner;
+    tree.inner.push_back(junction);
+    tree.inner.insert(tree.inner.end(), second.inner.begin(), second.inner.end());
+    tree.coupled = second.coupled;
+    joined.push_back(tree);
+  }
+  return joined;
+}
+
+// The name of a glue leg: its physical sectors and their multiplicities. A dual leg lists the sectors
+// of its dual, so the name is taken in the same direction on both sides of a contraction; two legs with
+// the same name have the same tree basis, and their blocks are multiplied row by row.
+std::string leg_name(const Leg& leg) {
+  std::string key;
+  for (int64_t at = 0; at < leg.nblocks(); ++at) {
+    const Sector sector =
+        leg.qconj() < 0 ? leg.group()->dual_sector(leg.sector(at)) : leg.sector(at);
+    for (const int64_t component : sector) key += std::to_string(component) + ",";
+    key += "x" + std::to_string(leg.multiplicity(at)) + ";";
+  }
+  return key;
+}
+
+// The glue is the last `left_glue` legs of the left operand's domain and the first `right_glue` legs of
+// the right operand's codomain: the shape of a composition. Each operand is repartitioned so that the
+// glue is the whole of that side, which leaves every block a matrix over the glue alone, and one
+// matrix product per charge pairs them; the tree bases of the two glue sides coincide, so no weight is
+// needed.
+TensorMap contract(const TensorMap& left, int64_t left_glue, const TensorMap& right, int64_t right_glue,
+                   const c10::Device& device) {
+  if (left_glue < 0 || left_glue != right_glue) {
+    throw std::invalid_argument("contract: the two operands glue a different number of legs");
+  }
+  if (left_glue > left.space.size() || right_glue > right.space.size()) {
+    throw std::invalid_argument("contract: the glue is longer than the tensor it cuts");
+  }
+  const TensorMap one = repartition_tensor(left, left.space.size() - left_glue, device);
+  TensorMap two = repartition_tensor(right, right_glue, device);
+  // The two glue sides are the same legs seen from opposite sides, and a block multiplies row by row,
+  // so the right operand is permuted within its codomain until its glue follows the order of the left.
+  if (one.space.domain.size() != two.space.codomain.size()) {
+    throw std::invalid_argument("contract: the two operands do not glue the same legs");
+  }
+  if (!one.space.domain.empty()) {
+    // Two glue legs may look alike, so every name remembers the slots it fills and each right leg takes
+    // the next free one.
+    std::map<std::string, std::vector<int64_t>> slots;
+    for (int64_t at = 0; at < static_cast<int64_t>(one.space.domain.size()); ++at) {
+      slots[leg_name(one.space.domain.at(at))].push_back(at);
+    }
+    std::vector<int64_t> back(two.space.codomain.size(), -1);
+    for (int64_t at = 0; at < static_cast<int64_t>(two.space.codomain.size()); ++at) {
+      const auto found = slots.find(leg_name(two.space.codomain.at(at)));
+      if (found == slots.end() || found->second.empty()) {
+        throw std::invalid_argument("contract: the two operands glue different legs");
+      }
+      back.at(found->second.front()) = at;
+      found->second.erase(found->second.begin());
+    }
+    std::vector<int64_t> order;
+    for (const int64_t at : back) order.push_back(at + 1);
+    for (int64_t at = 0; at < static_cast<int64_t>(two.space.domain.size()); ++at) {
+      order.push_back(static_cast<int64_t>(two.space.codomain.size()) + at + 1);
+    }
+    two = permute_tensor(two, static_cast<int64_t>(two.space.codomain.size()), order, device);
+  }
+
   TensorMap out;
   out.space.group = left.space.group;
-  out.space.codomain = left.space.codomain;
-  out.space.domain = right.space.domain;
-  for (const auto& [charge, block] : left.blocks) {
-    const auto found = right.blocks.find(charge);
-    if (found == right.blocks.end()) continue;
-    if (std::getenv("EINSUM_TRACE") != nullptr) {
-      std::fprintf(stderr, "contract %s left %ld,%ld right %ld,%ld\n", sector_repr(charge).c_str(),
-                   block.size(0), block.size(1), found->second.size(0), found->second.size(1));
-    }
-    out.blocks.emplace(charge, at::matmul(block, found->second));
+  out.qtotal = left.qtotal;
+  out.space.codomain = one.space.codomain;
+  out.space.domain = two.space.domain;
+  for (const auto& [charge, block] : one.blocks) {
+    const auto other = two.blocks.find(charge);
+    if (other == two.blocks.end()) continue;
+    out.blocks.emplace(charge, at::matmul(block, other->second));
   }
   return out;
 }
@@ -489,10 +786,18 @@ void bind_contract(py::module_& m) {
     return tensor_as(permute_tensor(tensor_of(group, tensor), keep, order, device_of(device)));
   }, py::arg("group"), py::arg("tensor"), py::arg("keep"), py::arg("order"),
      py::arg("device") = py::none());
+  m.def("engine_repartition_tensor", [](const std::shared_ptr<FusionCategory> group,
+                                        const py::dict& tensor, int64_t keep,
+                                        const py::object& device) {
+    return tensor_as(repartition_tensor(tensor_of(group, tensor), keep, device_of(device)));
+  }, py::arg("group"), py::arg("tensor"), py::arg("keep"), py::arg("device") = py::none());
   m.def("engine_contract", [](const std::shared_ptr<FusionCategory> group, const py::dict& left,
-                              const py::dict& right) {
-    return tensor_as(contract(tensor_of(group, left), tensor_of(group, right)));
-  }, py::arg("group"), py::arg("left"), py::arg("right"));
+                              int64_t left_glue, const py::dict& right, int64_t right_glue,
+                              const py::object& device) {
+    return tensor_as(contract(tensor_of(group, left), left_glue, tensor_of(group, right), right_glue,
+                              device_of(device)));
+  }, py::arg("group"), py::arg("left"), py::arg("left_glue"), py::arg("right"),
+     py::arg("right_glue"), py::arg("device") = py::none());
 }
 
 }  // namespace sym::engine
@@ -505,7 +810,8 @@ namespace {
 
 // The sum of the squared moduli of every entry of a block.
 double squared_norm(const at::Tensor& block) {
-  return at::norm(block).item<double>() * at::norm(block).item<double>();
+  const double size = at::norm(block).item<double>();
+  return size * size;
 }
 
 }  // namespace
@@ -526,8 +832,10 @@ TensorMap adjoint(const TensorMap& tensor) {
   out.qtotal = tensor.space.group->dual_sector(tensor.qtotal);
   for (Leg& leg : out.space.codomain) leg = leg.conj();
   for (Leg& leg : out.space.domain) leg = leg.conj();
-  for (const auto& [charge, block] : tensor.blocks) {
-    out.blocks.emplace(charge, at::conj(block).transpose(0, 1).contiguous());
+  // Turning a tensor around keeps the charge of its legs, so every block keeps the sector it is
+  // named by and only its rows and columns trade places.
+  for (const auto& [root, block] : tensor.blocks) {
+    out.blocks.emplace(root, at::conj(block).transpose(0, 1).contiguous());
   }
   return out;
 }
@@ -536,6 +844,53 @@ double norm(const TensorMap& tensor) {
   double total = 0.0;
   for (const auto& [charge, block] : tensor.blocks) total += squared_norm(block);
   return std::sqrt(total);
+}
+
+std::complex<double> trace(const TensorMap& tensor) {
+  const int64_t legs = static_cast<int64_t>(tensor.space.size());
+  const FusionCategory& group = *tensor.space.group;
+  std::complex<double> total = 0.0;
+  if (legs == 2 && tensor.space.codomain.empty()) {
+    // Closing a diagram pairs each leg with the conjugate of the other.
+    if (!(tensor.space.domain.at(0) == tensor.space.domain.at(1)) &&
+        !(tensor.space.domain.at(0) == tensor.space.domain.at(1).conj())) {
+      throw std::invalid_argument("trace: the two closed legs have to be conjugate spaces");
+    }
+    const auto listed = side_trees(group, tensor.space.domain);
+    for (const auto& [charge, block] : tensor.blocks) {
+      const auto found = listed.find(charge);
+      if (found == listed.end()) continue;
+      const std::vector<FusionTree>& trees = found->second;
+      if (trees.empty()) continue;
+      const SideLayout layout = side_layout(tensor.space.domain, trees);
+      const at::Tensor values = block.to(at::kCPU, at::kComplexDouble).contiguous();
+      const c10::complex<double>* data = values.data_ptr<c10::complex<double>>();
+      for (int64_t row = 0; row < layout.rows(); ++row) {
+        const auto [tree, mults] = row_parts(layout, row);
+        if (mults.size() != 2 || mults.at(0) != mults.at(1)) continue;
+        const c10::complex<double> entry = data[row];
+        total += std::complex<double>(entry.real(), entry.imag());
+      }
+    }
+    return total;
+  }
+  const std::vector<int64_t> identity = [](int64_t size) {
+    std::vector<int64_t> out(size);
+    for (int64_t at = 0; at < size; ++at) out.at(at) = at + 1;
+    return out;
+  }(legs);
+  const c10::Device device =
+      tensor.blocks.empty() ? at::TensorOptions().device() : tensor.blocks.begin()->second.device();
+  for (const auto& [charge, block] :
+       permute_tensor(tensor, legs / 2, identity, device).blocks) {
+    if (block.dim() != 2 || block.size(0) != block.size(1)) {
+      throw std::invalid_argument("trace: a traced tensor has to be a square map");
+    }
+    const c10::complex<double> entry =
+        at::trace(block).to(at::kCPU, at::kComplexDouble).item<c10::complex<double>>();
+    total += std::complex<double>(entry.real(), entry.imag());
+  }
+  return total;
 }
 
 std::complex<double> inner(const TensorMap& left, const TensorMap& right) {
@@ -589,6 +944,23 @@ std::shared_ptr<FusionCategory> group_of(const std::vector<Leg>& codomain, const
   throw std::invalid_argument("a tensor needs at least one leg to fix its category");
 }
 
+// The domain root that goes with a codomain root at a given total charge: the block of a tensor is
+// fixed by the root of its codomain side, and the domain root is the sector the two sides fuse
+// through, which the total charge then pins down.
+Sector partner_root(const FusionCategory& group, const Sector& codomain_root, const Sector& qtotal) {
+  std::vector<Sector> valid;
+  for (const Sector& candidate : group.fusion_outcomes(group.dual_sector(codomain_root), qtotal)) {
+    const std::vector<Sector> fused = group.fusion_outcomes(codomain_root, candidate);
+    if (std::find(fused.begin(), fused.end(), qtotal) != fused.end()) valid.push_back(candidate);
+  }
+  if (valid.size() != 1) {
+    throw std::invalid_argument(
+        "a block is fixed by the root of its codomain, and more than one domain root fuses with it "
+        "to the total charge of this tensor");
+  }
+  return valid.front();
+}
+
 std::vector<std::vector<LegCharge>> charges_of(const std::vector<Leg>& legs) {
   std::vector<std::vector<LegCharge>> out;
   for (const Leg& leg : legs) out.push_back(leg_charges(leg));
@@ -616,35 +988,39 @@ Tensor Tensor::filled(const std::vector<Leg>& codomain, const std::vector<Leg>& 
   out.space.codomain = codomain;
   out.space.domain = domain;
   out.qtotal = qtotal;
-  const std::vector<std::vector<LegCharge>> out_charges = charges_of(codomain);
-  const std::vector<std::vector<LegCharge>> in_charges = charges_of(domain);
+  const auto out_trees = side_trees(*group, codomain);
+  const auto in_trees = side_trees(*group, domain);
+  const std::vector<Sector> out_roots = roots_of(*group, out_trees);
+  const std::vector<Sector> in_roots = roots_of(*group, in_trees);
   const auto options = at::TensorOptions().dtype(dtype).device(device);
-  std::vector<FusionTreePair> pairs = tree_pairs(*group, out_charges, in_charges);
 
-  std::set<Sector> charges;
-  for (const FusionTreePair& pair : pairs) {
-    // A one-sided tensor is a state, so it carries exactly the total charge it is labelled with.
-    if ((domain.empty() || codomain.empty()) && pair.codomain.coupled != qtotal) continue;
-    charges.insert(pair.codomain.coupled);
-  }
-  for (const Sector& charge : charges) {
-    std::vector<FusionTree> codomain_trees;
-    std::vector<FusionTree> domain_trees;
-    for (const FusionTreePair& pair : pairs) {
-      if (pair.codomain.coupled != charge) continue;
-      if (std::find(codomain_trees.begin(), codomain_trees.end(), pair.codomain) == codomain_trees.end())
-        codomain_trees.push_back(pair.codomain);
-      if (std::find(domain_trees.begin(), domain_trees.end(), pair.domain) == domain_trees.end())
-        domain_trees.push_back(pair.domain);
+  // A block is fixed by the root of the codomain side; the domain root is the sector the two sides
+  // fuse through at the total charge.
+  for (const Sector& root : out_roots) {
+    // A side without legs cannot say which root the other side pairs with, so the total charge fixes
+    // it: an empty domain makes the codomain root the charge itself, an empty codomain carries it on
+    // the domain side.
+    Sector partner;
+    if (domain.empty()) {
+      if (root != qtotal) continue;
+      partner = group->trivial_sector();
+    } else if (codomain.empty()) {
+      if (root != group->trivial_sector()) continue;
+      partner = qtotal;
+    } else {
+      partner = partner_root(*group, root, qtotal);
     }
-    const int64_t rows = side_layout(codomain, codomain_trees).rows();
-    const int64_t columns = side_layout(domain, domain_trees).rows();
+    if (std::find(in_roots.begin(), in_roots.end(), partner) == in_roots.end()) continue;
+    const KeyLayout rows = key_layout(codomain, out_trees, root);
+    const KeyLayout columns = key_layout(domain, in_trees, partner);
+    if (rows.rows == 0 || columns.rows == 0) continue;
+    const Sector key = codomain.empty() ? partner : root;
     at::Tensor block;
-    if (kind == 0) block = at::zeros({rows, columns}, options);
-    else if (kind == 1) block = at::ones({rows, columns}, options);
-    else if (device.is_cpu()) block = at::rand({rows, columns}, options);
-    else block = at::rand({rows, columns}, options.device(at::kCPU)).to(device);
-    out.blocks.emplace(charge, std::move(block));
+    if (kind == 0) block = at::zeros({rows.rows, columns.rows}, options);
+    else if (kind == 1) block = at::ones({rows.rows, columns.rows}, options);
+    else if (device.is_cpu()) block = at::rand({rows.rows, columns.rows}, options);
+    else block = at::rand({rows.rows, columns.rows}, options.device(at::kCPU)).to(device);
+    out.blocks.emplace(key, std::move(block));
   }
   return Tensor(std::move(out));
 }
@@ -848,6 +1224,99 @@ Tensor Tensor::operator-() const {
   return Tensor(std::move(out));
 }
 
+namespace {
+
+// Rearranges the legs of a tensor into a wanted sequence and a wanted split between its sides, so
+// that the component array is only permuted: a leg that crosses changes its direction, and both
+// sides are re-expressed in each other's tree basis.
+// Args:
+//   tensor: a tensor map.
+//   keep: the number of legs the codomain carries afterwards.
+//   order: the legs in their wanted order, as one-based positions in `tensor`.
+//   device: where the associator is read from.
+// Returns:
+//   The same map over rearranged legs.
+// Raises:
+//   std::invalid_argument: if `keep` or `order` does not describe an arrangement of the legs.
+TensorMap arrange_tensor(const TensorMap& tensor, int64_t keep, const std::vector<int64_t>& order,
+                         const c10::Device& device) {
+  const int64_t total = tensor.space.size();
+  if (keep < 0 || keep > total) {
+    throw std::invalid_argument("arrange_tensor: a tensor of " + std::to_string(total) +
+                                " legs cannot carry " + std::to_string(keep) + " of them");
+  }
+  if (static_cast<int64_t>(order.size()) != total) {
+    throw std::invalid_argument("arrange_tensor: the order names " + std::to_string(order.size()) +
+                                " legs of a tensor with " + std::to_string(total));
+  }
+  std::vector<bool> seen(static_cast<std::size_t>(total), false);
+  std::vector<bool> on_codomain(static_cast<std::size_t>(total), false);
+  for (int64_t at = 0; at < total; ++at) {
+    const int64_t leg = order.at(at) - 1;
+    if (leg < 0 || leg >= total || seen.at(leg)) {
+      throw std::invalid_argument("arrange_tensor: the order is not a permutation of the legs");
+    }
+    seen.at(leg) = true;
+    on_codomain.at(leg) = at < keep;
+  }
+  if (total == 0) return tensor;
+
+  // The legs in the order they stand in now, as positions in `tensor`.
+  std::vector<int64_t> now(static_cast<std::size_t>(total));
+  for (int64_t at = 0; at < total; ++at) now.at(at) = at;
+  const int64_t codomain = static_cast<int64_t>(tensor.space.codomain.size());
+  TensorMap out = tensor;
+  // Hand the codomain legs that have to leave over, standing last in the codomain.
+  std::vector<int64_t> stay;
+  std::vector<int64_t> leave;
+  for (int64_t at = 0; at < codomain; ++at) {
+    (on_codomain.at(now.at(at)) ? stay : leave).push_back(at);
+  }
+  if (!leave.empty()) {
+    std::vector<int64_t> within;
+    for (const int64_t at : stay) within.push_back(at + 1);
+    for (const int64_t at : leave) within.push_back(at + 1);
+    for (int64_t at = codomain; at < total; ++at) within.push_back(at + 1);
+    out = repartition_tensor(permute_tensor(out, codomain, within, device),
+                             codomain - static_cast<int64_t>(leave.size()), device);
+    // A repartition appends the leaving block to the end of the domain.
+    std::vector<int64_t> next;
+    for (const int64_t at : stay) next.push_back(now.at(at));
+    for (int64_t at = codomain; at < total; ++at) next.push_back(now.at(at));
+    for (const int64_t at : leave) next.push_back(now.at(at));
+    now = next;
+  }
+  // Hand the domain legs that have to join over, standing last in the domain.
+  const int64_t kept = codomain - static_cast<int64_t>(leave.size());
+  std::vector<int64_t> enter;
+  std::vector<int64_t> rest;
+  for (int64_t at = kept; at < total; ++at) {
+    (on_codomain.at(now.at(at)) ? enter : rest).push_back(at);
+  }
+  if (!enter.empty()) {
+    std::vector<int64_t> within;
+    for (int64_t at = 0; at < kept; ++at) within.push_back(at + 1);
+    for (const int64_t at : rest) within.push_back(at + 1);
+    for (const int64_t at : enter) within.push_back(at + 1);
+    out = repartition_tensor(permute_tensor(out, kept, within, device),
+                             kept + static_cast<int64_t>(enter.size()), device);
+    // A repartition appends the joining block to the end of the codomain.
+    std::vector<int64_t> next;
+    for (int64_t at = 0; at < kept; ++at) next.push_back(now.at(at));
+    for (const int64_t at : enter) next.push_back(now.at(at));
+    for (const int64_t at : rest) next.push_back(now.at(at));
+    now = next;
+  }
+  // Both sides carry the legs they should; only the order within them is left to fix.
+  std::vector<int64_t> position(static_cast<std::size_t>(total), 0);
+  for (int64_t at = 0; at < total; ++at) position.at(now.at(at)) = at + 1;
+  std::vector<int64_t> wanted;
+  for (const int64_t leg : order) wanted.push_back(position.at(leg - 1));
+  return permute_tensor(out, keep, wanted, device);
+}
+
+}  // namespace
+
 Tensor einsum(const std::string& spec, const std::vector<Tensor>& operands) {
   const std::size_t arrow = spec.find("->");
   const std::string sides = arrow == std::string::npos ? spec : spec.substr(0, arrow);
@@ -870,16 +1339,6 @@ Tensor einsum(const std::string& spec, const std::vector<Tensor>& operands) {
   for (const Tensor& operand : operands) {
     if (!operand.graded()) throw std::invalid_argument("einsum: a bare matrix carries no legs to contract");
   }
-  // The labels that are summed over, in one order for every operand, so that the two sides of a
-  // contraction meet in the same order.
-  std::string summed;
-  for (const std::string& group : groups) {
-    for (const char letter : group) {
-      if (wanted.find(letter) != std::string::npos) continue;
-      if (summed.find(letter) == std::string::npos) summed.push_back(letter);
-    }
-  }
-  std::sort(summed.begin(), summed.end());
   // A kept label comes out on the side it went in on: a leg of a codomain stays in the codomain, so
   // that a contraction of maps is again a map.
   std::map<char, int> side;
@@ -891,20 +1350,20 @@ Tensor einsum(const std::string& spec, const std::vector<Tensor>& operands) {
       side[letter] = static_cast<int64_t>(where) < codomain_size ? 0 : 1;
     }
   }
-  const auto device = at::TensorOptions().device();
-  // The operands are contracted in the order that always joins two tensors through shared labels: a
-  // product of three or more indices is a chain, and grouping it greedily keeps every step a real
-  // contraction instead of an outer product.
+  // The operands carry the place the contraction runs on; an empty block set cannot tell, and then
+  // the default place is the only answer.
+  const auto device = operands.front().device();
   std::vector<std::string> pending = groups;
   std::vector<Tensor> waiting = operands;
-  Tensor accumulated;
-  std::string labels;
-  {
-    accumulated = waiting.front();
-    labels = pending.front();
-    waiting.erase(waiting.begin());
-    pending.erase(pending.begin());
-  }
+  Tensor accumulated = waiting.front();
+  std::string labels = pending.front();
+  waiting.erase(waiting.begin());
+  pending.erase(pending.begin());
+  const auto order_of = [](const std::string& from, const std::string& letters) {
+    std::vector<int64_t> order;
+    for (const char letter : letters) order.push_back(static_cast<int64_t>(from.find(letter)) + 1);
+    return order;
+  };
   while (!waiting.empty()) {
     std::size_t chosen = 0;
     std::size_t most = 0;
@@ -926,42 +1385,35 @@ Tensor einsum(const std::string& spec, const std::vector<Tensor>& operands) {
     std::string shared;
     for (const char letter : labels)
       if (next.find(letter) != std::string::npos) shared.push_back(letter);
-    const auto device_order = [](const std::string& from, const std::string& letters) {
-      std::vector<int64_t> order;
-      for (const char letter : letters) order.push_back(static_cast<int64_t>(from.find(letter)) + 1);
-      return order;
-    };
     std::string left_kept;
     for (const char letter : labels)
       if (shared.find(letter) == std::string::npos) left_kept.push_back(letter);
     std::string right_kept;
     for (const char letter : next)
       if (shared.find(letter) == std::string::npos) right_kept.push_back(letter);
-    // The shared labels of the first tensor go to its domain and those of the second to its
-    // codomain, which is where a contraction meets them; the remaining legs stay on their side.
-    std::string left_order = left_kept + shared;
-    std::string right_order = shared + right_kept;
-    Tensor left = Tensor(permute_tensor(accumulated.map(), left_kept.size(),
-                                        device_order(labels, left_order), device));
-    Tensor right = Tensor(permute_tensor(waiting.at(chosen).map(), shared.size(),
-                                         device_order(next, right_order), device));
-    accumulated = Tensor(engine::contract(left.map(), right.map()));
+    // The contraction glues the end of the left domain to the start of the right codomain, so each
+    // operand is arranged with its glue on that side and its kept legs on the other.
+    Tensor left = Tensor(arrange_tensor(accumulated.map(), static_cast<int64_t>(left_kept.size()),
+                                        order_of(labels, left_kept + shared), device));
+    Tensor right = Tensor(arrange_tensor(waiting.at(chosen).map(), static_cast<int64_t>(shared.size()),
+                                         order_of(next, shared + right_kept), device));
+    accumulated = Tensor(engine::contract(left.map(), static_cast<int64_t>(shared.size()),
+                                          right.map(), static_cast<int64_t>(shared.size()), device));
     labels = left_kept + right_kept;
     waiting.erase(waiting.begin() + static_cast<int64_t>(chosen));
     pending.erase(pending.begin() + static_cast<int64_t>(chosen));
   }
-  // The contracted tensor carries the kept labels in the order the operands named them; the output
-  // fixes their final order.
+  // The output fixes the side and the order of every kept label.
   if (wanted.empty()) return accumulated;
   std::vector<int64_t> order;
   int64_t keep_out = 0;
   for (const int want_codomain : {0, 1}) {
     for (const char letter : wanted) {
-      if (side.at(letter) != want_codomain) continue;
       const std::size_t where = labels.find(letter);
       if (where == std::string::npos) {
         throw std::invalid_argument("einsum: the output names a label no operand carries");
       }
+      if (side.at(letter) != want_codomain) continue;
       order.push_back(static_cast<int64_t>(where) + 1);
       if (want_codomain == 0) ++keep_out;
     }
@@ -969,7 +1421,7 @@ Tensor einsum(const std::string& spec, const std::vector<Tensor>& operands) {
   if (order.size() != labels.size()) {
     throw std::invalid_argument("einsum: the output drops a label that no other operand takes");
   }
-  return Tensor(permute_tensor(accumulated.map(), keep_out, order, device));
+  return Tensor(arrange_tensor(accumulated.map(), keep_out, order, device));
 }
 
 
@@ -1027,6 +1479,7 @@ Tensor filled_of(const py::args& shape, const py::kwargs& options, int kind) {
 
 void bind_tensor(py::module_& m) {
   py::class_<Tensor>(m, "Tensor")
+      .def("map", [](const Tensor& tensor) { return tensor_as(tensor.map()); })
       .def(py::init([](const std::vector<Sector>& charges, const std::vector<at::Tensor>& blocks,
                        const std::vector<Leg>& legs, const py::object& qtotal, int64_t codomain) {
         TensorMap map;
@@ -1110,13 +1563,6 @@ void bind_tensor(py::module_& m) {
   const auto contract_given = [](const std::string& spec, const py::args& operands) {
     std::vector<Tensor> given;
     for (const py::handle& operand : operands) given.push_back(operand.cast<Tensor>());
-    if (std::getenv("EINSUM_SPEC") != nullptr) {
-      std::fprintf(stderr, "einsum '%s':", spec.c_str());
-      for (const Tensor& one : given)
-        std::fprintf(stderr, " %zu|%zu", one.graded() ? one.map().space.codomain.size() : 0,
-                     one.graded() ? one.map().space.domain.size() : 0);
-      std::fprintf(stderr, "\n");
-    }
     return einsum(spec, given);
   };
   m.def("cached_einsum", contract_given, py::arg("spec"));

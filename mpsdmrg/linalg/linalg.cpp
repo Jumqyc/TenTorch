@@ -6,6 +6,7 @@
 #include <pybind11/complex.h>
 #include <pybind11/stl.h>
 
+#include <algorithm>
 #include <map>
 #include <stdexcept>
 
@@ -40,6 +41,33 @@ std::vector<int64_t> leg_order(const TensorMap& tensor, const std::vector<int64_
     }
   }
   return order;
+}
+
+// The map a split factorizes, and the device its blocks live on: the leading legs become the codomain
+// and the trailing ones the domain. repartition hands over the last leg of the crowded side, so a
+// tensor written as a ket is turned round before the boundary is moved, which keeps its order.
+struct Prepared {
+  TensorMap source;
+  c10::Device device;
+};
+
+Prepared prepare(const TensorMap& tensor, const std::vector<int64_t>& left,
+                 const std::vector<int64_t>& right) {
+  const std::vector<int64_t> order = leg_order(tensor, left, right);
+  for (std::size_t at = 0; at < order.size(); ++at) {
+    if (order.at(at) != static_cast<int64_t>(at)) {
+      throw std::invalid_argument("a split has to take the first legs of the tensor");
+    }
+  }
+  const c10::Device device = tensor.blocks.empty() ? at::TensorOptions().device()
+                                                   : tensor.blocks.begin()->second.device();
+  TensorMap source = tensor.space.codomain.empty()
+                         ? repartition_tensor(tensor, tensor.space.size(), device)
+                         : tensor;
+  if (source.space.domain.empty()) {
+    source = repartition_tensor(source, static_cast<int64_t>(left.size()), device);
+  }
+  return Prepared{std::move(source), device};
 }
 
 // The singular values of every charge, in the order the bond leg lists the charges.
@@ -77,112 +105,94 @@ std::vector<at::Tensor> keep_flags(const std::vector<Part>& parts, std::optional
   return flags;
 }
 
-// Two factors of one part: the first keeps the columns, the second the rows, at the kept positions.
-struct Factors {
-  at::Tensor first;
-  at::Tensor second;
-};
-
-// The tensor of a split whose codomain is the two given sides and whose bond leg carries the kept
-// copies of every charge, the bond of the second factor pointing the other way.
-TensorMap assemble(const std::shared_ptr<FusionCategory>& group, const std::vector<Leg>& codomain,
-                   const std::vector<Leg>& domain, const std::vector<Part>& parts,
-                   const std::vector<at::Tensor>& kept,
-                   const std::vector<std::pair<Sector, int64_t>>& bond_sectors, bool first,
-                   const c10::Device& device) {
-  TensorMap tensor;
-  tensor.space.group = group;
-  if (first) {
-    tensor.space.codomain = codomain;
-    std::vector<std::pair<Sector, int64_t>> dualised;
-    for (const auto& [sector, copies] : bond_sectors) {
-      dualised.emplace_back(group->dual_sector(sector), copies);
-    }
-    tensor.space.domain = {leg_of(group, dualised, -1)};
-  } else {
-    tensor.space.codomain = {leg_of(group, bond_sectors, 1)};
-    tensor.space.domain = domain;
-  }
-  for (std::size_t at = 0; at < parts.size(); ++at) {
-    if (kept.at(at).size(0) == 0) continue;
-    const at::Tensor& piece = first ? parts.at(at).u : parts.at(at).vh;
-    tensor.blocks.emplace(parts.at(at).charge,
-                          at::index_select(piece, first ? 1 : 0, kept.at(at)).to(device));
-  }
-  return tensor;
-}
-
 }  // namespace
 
+// The split of a tensor: the leading legs become the codomain of the first factor and the remaining
+// legs the domain of the second, joined by a bond leg that carries the kept copies of every charge. A
+// tensor whose legs all lie on one side is first turned into a map, so every block is a matrix and
+// factorises on its own.
 Split svd(const TensorMap& tensor, const std::vector<int64_t>& left,
           const std::vector<int64_t>& right, std::optional<int64_t> max_bond, double tol) {
-  // The legs are named from zero on the python side and from one by the moves.
-  std::vector<int64_t> order = leg_order(tensor, left, right);
-  for (int64_t& leg : order) ++leg;
-  const c10::Device device = tensor.blocks.empty() ? at::TensorOptions().device()
-                                                  : tensor.blocks.begin()->second.device();
-  const TensorMap permuted = permute_tensor(tensor, static_cast<int64_t>(left.size()), order, device);
+  const auto [source, device] = prepare(tensor, left, right);
+  const std::shared_ptr<FusionCategory> group = source.space.codomain.front().group();
   std::vector<Part> parts;
-  for (const auto& [charge, block] : permuted.blocks) {
+  for (const auto& [charge, block] : source.blocks) {
     auto [u, values, vh] = at::linalg_svd(block, /*full_matrices=*/false);
     parts.push_back({charge, u, values, vh});
   }
   const std::vector<at::Tensor> flags = keep_flags(parts, max_bond, tol);
-  std::vector<at::Tensor> kept;
-  std::vector<std::pair<Sector, int64_t>> bond_sectors;
+  // The bond leg of the first factor points in, the one of the second points out; both carry the kept
+  // copies of the charge of the block they came from.
+  std::vector<std::pair<Sector, int64_t>> bond;
+  std::vector<std::pair<Sector, int64_t>> dual_bond;
   std::vector<at::Tensor> spectrum;
   for (std::size_t at = 0; at < parts.size(); ++at) {
     const at::Tensor index = flags.at(at).nonzero().squeeze(-1);
-    kept.push_back(index);
     if (index.size(0) == 0) continue;
-    bond_sectors.emplace_back(parts.at(at).charge, index.size(0));
+    bond.emplace_back(parts.at(at).charge, index.size(0));
+    dual_bond.emplace_back(group->dual_sector(parts.at(at).charge), index.size(0));
     spectrum.push_back(at::index_select(parts.at(at).values, 0, index));
   }
   Split split;
-  split.first = assemble(tensor.space.group, permuted.space.codomain, permuted.space.domain, parts,
-                         kept, bond_sectors, /*first=*/true, device);
-  split.second = assemble(tensor.space.group, permuted.space.codomain, permuted.space.domain, parts,
-                          kept, bond_sectors, /*first=*/false, device);
-  split.singular = spectrum.empty() ? at::zeros({0}, at::TensorOptions().dtype(at::kDouble).device(device))
-                                    : at::cat(spectrum).to(at::kDouble);
+  split.first.space.group = group;
+  split.first.space.codomain = source.space.codomain;
+  split.first.space.domain = {leg_of(group, dual_bond, -1)};
+  split.first.qtotal = group->trivial_sector();
+  split.second.space.group = group;
+  split.second.space.codomain = {leg_of(group, bond, 1)};
+  split.second.space.domain = source.space.domain;
+  split.second.qtotal = tensor.qtotal;
+  for (std::size_t at = 0; at < parts.size(); ++at) {
+    const at::Tensor index = flags.at(at).nonzero().squeeze(-1);
+    if (index.size(0) == 0) continue;
+    split.first.blocks.emplace(parts.at(at).charge,
+                               at::index_select(parts.at(at).u, 1, index).to(device).contiguous());
+    split.second.blocks.emplace(parts.at(at).charge,
+                                at::index_select(parts.at(at).vh, 0, index).to(device).contiguous());
+  }
+  split.singular = spectrum.empty()
+                       ? at::zeros({0}, at::TensorOptions().dtype(at::kDouble).device(device))
+                       : at::cat(spectrum).to(at::kDouble);
   return split;
 }
 
 std::pair<TensorMap, TensorMap> qr(const TensorMap& tensor, const std::vector<int64_t>& left,
                                    const std::vector<int64_t>& right) {
-  // The legs are named from zero on the python side and from one by the moves.
-  std::vector<int64_t> order = leg_order(tensor, left, right);
-  for (int64_t& leg : order) ++leg;
-  const c10::Device device = tensor.blocks.empty() ? at::TensorOptions().device()
-                                                  : tensor.blocks.begin()->second.device();
-  const TensorMap permuted = permute_tensor(tensor, static_cast<int64_t>(left.size()), order, device);
-  std::vector<Part> parts;
-  for (const auto& [charge, block] : permuted.blocks) {
+  const auto [source, device] = prepare(tensor, left, right);
+  const std::shared_ptr<FusionCategory> group = source.space.codomain.front().group();
+  std::vector<std::pair<Sector, at::Tensor>> reduced;
+  std::vector<std::pair<Sector, int64_t>> bond;
+  std::vector<at::Tensor> second_blocks;
+  for (const auto& [charge, block] : source.blocks) {
     auto [q, r] = at::linalg_qr(block, "reduced");
-    parts.push_back({charge, q, at::zeros({q.size(1)}, block.options()), r});
+    reduced.emplace_back(charge, q);
+    bond.emplace_back(charge, q.size(1));
+    second_blocks.push_back(r);
   }
-  std::vector<at::Tensor> kept;
-  std::vector<std::pair<Sector, int64_t>> bond_sectors;
-  for (const Part& part : parts) {
-    kept.push_back(at::arange(part.u.size(1), part.u.options().dtype(at::kLong)));
-    if (part.u.size(1) > 0) bond_sectors.emplace_back(part.charge, part.u.size(1));
+  std::vector<std::pair<Sector, int64_t>> dual_bond;
+  for (const auto& [charge, copies] : bond) dual_bond.emplace_back(group->dual_sector(charge), copies);
+  TensorMap first;
+  first.space.group = group;
+  first.space.codomain = source.space.codomain;
+  first.space.domain = {leg_of(group, dual_bond, -1)};
+  first.qtotal = group->trivial_sector();
+  TensorMap second;
+  second.space.group = group;
+  second.space.codomain = {leg_of(group, bond, 1)};
+  second.space.domain = source.space.domain;
+  second.qtotal = tensor.qtotal;
+  for (std::size_t at = 0; at < reduced.size(); ++at) {
+    first.blocks.emplace(reduced.at(at).first, reduced.at(at).second.to(device).contiguous());
+    second.blocks.emplace(reduced.at(at).first, second_blocks.at(at).to(device).contiguous());
   }
-  return {assemble(tensor.space.group, permuted.space.codomain, permuted.space.domain, parts, kept,
-                   bond_sectors, /*first=*/true, device),
-          assemble(tensor.space.group, permuted.space.codomain, permuted.space.domain, parts, kept,
-                   bond_sectors, /*first=*/false, device)};
+  return {first, second};
 }
 
 at::Tensor svdvals(const TensorMap& tensor, const std::vector<int64_t>& left,
                    const std::vector<int64_t>& right) {
-  // The legs are named from zero on the python side and from one by the moves.
-  std::vector<int64_t> order = leg_order(tensor, left, right);
-  for (int64_t& leg : order) ++leg;
-  const c10::Device device = tensor.blocks.empty() ? at::TensorOptions().device()
-                                                  : tensor.blocks.begin()->second.device();
-  const TensorMap permuted = permute_tensor(tensor, static_cast<int64_t>(left.size()), order, device);
+  const auto [source, device] = prepare(tensor, left, right);
   std::vector<at::Tensor> values;
-  for (const auto& [charge, block] : permuted.blocks) values.push_back(at::linalg_svdvals(block));
+  for (const auto& [charge, block] : source.blocks) values.push_back(at::linalg_svdvals(block));
   return values.empty() ? at::zeros({0}, at::TensorOptions().dtype(at::kDouble).device(device))
                         : at::cat(values).to(at::kDouble);
 }
@@ -277,27 +287,12 @@ void bind_linalg(py::module_& m) {
     return engine::inner(left.map(), right.map());
   });
   m.def("trace", [](const engine::Tensor& tensor) {
-    // A trace reads the legs by position: the first half points out, the second half in.
-    const int64_t legs = static_cast<int64_t>(tensor.map().space.size());
-    std::vector<int64_t> identity(legs);
-    for (int64_t at = 0; at < legs; ++at) identity.at(at) = at + 1;
+    // Closes the legs pairwise and hands back the scalar they leave as a tensor with no leg.
     const engine::TensorMap& source = tensor.map();
-    const c10::Device device =
-        source.blocks.empty() ? at::TensorOptions().device() : source.blocks.begin()->second.device();
-    const engine::TensorMap map = engine::permute_tensor(source, legs / 2, identity, device);
-    std::complex<double> total = 0.0;
-    for (const auto& [charge, block] : map.blocks) {
-      if (block.dim() != 2 || block.size(0) != block.size(1)) {
-        throw std::invalid_argument("trace: a traced tensor has to be a square map");
-      }
-      const at::Tensor value = at::trace(block).to(at::kCPU, at::kComplexDouble);
-      const c10::complex<double> entry = value.item<c10::complex<double>>();
-      total += std::complex<double>(entry.real(), entry.imag());
-    }
-    // A traced tensor has no leg left, so the trace is the tensor with a single scalar block.
+    const std::complex<double> total = engine::trace(source);
     engine::TensorMap scalar;
-    scalar.space.group = map.space.group;
-    scalar.qtotal = map.space.group->trivial_sector();
+    scalar.space.group = source.space.group;
+    scalar.qtotal = source.space.group->trivial_sector();
     scalar.blocks[scalar.qtotal] =
         at::scalar_tensor(at::Scalar(c10::complex<double>(total.real(), total.imag())),
                           at::TensorOptions().dtype(at::kComplexDouble)).reshape({1, 1});

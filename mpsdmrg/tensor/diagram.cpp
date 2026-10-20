@@ -673,38 +673,34 @@ std::vector<TreeTerm> braid_tree(const FusionCategory& group, const FusionTree& 
 std::vector<PairTerm> permute_pair(const FusionCategory& group, const FusionTreePair& pair,
                                    int64_t keep, const std::vector<int64_t>& order,
                                    const c10::Device& device) {
-  const int64_t total = pair.codomain.size() + pair.domain.size();
-  // Gathering every leg onto the codomain takes the domain legs from the back, and the way back
-  // takes the codomain legs from the back as well, so both tails come out reversed; the requested
-  // order therefore fixes the gathered tree up to that reversal.
-  std::vector<int64_t> arrangement;
-  for (int64_t leg = 1; leg <= pair.codomain.size(); ++leg) arrangement.push_back(leg);
-  for (int64_t leg = pair.domain.size(); leg >= 1; --leg) {
-    arrangement.push_back(static_cast<int64_t>(pair.codomain.size()) + leg);
+  const int64_t codomain = static_cast<int64_t>(pair.codomain.size());
+  const int64_t total = codomain + static_cast<int64_t>(pair.domain.size());
+  // A permutation keeps the two sides apart: the order names the source legs of the codomain first
+  // and those of the domain after, so neither tree changes its root.
+  if (keep != codomain) {
+    throw std::invalid_argument("permute_pair: a permutation keeps the codomain legs of a pair");
   }
-  std::vector<int64_t> wanted;
-  for (int64_t at = 0; at < keep; ++at) wanted.push_back(order.at(static_cast<size_t>(at)));
-  for (int64_t at = total - 1; at >= keep; --at) wanted.push_back(order.at(static_cast<size_t>(at)));
-  std::vector<int64_t> translated;
-  for (const int64_t leg : wanted) {
-    const auto found = std::find(arrangement.begin(), arrangement.end(), leg) - arrangement.begin();
-    if (found == static_cast<int64_t>(arrangement.size())) {
+  if (static_cast<int64_t>(order.size()) != total) {
+    throw std::invalid_argument("permute_pair: the order names " + std::to_string(order.size()) +
+                                " legs of a pair with " + std::to_string(total));
+  }
+  std::vector<int64_t> codomain_order;
+  std::vector<int64_t> domain_order;
+  for (int64_t at = 0; at < total; ++at) {
+    const int64_t leg = order.at(static_cast<size_t>(at));
+    if (leg < 1 || leg > total) {
       throw std::invalid_argument("permute_pair: the order names a leg the pair does not carry");
     }
-    translated.push_back(found + 1);
+    if ((leg <= codomain) != (at < keep)) {
+      throw std::invalid_argument("permute_pair: a permutation cannot move a leg to the other side");
+    }
+    (leg <= codomain ? codomain_order : domain_order).push_back(leg <= codomain ? leg : leg - codomain);
   }
   std::vector<PairTerm> terms;
-  for (const PairTerm& on_one_side : repartition(group, pair, total, device)) {
-    for (const TreeTerm& braided : braid_tree(group, on_one_side.pair.codomain, translated, device)) {
-      // The emptied side still couples to the charge of the pair, which is what lets the legs come
-      // back to it.
-      FusionTree empty;
-      empty.coupled = on_one_side.pair.codomain.coupled;
-      const FusionTreePair moved{braided.tree, empty};
-      for (const PairTerm& back : repartition(group, moved, keep, device)) {
-        terms.push_back(PairTerm{back.pair, on_one_side.coefficient * braided.coefficient *
-                                                     back.coefficient});
-      }
+  for (const TreeTerm& left : braid_tree(group, pair.codomain, codomain_order, device)) {
+    for (const TreeTerm& right : braid_tree(group, pair.domain, domain_order, device)) {
+      terms.push_back(PairTerm{FusionTreePair{left.tree, right.tree},
+                               left.coefficient * right.coefficient});
     }
   }
   return terms;
