@@ -24,6 +24,11 @@ struct PairTree {
     return std::tie(uncoupled, isdual, inner, vertices, coupled) <
            std::tie(other.uncoupled, other.isdual, other.inner, other.vertices, other.coupled);
   }
+
+  bool operator==(const PairTree& other) const {
+    return std::tie(uncoupled, isdual, inner, vertices, coupled) ==
+           std::tie(other.uncoupled, other.isdual, other.inner, other.vertices, other.coupled);
+  }
 };
 
 // How the legs of a two-operand contraction line up: the operand axes the two glue along, in the
@@ -37,6 +42,11 @@ struct Gluing {
 
   bool operator<(const Gluing& other) const {
     return std::tie(left, right, out_left, out_right) <
+           std::tie(other.left, other.right, other.out_left, other.out_right);
+  }
+
+  bool operator==(const Gluing& other) const {
+    return std::tie(left, right, out_left, out_right) ==
            std::tie(other.left, other.right, other.out_left, other.out_right);
   }
 };
@@ -67,13 +77,31 @@ Gluing glue_legs(const std::vector<int64_t>& left_labels, const std::vector<int6
 //   Clebsch-Gordan route:
 //     1  the output does not name every free leg of both operands exactly once
 //     2  a move of the recoupling is impossible
-//     10 a sector of the diagram is not its own dual
 //     11 a glued pair carries the dual on both sides or on neither
 int diagram_weight(const std::shared_ptr<FusionCategory>& group, const PairTree& left,
                    const PairTree& right, const PairTree& out, const Gluing& glue,
                    const c10::Device& device, std::complex<double>& weight);
 
-// Drop the cached weights.
+// Drop the cached weights, the cached diagrams and the decoded symbol entries.
 void clear_weight_cache();
+
+// The work the route did, so a probe can say where a contraction spends its time.
+struct RouteStats {
+  std::size_t weight_calls = 0;    // weights the callers asked for
+  std::size_t weight_hits = 0;     // of those, answered from the weight table
+  std::size_t diagram_misses = 0;  // operand halves built from scratch
+  std::size_t entry_calls = 0;     // symbol entry maps decoded
+  std::size_t entry_values = 0;    // nonzero entries those maps held
+  std::size_t move_calls = 0;      // chains brought into an order
+  std::size_t move_states = 0;     // states those chains produced
+  std::size_t weigh_calls = 0;     // output trees weighed
+  std::size_t weigh_pairs = 0;     // tree triples the weighing compared
+};
+
+// The counters since they were last reset.
+RouteStats route_stats();
+
+// Set every counter back to zero.
+void reset_route_stats();
 
 }  // namespace sym

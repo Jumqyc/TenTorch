@@ -64,6 +64,7 @@ class SU3Symmetry : public Group {
   c10::ScalarType fusion_dtype() const override;
   double dual_sign(const Sector& sector) const override;
   double dual_phase(const Sector& sector) const override;
+  double conjugation_phase(const Sector& sector) const override;
   bool is_same_symmetry(const FusionCategory& other) const override;
   void clear_caches() const override;
 };

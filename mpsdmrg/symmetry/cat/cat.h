@@ -113,6 +113,10 @@ class FusionCategory {
   // The sign that conjugating a leg in this sector costs; it is the Frobenius-Schur indicator.
   virtual double dual_sign(const Sector& sector) const;
   virtual double dual_phase(const Sector& sector) const;
+  // The scalar the duality matrix of this sector carries beyond the Frobenius-Schur indicator of
+  // its invariant form, which a dualised leg costs once: 1 where the duality matrix is that
+  // indicator alone, the sign of the conjugation metric where it is not.
+  virtual double conjugation_phase(const Sector& sector) const;
   // The conjugate basis of a sector against its own basis: entry (row, column) maps the
   // column index of the leg onto the row index of the leg that stores its dual.
   virtual at::Tensor duality_matrix(const Sector& a, const c10::Device& device) const;

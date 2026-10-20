@@ -87,6 +87,8 @@ def set_dense_path(enabled: bool) -> None:
         raise NotImplementedError('this build has no dense-path switch; rebuild with DENSEPATH=1')
     _extension.set_dense_path(enabled)
 fermion_parity = _extension.fermion_parity
+reset_route_stats = _extension.reset_route_stats
+route_stats = _extension.route_stats
 fibonacci = _extension.fibonacci
 inner = _extension.inner
 no_symmetry = _extension.no_symmetry

@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -50,12 +51,18 @@ struct TreeValue {
 // instead of redoing the operand half for each of them.
 struct Diagram {
   std::shared_ptr<FusionCategory> group;
+  // the conjugation phases of the legs both operands carry dual
+  double phase;
   std::vector<BendTerm> left;
   std::vector<BendTerm> right;
   std::vector<int64_t> out_order;
   int64_t alpha;
   int64_t beta;
 };
+
+// The counters `route_stats` hands out.
+RouteStats g_stats;
+
 
 // The nonzero entries of a symbol, as the zero-based label of every axis.  A symbol carries four
 // axes at most; the entry of an impossible move is empty.
@@ -65,6 +72,7 @@ CopyEntry copy_entry(const at::Tensor& symbol) {
   }
   // One host copy and one pass over its values, so a symbol costs its caller a single sync.
   const at::Tensor host = symbol.to(at::kCPU, at::kComplexDouble).contiguous();
+  ++g_stats.entry_calls;
   CopyEntry entry;
   if (host.numel() == 0) return entry;
   const c10::complex<double>* values = host.data_ptr<c10::complex<double>>();
@@ -78,16 +86,50 @@ CopyEntry copy_entry(const at::Tensor& symbol) {
     }
     if (values[flat] != c10::complex<double>(0.0, 0.0)) {
       entry[labels] = std::complex<double>(values[flat].real(), values[flat].imag());
+      ++g_stats.entry_values;
     }
   }
   return entry;
 }
 
-// The two associators of a swap and the braiding of the exchanged charge, contracted into the
-// amplitudes of the four vertices the swap touches.
-at::Tensor contract_swap(const at::Tensor& first, const at::Tensor& exchange,
-                         const at::Tensor& second) {
-  return at::einsum("abcd,cr,pqrd->abpq", {first, exchange, second});
+// The decoded entries of a symbol, keyed by the tensor that holds it.  The table keeps the tensor
+// itself, so no other symbol can take its address while the table is kept, and one diagram asks for
+// the same symbol once per state it reaches.
+std::map<const c10::TensorImpl*, std::pair<at::Tensor, CopyEntry>>& entry_table() {
+  static std::map<const c10::TensorImpl*, std::pair<at::Tensor, CopyEntry>> table;
+  return table;
+}
+
+const CopyEntry& cached_entry(const at::Tensor& symbol) {
+  auto& table = entry_table();
+  const c10::TensorImpl* identity = symbol.unsafeGetTensorImpl();
+  const auto found = table.find(identity);
+  if (found != table.end()) return found->second.second;
+  if (table.size() > (1U << 16U)) table.clear();
+  return table.emplace(identity, std::make_pair(symbol, copy_entry(symbol))).first->second.second;
+}
+
+// The two associators of a swap and the braiding of the exchanged charge, combined entry by entry
+// into the amplitudes of the four vertices the swap touches: the braiding's first axis is the
+// associators' shared charge axis, and its second axis meets the second associator's charge axis.
+// The symbols are tiny, so the entries are combined on the host instead of an einsum per swap.
+CopyEntry swap_entries(const at::Tensor& first, const at::Tensor& exchange,
+                       const at::Tensor& second) {
+  const CopyEntry& one = cached_entry(first);
+  const CopyEntry& swap = cached_entry(exchange);
+  const CopyEntry& two = cached_entry(second);
+  CopyEntry out;
+  for (const auto& [one_labels, one_value] : one) {
+    for (const auto& [swap_labels, swap_value] : swap) {
+      if (swap_labels[0] != one_labels[2]) continue;
+      for (const auto& [two_labels, two_value] : two) {
+        if (two_labels[2] != swap_labels[1] || two_labels[3] != one_labels[3]) continue;
+        out[{one_labels[0], one_labels[1], two_labels[0], two_labels[1]}] +=
+            one_value * swap_value * two_value;
+      }
+    }
+  }
+  return out;
 }
 
 // The recoupling matrix of swapping the legs (position, position + 1) of a chain: for every
@@ -104,7 +146,7 @@ SwapMatrix move_matrix(const std::vector<Sector>& legs, const std::vector<Sector
     // after it is untouched, which the minus-one entries say.  The braiding's second axis is the
     // label the swapped vertex takes.
     const Sector old = inner.empty() ? coupled : inner[0];
-    for (const auto& [labels, value] : copy_entry(group->braiding(left, right, old, device))) {
+    for (const auto& [labels, value] : cached_entry(group->braiding(left, right, old, device))) {
       out[old][old][{labels[0], -1, labels[1], -1}] += value;
     }
     return out;
@@ -124,7 +166,7 @@ SwapMatrix move_matrix(const std::vector<Sector>& legs, const std::vector<Sector
         if (std::find(fresh_tail.begin(), fresh_tail.end(), after) == fresh_tail.end()) continue;
         const at::Tensor second =
             group->associator(before, right, left, after, fresh, f, device);
-        for (const auto& [labels, value] : copy_entry(contract_swap(first, exchange, second))) {
+        for (const auto& [labels, value] : swap_entries(first, exchange, second)) {
           out[old][fresh][labels] += value;
         }
       }
@@ -139,6 +181,7 @@ std::optional<std::vector<ChainState>> permute_chain(
     const std::vector<Sector>& legs, const std::vector<Sector>& inner, const Sector& coupled,
     const std::vector<int64_t>& copies, const std::vector<int64_t>& order,
     const std::shared_ptr<FusionCategory>& group, const c10::Device& device) {
+  ++g_stats.move_calls;
   if (order.size() != legs.size()) return std::nullopt;
   if (!copies.empty() && copies.size() != legs.size() - 1) return std::nullopt;
   std::vector<int64_t> arrangement(legs.size());
@@ -184,6 +227,7 @@ std::optional<std::vector<ChainState>> permute_chain(
         }
       }
       states = std::move(next);
+      g_stats.move_states += states.size();
       std::swap(arrangement[at], arrangement[at - 1]);
       --at;
     }
@@ -204,29 +248,29 @@ bool same_tree(const PairTree& one, const PairTree& other) {
   return same_shape(one, other) && one.coupled == other.coupled;
 }
 
-// Whether every sector a tree touches is its own dual, which is what the recoupling below models.
-bool self_dual(const std::shared_ptr<FusionCategory>& group, const PairTree& tree) {
-  const auto identity = [&group](const Sector& sector) {
-    return group->dual_sector(sector) == sector;
-  };
-  for (const Sector& sector : tree.uncoupled) {
-    if (!identity(sector)) return false;
-  }
-  for (const Sector& sector : tree.inner) {
-    if (!identity(sector)) return false;
-  }
-  return identity(tree.coupled);
-}
-
-// The Frobenius-Schur phase of a sector: the sign of the associator that carries the sector, its
-// dual and two units, which is how TensorKit defines it.  Bending a dual leg costs it.
+// The Frobenius-Schur indicator of a sector, which is how TensorKit defines it: the sign of the
+// associator that carries the sector, its dual and two units.
 double frobenius_schur_phase(const std::shared_ptr<FusionCategory>& group, const Sector& sector,
                              const c10::Device& device) {
-  const Sector unit = group->trivial_sector();
   const at::Tensor symbol =
-      group->associator(sector, group->dual_sector(sector), sector, sector, unit, unit, device);
+      group->associator(sector, group->dual_sector(sector), sector, sector,
+                        group->trivial_sector(), group->trivial_sector(), device);
   if (symbol.numel() == 0) return 1.0;
-  return symbol.reshape({-1}).select(0, 0).item<c10::complex<double>>().real() < 0.0 ? -1.0 : 1.0;
+  return symbol.to(at::kCPU, at::kComplexDouble).contiguous().data_ptr<c10::complex<double>>()[0]
+                 .real() < 0
+             ? -1.0
+             : 1.0;
+}
+
+// The phase of an operand: every leg it carries dual is read through the conjugate basis, which
+// costs the conjugation phase of the sector that leg holds.  One factor per such leg, so the phase
+// does not depend on the order the recoupling moves the legs in.
+double tree_phase(const std::shared_ptr<FusionCategory>& group, const PairTree& tree) {
+  double phase = 1.0;
+  for (size_t axis = 0; axis < tree.uncoupled.size(); ++axis) {
+    if (tree.isdual[axis]) phase *= group->conjugation_phase(tree.uncoupled[axis]);
+  }
+  return phase;
 }
 
 // One bend, TensorKit's ``bendright``: the last leg of ``first`` leaves as the dual leg of
@@ -244,6 +288,7 @@ std::vector<BendTerm> bend_right(const std::shared_ptr<FusionCategory>& group, c
       n1 == 1 ? group->trivial_sector() : (n1 == 2 ? first.uncoupled[0] : first.inner.back());
   const Sector& b = first.uncoupled.back();
   double scale = std::sqrt(group->quantum_dim(b));
+  // the leg leaves through the conjugate basis of its sector, which costs its Frobenius-Schur phase
   if (first.isdual.back()) scale *= frobenius_schur_phase(group, group->dual_sector(b), device);
   const at::Tensor symbol =
       group->associator(a, b, group->dual_sector(b), a, c, group->trivial_sector(), device);
@@ -255,7 +300,7 @@ std::vector<BendTerm> bend_right(const std::shared_ptr<FusionCategory>& group, c
   if (n1 > 1) head.vertices.assign(first.vertices.begin(), first.vertices.end() - 1);
   head.coupled = a;
   const int64_t head_label = n1 > 1 ? first.vertices.back() : 0;
-  for (const auto& [labels, value] : copy_entry(symbol)) {
+  for (const auto& [labels, value] : cached_entry(symbol)) {
     if (labels[0] != head_label) continue;
     PairTree grown;
     grown.uncoupled = second.uncoupled;
@@ -375,11 +420,8 @@ std::vector<BendTerm> operand_terms(const std::shared_ptr<FusionCategory>& group
 
 // The guard on the operand half of a diagram, 0 when it covers it:
 //   1  the output does not name every free leg of both operands exactly once
-//   10 a sector of an operand is not its own dual
 //   11 a glued pair carries the dual on both sides or on neither
-int operand_guard(const std::shared_ptr<FusionCategory>& group, const PairTree& left,
-                  const PairTree& right, const Gluing& glue) {
-  if (!self_dual(group, left) || !self_dual(group, right)) return 10;
+int operand_guard(const PairTree& left, const PairTree& right, const Gluing& glue) {
   const std::size_t shared = glue.left.size();
   for (std::size_t index = 0; index < shared; ++index) {
     if (left.isdual[glue.left[index]] == right.isdual[glue.right[index]]) return 11;
@@ -399,7 +441,7 @@ int operand_guard(const std::shared_ptr<FusionCategory>& group, const PairTree& 
 std::optional<Diagram> make_diagram(const std::shared_ptr<FusionCategory>& group,
                                     const PairTree& left, const PairTree& right,
                                     const Gluing& glue, const c10::Device& device) {
-  g_decline = operand_guard(group, left, right, glue);
+  g_decline = operand_guard(left, right, glue);
   if (g_decline != 0) return std::nullopt;
   const Orders orders = diagram_orders(glue);
   std::vector<BendTerm> left_terms = operand_terms(group, left, orders.left, orders.alpha, device);
@@ -409,17 +451,14 @@ std::optional<Diagram> make_diagram(const std::shared_ptr<FusionCategory>& group
     g_decline = 2;
     return std::nullopt;
   }
-  return Diagram{group, std::move(left_terms), std::move(right_terms), orders.out, orders.alpha,
-                 orders.beta};
+  const double phase = tree_phase(group, left) * tree_phase(group, right);
+  return Diagram{group, phase, std::move(left_terms), std::move(right_terms), orders.out,
+                 orders.alpha, orders.beta};
 }
 
 // The weight of one output tree against a built diagram, or nothing when a guard declines it.
 std::optional<std::complex<double>> weigh(const Diagram& diagram, const PairTree& out,
                                           const c10::Device& device) {
-  if (!self_dual(diagram.group, out)) {
-    g_decline = 10;
-    return std::nullopt;
-  }
   if (static_cast<int64_t>(out.uncoupled.size()) != diagram.alpha + diagram.beta) {
     g_decline = 1;
     return std::nullopt;
@@ -433,13 +472,17 @@ std::optional<std::complex<double>> weigh(const Diagram& diagram, const PairTree
   // The two operands meet in the shared tree, whose coupled sector is a channel of each of them, so
   // only its shape is compared; the free parts of both are the same basis elements as the output's,
   // coupled sector included.  The shared block closes with the quantum dimension of its channel.
+  const double phase = diagram.phase * tree_phase(diagram.group, out);
+  ++g_stats.weigh_calls;
   std::complex<double> total = 0.0;
+  g_stats.weigh_pairs += diagram.left.size() * diagram.right.size() * terms.size();
   for (const BendTerm& one : diagram.left) {
     for (const BendTerm& two : diagram.right) {
       if (!same_shape(one.other, two.kept)) continue;
       for (const BendTerm& three : terms) {
         if (!same_tree(one.kept, three.kept) || !same_tree(two.other, three.other)) continue;
-        total += one.value * two.value * three.value * diagram.group->quantum_dim(two.kept.coupled);
+        total += one.value * two.value * three.value * phase *
+                 diagram.group->quantum_dim(two.kept.coupled);
       }
     }
   }
@@ -463,13 +506,57 @@ struct WeightAnswer {
 using DiagramKey = std::tuple<const FusionCategory*, PairTree, PairTree, Gluing, int64_t>;
 using WeightKey = std::tuple<const FusionCategory*, PairTree, PairTree, Gluing, int64_t, PairTree>;
 
+// A hash over a sector, a tree and a gluing, so a weight the table already holds costs one hash and
+// one comparison instead of the lexicographic comparison of every tree it names.
+void hash_mix(std::size_t& seed, std::size_t value) {
+  seed ^= value + 0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U);
+}
+
+std::size_t hash_sector(const Sector& sector) {
+  std::size_t seed = sector.size();
+  for (const int64_t label : sector) hash_mix(seed, std::hash<int64_t>{}(label));
+  return seed;
+}
+
+std::size_t hash_tree(const PairTree& tree) {
+  std::size_t seed = tree.uncoupled.size();
+  for (const Sector& sector : tree.uncoupled) hash_mix(seed, hash_sector(sector));
+  for (const bool flag : tree.isdual) hash_mix(seed, flag ? 1U : 0U);
+  for (const Sector& sector : tree.inner) hash_mix(seed, hash_sector(sector));
+  for (const int64_t label : tree.vertices) hash_mix(seed, std::hash<int64_t>{}(label));
+  hash_mix(seed, hash_sector(tree.coupled));
+  return seed;
+}
+
+std::size_t hash_glue(const Gluing& glue) {
+  std::size_t seed = glue.left.size();
+  for (const std::vector<int64_t>* labels : {&glue.left, &glue.right, &glue.out_left,
+                                            &glue.out_right}) {
+    hash_mix(seed, labels->size());
+    for (const int64_t label : *labels) hash_mix(seed, std::hash<int64_t>{}(label));
+  }
+  return seed;
+}
+
+struct WeightKeyHash {
+  std::size_t operator()(const WeightKey& key) const {
+    std::size_t seed = std::hash<const FusionCategory*>{}(std::get<0>(key));
+    hash_mix(seed, hash_tree(std::get<1>(key)));
+    hash_mix(seed, hash_tree(std::get<2>(key)));
+    hash_mix(seed, hash_glue(std::get<3>(key)));
+    hash_mix(seed, std::hash<int64_t>{}(std::get<4>(key)));
+    hash_mix(seed, hash_tree(std::get<5>(key)));
+    return seed;
+  }
+};
+
 std::map<DiagramKey, DiagramAnswer>& diagram_cache() {
   static std::map<DiagramKey, DiagramAnswer> cache;
   return cache;
 }
 
-std::map<WeightKey, WeightAnswer>& weight_cache() {
-  static std::map<WeightKey, WeightAnswer> cache;
+std::unordered_map<WeightKey, WeightAnswer, WeightKeyHash>& weight_cache() {
+  static std::unordered_map<WeightKey, WeightAnswer, WeightKeyHash> cache;
   return cache;
 }
 
@@ -492,6 +579,7 @@ const DiagramAnswer& cached_diagram(const std::shared_ptr<FusionCategory>& group
   auto& cache = diagram_cache();
   const auto found = cache.find(key);
   if (found != cache.end()) return found->second;
+  ++g_stats.diagram_misses;
   std::optional<Diagram> diagram = make_diagram(group, left, right, glue, device);
   const int decline = g_decline;
   const std::size_t terms = diagram.has_value() ?
@@ -546,16 +634,27 @@ Gluing glue_legs(const std::vector<int64_t>& left_labels, const std::vector<int6
 void clear_weight_cache() {
   weight_cache().clear();
   diagram_cache().clear();
+  entry_table().clear();
   g_diagram_terms = 0;
+}
+
+RouteStats route_stats() {
+  return g_stats;
+}
+
+void reset_route_stats() {
+  g_stats = RouteStats{};
 }
 
 int diagram_weight(const std::shared_ptr<FusionCategory>& group, const PairTree& left,
                    const PairTree& right, const PairTree& out, const Gluing& glue,
                    const c10::Device& device, std::complex<double>& weight) {
+  ++g_stats.weight_calls;
   const WeightKey key{group.get(), left, right, glue, device_code(device), out};
   auto& cache = weight_cache();
   const auto found = cache.find(key);
   if (found != cache.end()) {
+    ++g_stats.weight_hits;
     if (found->second.decline != 0) return found->second.decline;
     weight = found->second.weight;
     return 0;

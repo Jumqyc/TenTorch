@@ -69,6 +69,10 @@ double FusionCategory::dual_phase(const Sector&) const {
   return 1.0;
 }
 
+double FusionCategory::conjugation_phase(const Sector&) const {
+  return 1.0;
+}
+
 int64_t FusionCategory::reference_index(const Sector&) const {
   throw not_implemented_error("Category " + name_ + " does not define a reference component.");
 }
@@ -167,6 +171,10 @@ void bind_category(py::module_& m) {
       .def("dual_sign",
            [](const sym::FusionCategory& self, const sym::Sector& sector) {
              return self.dual_sign(sector);
+           }, py::arg("sector"))
+      .def("conjugation_phase",
+           [](const sym::FusionCategory& self, const sym::Sector& sector) {
+             return self.conjugation_phase(sector);
            }, py::arg("sector"))
       .def("__eq__", [](const sym::FusionCategory& self, const py::object& other) -> py::object {
         if (!py::isinstance<sym::FusionCategory>(other)) {

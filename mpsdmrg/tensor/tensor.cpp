@@ -968,8 +968,13 @@ namespace sym
         blocks.push_back(at::zeros(block, storage));
       else if (kind == 1)
         blocks.push_back(at::ones(block, storage));
-      else
+      else if (storage.device().is_cpu())
         blocks.push_back(at::rand(block, storage));
+      else
+        // torch seeds the CUDA generator from Python when CUDA first initialises there, which never
+        // happens when a script draws before touching a CUDA tensor; drawing on the host keeps a
+        // seeded run reproducible whatever the script did first.
+        blocks.push_back(at::rand(block, storage.device(at::kCPU)).to(storage.device()));
     }
     return Tensor(blocks, keys, legs, total);
   }

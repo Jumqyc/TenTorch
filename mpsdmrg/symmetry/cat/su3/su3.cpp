@@ -411,6 +411,11 @@ double SU3Symmetry::dual_sign(const Sector&) const {
   return 1.0;
 }
 
+double SU3Symmetry::conjugation_phase(const Sector& sector) const {
+  // the sign of the conjugation metric of SU(3), which its duality matrix carries
+  return dual_phase(sector);
+}
+
 double SU3Symmetry::dual_phase(const Sector& sector) const {
   // the phase the conjugate component carries: (-1)^(p + q)
   return (sector.at(0) + sector.at(1)) % 2 == 0 ? 1.0 : -1.0;
