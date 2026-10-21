@@ -21,6 +21,12 @@ double sqrtdim(const FusionCategory& group, const Sector& sector) {
   return std::sqrt(group.quantum_dim(sector));
 }
 
+// The sector a leg points at: a leg that carries duals stores the conjugate of the sector its line
+// fuses with, and the symbols of the moves are written in the fused sectors.
+Sector pointing(const FusionCategory& group, const FusionTree& tree, int64_t axis) {
+  return tree.isdual.at(axis) ? group.dual_sector(tree.sectors.at(axis)) : tree.sectors.at(axis);
+}
+
 std::complex<double> entry(const at::Tensor& matrix, int64_t row, int64_t column) {
   const c10::complex<double> value =
       matrix.to(at::kCPU).select(0, row).select(0, column).item<c10::complex<double>>();
@@ -36,12 +42,13 @@ std::vector<PairTerm> bend_right(const FusionCategory& group, const FusionTreePa
   const int64_t n1 = out.size();
   if (n1 < 1) throw std::invalid_argument("bend_right: the codomain side has no leg to bend");
   const Sector& c = out.coupled;
-  const Sector& b = out.sectors.back();
+  const Sector& stored = out.sectors.back();
+  const Sector b = pointing(group, out, n1 - 1);
   // The new root of the shortened side.
   // A side of one leg carries no vertex, so the root of the shortened side is the unit and the
   // symbol's first axis is a single entry.
   const Sector a = n1 == 1 ? group.trivial_sector()
-                           : (n1 == 2 ? out.sectors.front() : out.inner.back());
+                           : (n1 == 2 ? pointing(group, out, 0) : out.inner.back());
   const int64_t row = n1 >= 2 ? out.vertices.back() : 0;
 
   // The codomain side loses its last leg; the vertex that made `c` from the prefix and `b` now makes
@@ -56,7 +63,7 @@ std::vector<PairTerm> bend_right(const FusionCategory& group, const FusionTreePa
 
   // The domain side gains the conjugate of that leg, and the old coupling becomes inner.
   FusionTree new_in = in;
-  new_in.sectors.push_back(group.dual_sector(b));
+  new_in.sectors.push_back(stored);
   new_in.isdual.push_back(!out.isdual.back());
   if (in.size() > 1) new_in.inner.push_back(c);
   if (in.size() > 0) new_in.vertices.push_back(row);
@@ -64,7 +71,7 @@ std::vector<PairTerm> bend_right(const FusionCategory& group, const FusionTreePa
 
   std::complex<double> coefficient = sqrtdim(group, c) / sqrtdim(group, a);
   if (out.isdual.back()) {
-    coefficient *= std::conj(frobenius_schur_phase(group, group.dual_sector(b), device));
+    coefficient *= std::conj(frobenius_schur_phase(group, group.dual_sector(stored), device));
   }
   const at::Tensor symbol = b_symbol(group, a, b, c, device);
   const int64_t copies = symbol.size(1);
@@ -86,11 +93,12 @@ std::vector<PairTerm> bend_left(const FusionCategory& group, const FusionTreePai
   const int64_t n2 = in.size();
   if (n2 < 1) throw std::invalid_argument("bend_left: the domain side has no leg to bend");
   const Sector& c = in.coupled;
-  const Sector& b = in.sectors.back();
+  const Sector& stored = in.sectors.back();
+  const Sector b = pointing(group, in, n2 - 1);
   // A one-leg side carries no vertex, so the root of the shortened side is the unit: the symbol
   // then forces the old coupling to be that leg's sector.
   const Sector a = n2 == 1 ? group.trivial_sector()
-                           : (n2 == 2 ? in.sectors.front() : in.inner.back());
+                           : (n2 == 2 ? pointing(group, in, 0) : in.inner.back());
   const int64_t row = n2 >= 2 ? in.vertices.back() : 0;
 
   FusionTree new_in = in;
@@ -101,7 +109,7 @@ std::vector<PairTerm> bend_left(const FusionCategory& group, const FusionTreePai
   new_in.coupled = a;
 
   FusionTree new_out = out;
-  new_out.sectors.push_back(group.dual_sector(b));
+  new_out.sectors.push_back(stored);
   new_out.isdual.push_back(!in.isdual.back());
   if (out.size() > 1) new_out.inner.push_back(c);
   if (out.size() > 0) new_out.vertices.push_back(row);
