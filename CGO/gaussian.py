@@ -5,7 +5,7 @@ import itertools
 
 import torch
 from torch import Tensor
-from base import CUDA
+from tentorch.config import CUDA
 from CGO.cuda.project import project
 from FreeFermion.linalg import hamiltonian, wick, williamson
 from CGO.sdp import extremal

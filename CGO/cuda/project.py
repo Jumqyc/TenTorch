@@ -11,7 +11,7 @@ import sys
 
 import torch
 from torch import Tensor
-from base import COMPLEX
+from tentorch.config import COMPLEX
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 BUILD_DIR = os.path.join(_HERE, 'build')

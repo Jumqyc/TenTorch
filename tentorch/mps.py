@@ -5,12 +5,12 @@ from typing import Sequence
 
 import torch
 
-from base import COMPLEX, CUDA
-from mpsdmrg import linalg
-from mpsdmrg.mpo import MPO
-from mpsdmrg.symmetry.cat import Group, has_content, no_symmetry
-from mpsdmrg.tensor import Tensor, bond_leg, cached_einsum, capped_leg, fuse_legs, multiplet_leg
-from mpsdmrg.tensor import phys_leg
+from tentorch.config import COMPLEX, CUDA
+from tentorch import linalg
+from tentorch.mpo import MPO
+from tentorch.symmetry.cat import Group, has_content, no_symmetry
+from tentorch.tensor import Tensor, bond_leg, cached_einsum, capped_leg, fuse_legs, multiplet_leg
+from tentorch.tensor import phys_leg
 
 
 def _bond_multiplets(tensors: list[Tensor]) -> list[int]:

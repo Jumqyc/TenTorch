@@ -5,7 +5,7 @@ from typing import Callable, Iterable, Sequence
 import torch
 from torch import Tensor
 
-from base import REAL
+from tentorch.config import REAL
 
 SQRT3 = 3.0 ** 0.5
 

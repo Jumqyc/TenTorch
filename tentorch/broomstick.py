@@ -6,14 +6,14 @@ from typing import Literal
 import torch
 from numpy.typing import NDArray
 
-from base import COMPLEX, CUDA
-from mpsdmrg import linalg
-from mpsdmrg.symmetry.cat import Group, no_symmetry, has_content
-from mpsdmrg.tensor import Tensor, bond_leg, cached_einsum, multiplet_leg
-from mpsdmrg.ext import inner
+from tentorch.config import COMPLEX, CUDA
+from tentorch import linalg
+from tentorch.symmetry.cat import Group, no_symmetry, has_content
+from tentorch.tensor import Tensor, bond_leg, cached_einsum, multiplet_leg
+from tentorch.ext import inner
 
-from mpsdmrg.mps import MPS
-from mpsdmrg.mpo import MPO
+from tentorch.mps import MPS
+from tentorch.mpo import MPO
 
 class Broomstick:
     '''

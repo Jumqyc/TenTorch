@@ -111,7 +111,7 @@ def build_extension(verbose: bool, jobs: int) -> Any:
     '''
     Compile the stale units, link the engine and load it.
 
-    The one build path: ``main`` and the import of ``mpsdmrg.ext`` both come through here, so
+    The one build path: ``main`` and the import of ``tentorch.ext`` both come through here, so
     the lock handling, the precompiled header and the job cap cannot drift apart.
 
     Args:
@@ -147,7 +147,7 @@ def build_extension(verbose: bool, jobs: int) -> Any:
 
 def main() -> int:
     '''Precompile the shared header, compile the units with at most ``--jobs`` at once, link.'''
-    parser = argparse.ArgumentParser(description = 'build the mpsdmrg symmetry engine')
+    parser = argparse.ArgumentParser(description = 'build the tentorch symmetry engine')
     parser.add_argument('--verbose', action = 'store_true', help = 'show the compiler output')
     parser.add_argument('--force', action = 'store_true', help = 'rebuild every unit')
     parser.add_argument('--jobs', type = int, default = 1, help = 'units compiled at once, 1 or 2')

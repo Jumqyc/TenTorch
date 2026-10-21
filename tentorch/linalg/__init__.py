@@ -1,17 +1,17 @@
-"""The splittings of the block-sparse tensor of ``mpsdmrg``.
+"""The splittings of the block-sparse tensor of ``tentorch``.
 
 Exposes ``svd``, ``qr``, ``rq``, ``svdvals``, ``norm``, ``inner``, ``arrange``, ``trace``, ``lanczos``,
 ``absorb`` and ``scale``; each acts on a ``Tensor`` of the tensor layer and returns the factors as
 ``Tensor``.
 """
-from mpsdmrg import ext as _engine
+from tentorch import ext as _engine
 from typing import Any, Callable, Sequence, cast
 
 import string
 
 import torch
 
-from mpsdmrg.ext import (  # noqa: F401
+from tentorch.ext import (  # noqa: F401
     Tensor, arrange, cached_einsum, inner, norm, qr, rq, svdvals, trace)
 
 __all__ = ['absorb', 'arrange', 'inner', 'lanczos', 'norm', 'qr', 'rq', 'scale', 'svd', 'svdvals',

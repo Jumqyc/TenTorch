@@ -3,7 +3,7 @@ import torch
 from torch import Tensor
 from dataclasses import dataclass
 
-from base import CUDA,REAL
+from tentorch.config import CUDA,REAL
 from FreeFermion.linalg import RandPureCov, symplectic_form
 
 from typing import Optional

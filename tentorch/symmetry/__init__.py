@@ -2,13 +2,13 @@
 
 ``su2_symmetry``, ``su3_symmetry``, ``u1_symmetry``, ``z2_symmetry``, ``no_symmetry``,
 ``fermion_parity`` and ``fibonacci`` are the categories the engine contracts over.  Their
-Python face — operator content and invariant data — is in ``mpsdmrg.symmetry.cat``; the
+Python face — operator content and invariant data — is in ``tentorch.symmetry.cat``; the
 fusion trees, their dense expansions and the block contractions over them are the C++
-``mpsdmrg/symmetry/tree`` layer.
+``tentorch/symmetry/tree`` layer.
 '''
-from mpsdmrg.symmetry.cat.su3 import gell_mann
+from tentorch.symmetry.cat.su3 import gell_mann
 
-from mpsdmrg.ext import (
+from tentorch.ext import (
     BraidingStyle,
     FusionCategory,
     FusionStyle,

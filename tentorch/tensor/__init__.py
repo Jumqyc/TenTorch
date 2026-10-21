@@ -1,4 +1,4 @@
-"""The block-sparse tensor of ``mpsdmrg``.
+"""The block-sparse tensor of ``tentorch``.
 
 Exposes ``Tensor``, the symmetry-adapted container whose blocks carry the fusion trees of the
 group layer and the ``cached_einsum`` contraction over them.  The leg algebra a model
@@ -13,10 +13,10 @@ from typing import Any
 import opt_einsum
 import torch
 
-from mpsdmrg.ext import _engine
-from mpsdmrg.ext import Group, Tensor  # noqa: F401
-from mpsdmrg.ext import bond_leg, capped_leg, fuse_legs, multiplet_leg, site_leg  # noqa: F401
-from mpsdmrg.ext import cached_einsum as _engine_einsum
+from tentorch.ext import _engine
+from tentorch.ext import Group, Tensor  # noqa: F401
+from tentorch.ext import bond_leg, capped_leg, fuse_legs, multiplet_leg, site_leg  # noqa: F401
+from tentorch.ext import cached_einsum as _engine_einsum
 
 _PLANS: dict[tuple, list] = {}
 

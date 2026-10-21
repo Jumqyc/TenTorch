@@ -3,9 +3,9 @@ import warnings
 
 import torch
 
-from base import COMPLEX
-from mpsdmrg import MPO, MPS, Broomstick
-from mpsdmrg.tensor import Tensor, cached_einsum
+from tentorch.config import COMPLEX
+from tentorch import MPO, MPS, Broomstick
+from tentorch.tensor import Tensor, cached_einsum
 
 from CGO.sdp import extremal
 from CGO.ext_register import extends_Broomstick

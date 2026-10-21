@@ -39,7 +39,7 @@ installing anything.
 The engine is a C++ extension. It compiles itself on first import, or ahead of time with
 
 ```shell
-.venv/bin/python mpsdmrg/ext/build.py --jobs 1
+.venv/bin/python tentorch/ext/build.py --jobs 1
 ```
 
 One compile job needs about 2.5 GiB of host memory and the build refuses to start below that
@@ -47,7 +47,7 @@ rather than swap the machine to death; `--jobs` above one multiplies the require
 
 ## Getting started
 
-The notebooks in `mpsdmrg/notebooks/` are the worked examples, and each one runs top to bottom
+The notebooks in `tentorch/notebooks/` are the worked examples, and each one runs top to bottom
 after a kernel restart:
 
 | notebook | what it shows |
@@ -70,15 +70,15 @@ symmetry/cat   ->   symmetry/tree   ->   tensor   ->   linalg
                                           mps / mpo / broomstick
 ```
 
-- `mpsdmrg/symmetry/cat` — the category: sectors, fusion outcomes, the associator, the braiding,
+- `tentorch/symmetry/cat` — the category: sectors, fusion outcomes, the associator, the braiding,
   the duality. Adding a symmetry means adding one subclass here.
-- `mpsdmrg/symmetry/tree` — a `Leg` carries one sector (or several, with multiplicity); a
+- `tentorch/symmetry/tree` — a `Leg` carries one sector (or several, with multiplicity); a
   `FusionTree` is an ordered coupling path, and it is what keys one dense block.
-- `mpsdmrg/tensor` — a `Tensor` holds one dense block per charge key, and `cached_einsum`
+- `tentorch/tensor` — a `Tensor` holds one dense block per charge key, and `cached_einsum`
   contracts a whole network of them.
-- `mpsdmrg/linalg` — `svd`, `qr`, `rq` and `svdvals` on block-sparse tensors; the split that
+- `tentorch/linalg` — `svd`, `qr`, `rq` and `svdvals` on block-sparse tensors; the split that
   produces new bond sectors.
-- `mpsdmrg/mps.py`, `mpsdmrg/mpo.py`, `mpsdmrg/broomstick.py` — the state, the Hamiltonian and
+- `tentorch/mps.py`, `tentorch/mpo.py`, `tentorch/broomstick.py` — the state, the Hamiltonian and
   the sweep driver.
 
 ## Status and limits
@@ -93,7 +93,7 @@ Clebsch-Gordan tensor still works wherever the route applies.
 
 The dense route is also the faster of the two at present, by roughly 12 times, so it stays the
 reference. A build with `DENSEPATH=1` keeps a Python switch that forces it
-(`mpsdmrg.ext.set_dense_path`), which is how the two routes are compared on the same operands.
+(`tentorch.ext.set_dense_path`), which is how the two routes are compared on the same operands.
 
 ## Documentation and tests
 

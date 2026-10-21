@@ -7,13 +7,13 @@ so a further group adds a folder instead of a branch.
 """
 from __future__ import annotations
 
-from mpsdmrg.ext import (  # noqa: F401
+from tentorch.ext import (  # noqa: F401
     BraidingStyle, FusionStyle, Group, Sector, ZNSymmetry,
     fermion_parity, no_symmetry, su2_symmetry, su3_symmetry,
     u1_symmetry, z2_symmetry)
-from mpsdmrg.symmetry.cat.content import OperatorContent
-from mpsdmrg.symmetry.cat.su2 import SU2Content
-from mpsdmrg.symmetry.cat.su3 import SU3Content
+from tentorch.symmetry.cat.content import OperatorContent
+from tentorch.symmetry.cat.su2 import SU2Content
+from tentorch.symmetry.cat.su3 import SU3Content
 
 # the content that answers for a group, keyed by the type name of its group
 _CONTENTS: dict[str, OperatorContent] = {'SU2Symmetry': SU2Content(),

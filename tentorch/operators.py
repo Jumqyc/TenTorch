@@ -2,9 +2,9 @@ from math import sqrt
 
 import torch
 
-from base import COMPLEX, CUDA
-from mpsdmrg.ext import FusionCategory, su2_symmetry
-from mpsdmrg.tensor import Tensor
+from tentorch.config import COMPLEX, CUDA
+from tentorch.ext import FusionCategory, su2_symmetry
+from tentorch.tensor import Tensor
 
 
 class SpinOperator:

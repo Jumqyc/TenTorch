@@ -5,7 +5,7 @@ from typing import Any
 
 import torch
 
-from mpsdmrg.ext import Group, Sector
+from tentorch.ext import Group, Sector
 
 
 class OperatorContent(ABC):

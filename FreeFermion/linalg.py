@@ -1,7 +1,7 @@
 import math
 import torch
 from torch import Tensor
-from base import CUDA, COMPLEX
+from tentorch.config import CUDA, COMPLEX
 from FreeFermion.cuda.fermion import pfaffian
 
 def symplectic_form(num_modes: int,

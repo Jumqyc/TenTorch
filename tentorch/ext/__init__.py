@@ -1,10 +1,10 @@
 '''
-The C++ symmetry engine of ``mpsdmrg``.
+The C++ symmetry engine of ``tentorch``.
 
 Exposes the charge groups with their legs and fusion trees, the block-sparse ``Tensor`` with
 ``cached_einsum``, and the ``svd``/``qr``/``rq``/``svdvals``/``norm``/``inner``/``trace``
-splittings.  The engine is compiled by ``mpsdmrg/ext/build.py`` into
-``mpsdmrg/ext/build/symmetry_ext.so``; an import recompiles it when the shared object
+splittings.  The engine is compiled by ``tentorch/ext/build.py`` into
+``tentorch/ext/build/symmetry_ext.so``; an import recompiles it when the shared object
 is missing or older than one of the sources, the headers or the build script.
 '''
 from __future__ import annotations
@@ -15,8 +15,8 @@ import sys
 from types import SimpleNamespace
 from typing import Any
 
-from base import COMPLEX, CUDA
-from mpsdmrg.ext.build import (BUILD_DIR, GIB_PER_JOB, HEADERS, LIBRARY, SOURCES,
+from tentorch.config import COMPLEX, CUDA
+from tentorch.ext.build import (BUILD_DIR, GIB_PER_JOB, HEADERS, LIBRARY, SOURCES,
                                 available_gib, build_extension)
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -43,7 +43,7 @@ else:
             f'{free:.1f} GiB of host memory is available but compiling the engine needs '
             f'{GIB_PER_JOB:.1f} GiB.  {stale} is newer than the built engine, so this import '
             f'has to recompile it: free some memory, then build with '
-            f'`PYTHONPATH=. .venv/bin/python -u mpsdmrg/ext/build.py --jobs 1`.')
+            f'`PYTHONPATH=. .venv/bin/python -u tentorch/ext/build.py --jobs 1`.')
     _extension = build_extension(verbose = False, jobs = 1)
 
 # the engine allocates a fresh block buffer with the project's device and dtype
@@ -102,7 +102,7 @@ trace = _extension.trace
 u1_symmetry = _extension.u1_symmetry
 z2_symmetry = _extension.z2_symmetry
 
-# ``mpsdmrg.tensor`` refers to ``_expr_cache`` by name to drop the contraction plans; the engine
+# ``tentorch.tensor`` refers to ``_expr_cache`` by name to drop the contraction plans; the engine
 # keeps its plans inside the extension, so the name drops every cache the engine keeps.
 _expr_cache = SimpleNamespace(clear = _extension.clear_caches)
 

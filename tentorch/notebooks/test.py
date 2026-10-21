@@ -1,7 +1,7 @@
 import sys
 
-from mpsdmrg import Broomstick, MPO, MPS, SpinOperator
-from mpsdmrg.tensor import Tensor
+from tentorch import Broomstick, MPO, MPS, SpinOperator
+from tentorch.tensor import Tensor
 import numpy as np
 import torch
 

@@ -2,15 +2,15 @@
 states, the sweep driver that optimises them, and the spin operators they are built from.
 
 ``Broomstick`` is the engine a user drives: it owns the state, the Hamiltonian and the sweep.
-A category comes from ``mpsdmrg.symmetry`` (``su2_symmetry`` and its siblings), a leg from
+A category comes from ``tentorch.symmetry`` (``su2_symmetry`` and its siblings), a leg from
 ``bond_leg``/``multiplet_leg``/``site_leg``/``phys_leg``, a contraction from ``cached_einsum``
-and a splitting from ``mpsdmrg.linalg``.
+and a splitting from ``tentorch.linalg``.
 """
-from mpsdmrg.broomstick import Broomstick
-from mpsdmrg.mpo import MPO
-from mpsdmrg.mps import MPS
-from mpsdmrg.operators import SpinOperator
-from mpsdmrg.symmetry import (
+from tentorch.broomstick import Broomstick
+from tentorch.mpo import MPO
+from tentorch.mps import MPS
+from tentorch.operators import SpinOperator
+from tentorch.symmetry import (
     BraidingStyle,
     FusionCategory,
     FusionStyle,
@@ -24,7 +24,7 @@ from mpsdmrg.symmetry import (
     u1_symmetry,
     z2_symmetry,
 )
-from mpsdmrg.tensor import (
+from tentorch.tensor import (
     Tensor,
     bond_leg,
     cached_einsum,

@@ -9,8 +9,8 @@ from typing import Any
 
 import torch
 
-from mpsdmrg.ext import Group, Sector
-from mpsdmrg.symmetry.cat.content import OperatorContent
+from tentorch.ext import Group, Sector
+from tentorch.symmetry.cat.content import OperatorContent
 
 
 class SU2Content(OperatorContent):
