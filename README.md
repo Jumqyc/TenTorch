@@ -117,10 +117,16 @@ AKLT chain at L=6 against its analytic energy. Every one of them agrees to bette
 
 Known limits:
 
-- The SU(3) route does not build a symmetric state yet. `MPS.canonicalize` raises `IndexError:
-  the tree does not belong to this block` on L=6, and the left-grown bond of a chain whose length
-  is not a multiple of three cannot close to the trivial sector. The SU(3) operators and the exact
-  energy of the ULS chain are available; its sweep is not.
+- The SU(3) route builds a symmetric state: `MPS(L, 3, cat=su3_symmetry, site_sector=(1, 0))`
+  canonicalises at L=3 and L=6, and the start state grows from both ends so the middle bond meets
+  its dual. Its sweep is not right yet: the adapted MPO places an operator multiplet of rank two
+  or more with the wrong weight, so the ULS chain and every spin greater than one half miss the
+  exact energy (`heisenberg(4, S=1.0)` returns -0.6458 against -4.6458) while every spin-one-half
+  chain is exact. A bond whose charge cannot close the sites to their left and right (a chain
+  whose length is not a multiple of three) carries no state at all, which is the physics.
+- A chain whose boundary carries a non-trivial charge does not canonicalise: a block is keyed by
+  the root of its codomain, and a total charge other than the trivial one has more than one domain
+  root that fuses to it.
 - `aklt()` builds without a multiplet-carrying category: its biquadratic term is a product of two
   site operators, which the adapted MPO route cannot place on invariant channels yet, so it
   raises instead of returning a wrong energy.

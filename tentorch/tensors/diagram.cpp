@@ -36,7 +36,7 @@ std::complex<double> entry(const at::Tensor& matrix, int64_t row, int64_t column
 }  // namespace
 
 std::vector<PairTerm> bend_right(const FusionCategory& group, const FusionTreePair& pair,
-                                 const c10::Device& device) {
+                                 const Sector& qtotal, const c10::Device& device) {
   const FusionTree& out = pair.codomain;
   const FusionTree& in = pair.domain;
   const int64_t n1 = out.size();
@@ -51,9 +51,8 @@ std::vector<PairTerm> bend_right(const FusionCategory& group, const FusionTreePa
                            : (n1 == 2 ? pointing(group, out, 0) : out.inner.back());
   const int64_t row = n1 >= 2 ? out.vertices.back() : 0;
 
-  // The codomain side loses its last leg; the vertex that made `c` from the prefix and `b` now makes
-  // `a` from the same prefix and `a`, so its copy label becomes the column of the B symbol. Both
-  // sides of the destination pair couple to the new root.
+  // The codomain side loses its last leg, so its tree is the prefix that used to fuse with `b` and
+  // couples to `a`; the vertex the domain side gains carries the copy label of the B symbol.
   FusionTree new_out = out;
   if (n1 >= 1) new_out.sectors.pop_back();
   if (n1 >= 1) new_out.isdual.pop_back();
@@ -61,13 +60,14 @@ std::vector<PairTerm> bend_right(const FusionCategory& group, const FusionTreePa
   if (n1 >= 2) new_out.vertices.pop_back();
   new_out.coupled = a;
 
-  // The domain side gains the conjugate of that leg, and the old coupling becomes inner.
+  // The domain side gains that leg turned around; its own old coupling becomes the new inner
+  // coupling, and its root is the sector that closes `qtotal` with the root the codomain side kept.
   FusionTree new_in = in;
-  new_in.sectors.push_back(stored);
+  new_in.sectors.push_back(group.dual_sector(stored));
   new_in.isdual.push_back(!out.isdual.back());
-  if (in.size() > 1) new_in.inner.push_back(c);
+  if (in.size() > 1) new_in.inner.push_back(in.coupled);
   if (in.size() > 0) new_in.vertices.push_back(row);
-  new_in.coupled = a;
+  new_in.coupled = partner_root(group, a, qtotal);
 
   std::complex<double> coefficient = sqrtdim(group, c) / sqrtdim(group, a);
   if (out.isdual.back()) {
@@ -87,7 +87,7 @@ std::vector<PairTerm> bend_right(const FusionCategory& group, const FusionTreePa
 }
 
 std::vector<PairTerm> bend_left(const FusionCategory& group, const FusionTreePair& pair,
-                                const c10::Device& device) {
+                                const Sector& qtotal, const c10::Device& device) {
   const FusionTree& out = pair.codomain;
   const FusionTree& in = pair.domain;
   const int64_t n2 = in.size();
@@ -108,12 +108,14 @@ std::vector<PairTerm> bend_left(const FusionCategory& group, const FusionTreePai
   if (n2 >= 2) new_in.vertices.pop_back();
   new_in.coupled = a;
 
+  // The codomain side gains that leg turned around; its own old coupling becomes the new inner
+  // coupling, and its root is the sector that closes `qtotal` with the root the domain side kept.
   FusionTree new_out = out;
-  new_out.sectors.push_back(stored);
+  new_out.sectors.push_back(group.dual_sector(stored));
   new_out.isdual.push_back(!in.isdual.back());
-  if (out.size() > 1) new_out.inner.push_back(c);
+  if (out.size() > 1) new_out.inner.push_back(out.coupled);
   if (out.size() > 0) new_out.vertices.push_back(row);
-  new_out.coupled = a;
+  new_out.coupled = partner_root(group, a, qtotal);
 
   std::complex<double> coefficient = std::conj(sqrtdim(group, c) / sqrtdim(group, a));
   if (in.isdual.back()) {
@@ -268,7 +270,7 @@ std::vector<TreeTerm> multi_fmove_inv(const FusionCategory& group, const Sector&
 }
 
 std::vector<PairTerm> repartition(const FusionCategory& group, const FusionTreePair& pair,
-                                  int64_t keep, const c10::Device& device) {
+                                  int64_t keep, const Sector& qtotal, const c10::Device& device) {
   const int64_t total = pair.codomain.size() + pair.domain.size();
   if (keep < 0 || keep > total) {
     throw std::out_of_range("repartition: a tree pair of " + std::to_string(total) +
@@ -286,7 +288,7 @@ std::vector<PairTerm> repartition(const FusionCategory& group, const FusionTreeP
   while (static_cast<int64_t>(current.front().pair.codomain.size()) > keep) {
     std::vector<PairTerm> grown;
     for (const PairTerm& term : current)
-      for (const PairTerm& next : bend_right(group, term.pair, device))
+      for (const PairTerm& next : bend_right(group, term.pair, qtotal, device))
         grown.push_back(PairTerm{next.pair, term.coefficient * next.coefficient});
     require_terms(grown, "codomain");
     current = std::move(grown);
@@ -294,7 +296,7 @@ std::vector<PairTerm> repartition(const FusionCategory& group, const FusionTreeP
   while (static_cast<int64_t>(current.front().pair.domain.size()) > total - keep) {
     std::vector<PairTerm> grown;
     for (const PairTerm& term : current)
-      for (const PairTerm& next : bend_left(group, term.pair, device))
+      for (const PairTerm& next : bend_left(group, term.pair, qtotal, device))
         grown.push_back(PairTerm{next.pair, term.coefficient * next.coefficient});
     require_terms(grown, "domain");
     current = std::move(grown);
@@ -337,14 +339,14 @@ std::vector<PairTerm> fold_left(const FusionCategory& group, const FusionTreePai
 }
 
 std::vector<PairTerm> cycle_clockwise(const FusionCategory& group, const FusionTreePair& pair,
-                                      const c10::Device& device) {
+                                      const Sector& qtotal, const c10::Device& device) {
   const bool folds_first = pair.codomain.size() > 0;
   const std::vector<PairTerm> firsts =
-      folds_first ? fold_right(group, pair, device) : bend_left(group, pair, device);
+      folds_first ? fold_right(group, pair, device) : bend_left(group, pair, qtotal, device);
   std::vector<PairTerm> terms;
   for (const PairTerm& first : firsts) {
     const std::vector<PairTerm> nexts =
-        folds_first ? bend_left(group, first.pair, device) : fold_right(group, first.pair, device);
+        folds_first ? bend_left(group, first.pair, qtotal, device) : fold_right(group, first.pair, device);
     for (const PairTerm& next : nexts) {
       const std::complex<double> coefficient = next.coefficient * first.coefficient;
       if (coefficient == std::complex<double>(0.0, 0.0)) continue;
@@ -355,14 +357,14 @@ std::vector<PairTerm> cycle_clockwise(const FusionCategory& group, const FusionT
 }
 
 std::vector<PairTerm> cycle_anticlockwise(const FusionCategory& group, const FusionTreePair& pair,
-                                          const c10::Device& device) {
+                                          const Sector& qtotal, const c10::Device& device) {
   const bool folds_first = pair.domain.size() > 0;
   const std::vector<PairTerm> firsts =
-      folds_first ? fold_left(group, pair, device) : bend_right(group, pair, device);
+      folds_first ? fold_left(group, pair, device) : bend_right(group, pair, qtotal, device);
   std::vector<PairTerm> terms;
   for (const PairTerm& first : firsts) {
     const std::vector<PairTerm> nexts =
-        folds_first ? bend_right(group, first.pair, device) : fold_left(group, first.pair, device);
+        folds_first ? bend_right(group, first.pair, qtotal, device) : fold_left(group, first.pair, device);
     for (const PairTerm& next : nexts) {
       const std::complex<double> coefficient = next.coefficient * first.coefficient;
       if (coefficient == std::complex<double>(0.0, 0.0)) continue;
@@ -430,16 +432,16 @@ py::list terms_as(const std::vector<PairTerm>& terms) {
 
 void bind_duality(py::module_& m) {
   m.def("engine_bend_right", [](const std::shared_ptr<FusionCategory> group, const py::dict& pair,
-                                const py::object& device) {
-    return terms_as(bend_right(*group, pair_of(pair), device_of(device)));
+                                const Sector& qtotal, const py::object& device) {
+    return terms_as(bend_right(*group, pair_of(pair), qtotal, device_of(device)));
   });
   m.def("engine_bend_left", [](const std::shared_ptr<FusionCategory> group, const py::dict& pair,
-                               const py::object& device) {
-    return terms_as(bend_left(*group, pair_of(pair), device_of(device)));
+                               const Sector& qtotal, const py::object& device) {
+    return terms_as(bend_left(*group, pair_of(pair), qtotal, device_of(device)));
   });
   m.def("engine_repartition", [](const std::shared_ptr<FusionCategory> group, const py::dict& pair,
-                                 int64_t keep, const py::object& device) {
-    return terms_as(repartition(*group, pair_of(pair), keep, device_of(device)));
+                                 int64_t keep, const Sector& qtotal, const py::object& device) {
+    return terms_as(repartition(*group, pair_of(pair), keep, qtotal, device_of(device)));
   });
   m.def("engine_fold_right", [](const std::shared_ptr<FusionCategory> group, const py::dict& pair,
                                 const py::object& device) {
@@ -450,12 +452,13 @@ void bind_duality(py::module_& m) {
     return terms_as(fold_left(*group, pair_of(pair), device_of(device)));
   });
   m.def("engine_cycle_clockwise", [](const std::shared_ptr<FusionCategory> group, const py::dict& pair,
-                                     const py::object& device) {
-    return terms_as(cycle_clockwise(*group, pair_of(pair), device_of(device)));
+                                     const Sector& qtotal, const py::object& device) {
+    return terms_as(cycle_clockwise(*group, pair_of(pair), qtotal, device_of(device)));
   });
   m.def("engine_cycle_anticlockwise", [](const std::shared_ptr<FusionCategory> group,
-                                         const py::dict& pair, const py::object& device) {
-    return terms_as(cycle_anticlockwise(*group, pair_of(pair), device_of(device)));
+                                         const py::dict& pair, const Sector& qtotal,
+                                         const py::object& device) {
+    return terms_as(cycle_anticlockwise(*group, pair_of(pair), qtotal, device_of(device)));
   });
   m.def("engine_multi_fmove", [](const std::shared_ptr<FusionCategory> group, const py::dict& tree,
                                  const py::object& device) {
@@ -503,9 +506,9 @@ namespace sym::engine {
 namespace {
 
 // The sector a tree couples to on the prefix ending at leg `k`, counting legs from one.
-Sector inner_extended(const FusionTree& tree, int64_t k) {
+Sector inner_extended(const FusionCategory& group, const FusionTree& tree, int64_t k) {
   const int64_t n = tree.size();
-  if (k == 1) return tree.sectors.at(0);
+  if (k == 1) return pointing(group, tree, 0);
   if (k == n) return tree.coupled;
   return tree.inner.at(k - 2);
 }
@@ -531,8 +534,9 @@ std::vector<TreeTerm> swap_adjacent(const FusionCategory& group, const FusionTre
   if (k < 0 || k + 1 >= n) {
     throw std::out_of_range("swap_adjacent: no leg to exchange with the leg at " + std::to_string(k));
   }
-  const Sector a = tree.sectors.at(k);
-  const Sector b = tree.sectors.at(k + 1);
+  // The symbols of the moves read the sectors the legs point at, not the ones they store.
+  const Sector a = pointing(group, tree, k);
+  const Sector b = pointing(group, tree, k + 1);
   FusionTree swapped = tree;
   std::swap(swapped.sectors.at(k), swapped.sectors.at(k + 1));
   const bool dual_left = swapped.isdual.at(k);
@@ -561,9 +565,9 @@ std::vector<TreeTerm> swap_adjacent(const FusionCategory& group, const FusionTre
     return terms;
   }
   // Below the top the exchange also recouples the two vertices it sits between.
-  const Sector inner_a = inner_extended(tree, k);
-  const Sector inner_c = inner_extended(tree, k + 1);
-  const Sector inner_e = inner_extended(tree, k + 2);
+  const Sector inner_a = inner_extended(group, tree, k);
+  const Sector inner_c = inner_extended(group, tree, k + 1);
+  const Sector inner_e = inner_extended(group, tree, k + 2);
   const std::vector<Sector> left = group.fusion_outcomes(inner_a, b);
   const std::vector<Sector> right = group.fusion_outcomes(inner_e, group.dual_sector(a));
   for (const Sector& fresh : left) {
@@ -571,7 +575,7 @@ std::vector<TreeTerm> swap_adjacent(const FusionCategory& group, const FusionTre
     const at::Tensor braid_first = group.braiding(inner_c, b, inner_e, device);
     const at::Tensor braid_second = group.braiding(inner_a, b, fresh, device);
     const at::Tensor recouple =
-        group.associator(b, inner_a, tree.sectors.at(k), inner_e, fresh, inner_c, device);
+        group.associator(b, inner_a, pointing(group, tree, k), inner_e, fresh, inner_c, device);
     FusionTree branch = swapped;
     branch.inner.at(k - 1) = fresh;
     if (braid_first.numel() == 1 && braid_second.numel() == 1 && recouple.numel() == 1) {

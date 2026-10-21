@@ -79,9 +79,18 @@ class MPS:
             # its left fuse to, capped at max_bond_dim, so the state is a singlet and the sweep
             # starts from a bond dimension it can afford
             phys = phys_leg(cat, phys_dim, site_sector)
+            # the two ends grow towards each other: a bond holds the sectors the sites to its left
+            # fuse to as well as the sectors the sites to its right fuse to, which differ when the
+            # category is not self-dual
+            half = L // 2
             bonds = [multiplet_leg(cat, cat.trivial_sector)]
-            for _ in range(L - 1):
+            for _ in range(half):
                 bonds.append(capped_leg(fuse_legs(bonds[-1], phys), max_bond_dim))
+            right = [multiplet_leg(cat, cat.trivial_sector)]
+            dual = multiplet_leg(cat, cat.dual_sector(phys.sectors[0]))
+            for _ in range(L - half):
+                right.append(capped_leg(fuse_legs(dual, right[-1]), max_bond_dim))
+            bonds += [right[L - i] for i in range(half + 1, L)]
             if not any(tuple(cat.trivial_sector) in cat.fusion_outcomes(sector, phys.sectors[0])
                        for sector in bonds[-1].sectors):
                 raise ValueError(

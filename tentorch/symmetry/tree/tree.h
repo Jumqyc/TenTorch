@@ -200,6 +200,9 @@ class Leg {
   Leg fuse(const Leg& other) const;
   // The same leg with the direction of its charges reversed.
   Leg conj() const;
+  // The same leg seen from the other side of a tensor: its direction reverses and the sectors it
+  // stores dualise, so the sectors it physically carries stay what they were.
+  Leg turned() const;
 
   const std::shared_ptr<FusionCategory>& group() const { return group_; }
   const std::vector<Sector>& sectors() const { return sectors_; }

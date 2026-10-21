@@ -33,26 +33,28 @@ struct TreeTerm {
 // This is the move that turns a leg pointing into the tensor into a leg pointing out of it.
 // Args:
 //   group: the category all sectors belong to.
-//   pair: a tree pair with at least one codomain leg, both sides coupled to the same sector.
+//   pair: a tree pair with at least one codomain leg.
+//   qtotal: the total charge the two sides of the pair fuse to.
 //   device: where the associator is read from.
 // Returns:
 //   One term per copy the new vertex can carry; their coefficients are the B symbol.
 // Raises:
 //   std::invalid_argument: if the codomain side has no leg to bend.
 std::vector<PairTerm> bend_right(const FusionCategory& group, const FusionTreePair& pair,
-                                 const c10::Device& device);
+                                 const Sector& qtotal, const c10::Device& device);
 
 // Bends the last domain leg onto the codomain side, the mirror move of `bend_right`.
 // Args:
 //   group: the category all sectors belong to.
-//   pair: a tree pair with at least one domain leg, both sides coupled to the same sector.
+//   pair: a tree pair with at least one domain leg.
+//   qtotal: the total charge the two sides of the pair fuse to.
 //   device: where the associator is read from.
 // Returns:
 //   One term per copy the new vertex can carry; their coefficients are the A symbol.
 // Raises:
 //   std::invalid_argument: if the domain side has no leg to bend.
 std::vector<PairTerm> bend_left(const FusionCategory& group, const FusionTreePair& pair,
-                                const c10::Device& device);
+                                const Sector& qtotal, const c10::Device& device);
 
 // Recouples the codomain side so that its first leg is split off: the resulting pairs carry one
 // codomain leg fewer and one domain leg more, the extra one being the conjugate of that first leg.
@@ -86,21 +88,23 @@ std::vector<PairTerm> fold_left(const FusionCategory& group, const FusionTreePai
 // Args:
 //   group: the category all sectors belong to.
 //   pair: a tree pair to rotate.
+//   qtotal: the total charge the two sides of the pair fuse to.
 //   device: where the associator and the symbols are read from.
 // Returns:
 //   The terms that reach the rotated pair.
 std::vector<PairTerm> cycle_clockwise(const FusionCategory& group, const FusionTreePair& pair,
-                                      const c10::Device& device);
+                                      const Sector& qtotal, const c10::Device& device);
 
 // Rotates the legs of a pair by one place in the other direction.
 // Args:
 //   group: the category all sectors belong to.
 //   pair: a tree pair to rotate.
+//   qtotal: the total charge the two sides of the pair fuse to.
 //   device: where the associator and the symbols are read from.
 // Returns:
 //   The terms that reach the rotated pair.
 std::vector<PairTerm> cycle_anticlockwise(const FusionCategory& group, const FusionTreePair& pair,
-                                          const c10::Device& device);
+                                          const Sector& qtotal, const c10::Device& device);
 
 // Splits the first codomain leg off a tree, the associator product that recouples a side.
 // Args:
@@ -144,13 +148,14 @@ std::vector<TreeTerm> multi_fmove_inv(const FusionCategory& group, const Sector&
 //   group: the category all sectors belong to.
 //   pair: a tree pair to repartition.
 //   keep: how many legs the codomain side is to carry, between 0 and the leg count.
+//   qtotal: the total charge the two sides of the pair fuse to.
 //   device: where the associator is read from.
 // Returns:
 //   The terms that reach a pair of that shape, with the product of the bend coefficients.
 // Raises:
 //   std::out_of_range: if `keep` is not between 0 and the leg count.
 std::vector<PairTerm> repartition(const FusionCategory& group, const FusionTreePair& pair,
-                                  int64_t keep, const c10::Device& device);
+                                  int64_t keep, const Sector& qtotal, const c10::Device& device);
 
 // The component array of a tree pair: the two tree tensors contracted on the coupled sector they
 // share, laid out as the codomain legs followed by the domain legs. This is what a coefficient of a

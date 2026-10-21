@@ -133,22 +133,20 @@ Split svd(const TensorMap& tensor, const std::vector<int64_t>& left,
     parts.push_back({charge, u, values, vh});
   }
   const std::vector<at::Tensor> flags = keep_flags(parts, max_bond, tol);
-  // The bond leg of the first factor points in, the one of the second points out; both carry the kept
-  // copies of the charge of the block they came from.
+  // The bond leg of the first factor points in, the one of the second points out; both store the kept
+  // copies of the charge of the block they came from, so each carries the space the other one does not.
   std::vector<std::pair<Sector, int64_t>> bond;
-  std::vector<std::pair<Sector, int64_t>> dual_bond;
   std::vector<at::Tensor> spectrum;
   for (std::size_t at = 0; at < parts.size(); ++at) {
     const at::Tensor index = flags.at(at).nonzero().squeeze(-1);
     if (index.size(0) == 0) continue;
     bond.emplace_back(parts.at(at).charge, index.size(0));
-    dual_bond.emplace_back(group->dual_sector(parts.at(at).charge), index.size(0));
     spectrum.push_back(at::index_select(parts.at(at).values, 0, index));
   }
   Split split;
   split.first.space.group = group;
   split.first.space.codomain = source.space.codomain;
-  split.first.space.domain = {leg_of(group, dual_bond, -1)};
+  split.first.space.domain = {leg_of(group, bond, -1)};
   split.first.qtotal = group->trivial_sector();
   split.second.space.group = group;
   split.second.space.codomain = {leg_of(group, bond, 1)};
@@ -200,12 +198,10 @@ std::pair<TensorMap, TensorMap> qr(const TensorMap& tensor, const std::vector<in
     bond.emplace_back(charge, q.size(1));
     second_blocks.push_back(r);
   }
-  std::vector<std::pair<Sector, int64_t>> dual_bond;
-  for (const auto& [charge, copies] : bond) dual_bond.emplace_back(group->dual_sector(charge), copies);
   TensorMap first;
   first.space.group = group;
   first.space.codomain = source.space.codomain;
-  first.space.domain = {leg_of(group, dual_bond, -1)};
+  first.space.domain = {leg_of(group, bond, -1)};
   first.qtotal = group->trivial_sector();
   TensorMap second;
   second.space.group = group;

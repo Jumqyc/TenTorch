@@ -17,7 +17,6 @@
 namespace sym::engine {
 namespace {
 
-Sector partner_root(const FusionCategory& group, const Sector& codomain_root, const Sector& qtotal);
 std::vector<std::vector<LegCharge>> charges_of(const std::vector<Leg>& legs);
 
 // Where one summand of a leg lives along that leg's full index, which is the concatenation of its
@@ -323,12 +322,12 @@ TensorMap repartition_tensor(const TensorMap& tensor, int64_t keep, const c10::D
   out.space.codomain = tensor.space.codomain;
   out.space.domain = tensor.space.domain;
   while (static_cast<int64_t>(out.space.codomain.size()) > keep) {
-    const Leg moved = out.space.codomain.back().conj();
+    const Leg moved = out.space.codomain.back().turned();
     out.space.codomain.pop_back();
     out.space.domain.push_back(moved);
   }
   while (static_cast<int64_t>(out.space.codomain.size()) < keep) {
-    const Leg moved = out.space.domain.back().conj();
+    const Leg moved = out.space.domain.back().turned();
     out.space.domain.pop_back();
     out.space.codomain.push_back(moved);
   }
@@ -380,13 +379,13 @@ TensorMap repartition_tensor(const TensorMap& tensor, int64_t keep, const c10::D
         const std::vector<PairTerm>& terms =
             known != moves.end()
                 ? known->second
-                : moves.emplace(source_pair, repartition(group, source_pair, keep, device)).first->second;
+                : moves.emplace(source_pair, repartition(group, source_pair, keep, tensor.qtotal, device)).first->second;
         for (const PairTerm& term : terms) {
           const Sector key = term.pair.codomain.coupled;
           auto placed = layouts.find(key);
           if (placed == layouts.end()) {
             placed = layouts
-                         .emplace(key, std::make_pair(rows_at(key), columns_at(key)))
+                         .emplace(key, std::make_pair(rows_at(key), columns_at(term.pair.domain.coupled)))
                          .first;
           }
           // The legs the move hands to the other side keep their multiplicities, in the order the
@@ -674,6 +673,25 @@ std::string leg_name(const Leg& leg) {
   return key;
 }
 
+// The name of the leg that carries the dual space, which is what a glue leg meets in a contraction:
+// the two sides of a glue carry dual spaces, and `leg_name` alone finds the slot only when every
+// sector is self-dual.
+std::string dual_name(const Leg& leg) {
+  std::vector<std::string> entries;
+  for (int64_t at = 0; at < leg.nblocks(); ++at) {
+    const Sector sector =
+        leg.qconj() > 0 ? leg.group()->dual_sector(leg.sector(at)) : leg.sector(at);
+    std::string entry;
+    for (const int64_t component : sector) entry += std::to_string(component) + ",";
+    entry += "x" + std::to_string(leg.multiplicity(at)) + ";";
+    entries.push_back(entry);
+  }
+  std::sort(entries.begin(), entries.end());
+  std::string key;
+  for (const std::string& entry : entries) key += entry;
+  return key;
+}
+
 // The glue is the last `left_glue` legs of the left operand's domain and the first `right_glue` legs of
 // the right operand's codomain: the shape of a composition. Each operand is repartitioned so that the
 // glue is the whole of that side, which leaves every block a matrix over the glue alone, and one
@@ -694,21 +712,38 @@ TensorMap contract(const TensorMap& left, int64_t left_glue, const TensorMap& ri
   if (one.space.domain.size() != two.space.codomain.size()) {
     throw std::invalid_argument("contract: the two operands do not glue the same legs");
   }
+  bool dual_glue = false;
   if (!one.space.domain.empty()) {
     // Two glue legs may look alike, so every name remembers the slots it fills and each right leg takes
-    // the next free one.
+    // the next free one. A leg meets the dual of its partner, so the fallback looks the dual space up.
     std::map<std::string, std::vector<int64_t>> slots;
+    std::map<std::string, std::vector<int64_t>> dual_slots;
     for (int64_t at = 0; at < static_cast<int64_t>(one.space.domain.size()); ++at) {
       slots[leg_name(one.space.domain.at(at))].push_back(at);
+      dual_slots[dual_name(one.space.domain.at(at))].push_back(at);
     }
+    std::vector<bool> taken(one.space.domain.size(), false);
+    const auto take = [&](const std::map<std::string, std::vector<int64_t>>& by_name,
+                          const std::string& name) -> int64_t {
+      const auto found = by_name.find(name);
+      if (found == by_name.end()) return -1;
+      for (const int64_t slot : found->second)
+        if (!taken.at(slot)) return slot;
+      return -1;
+    };
     std::vector<int64_t> back(two.space.codomain.size(), -1);
     for (int64_t at = 0; at < static_cast<int64_t>(two.space.codomain.size()); ++at) {
-      const auto found = slots.find(leg_name(two.space.codomain.at(at)));
-      if (found == slots.end() || found->second.empty()) {
+      const Leg& leg = two.space.codomain.at(at);
+      int64_t slot = take(slots, leg_name(leg));
+      if (slot < 0) {
+        slot = take(dual_slots, leg_name(leg));
+        dual_glue = true;
+      }
+      if (slot < 0) {
         throw std::invalid_argument("contract: the two operands glue different legs");
       }
-      back.at(found->second.front()) = at;
-      found->second.erase(found->second.begin());
+      taken.at(slot) = true;
+      back.at(slot) = at;
     }
     std::vector<int64_t> order;
     for (const int64_t at : back) order.push_back(at + 1);
@@ -724,7 +759,8 @@ TensorMap contract(const TensorMap& left, int64_t left_glue, const TensorMap& ri
   out.space.codomain = one.space.codomain;
   out.space.domain = two.space.domain;
   for (const auto& [charge, block] : one.blocks) {
-    const auto other = two.blocks.find(charge);
+    auto other = two.blocks.find(charge);
+    if (other == two.blocks.end() && dual_glue) other = two.blocks.find(left.space.group->dual_sector(charge));
     if (other == two.blocks.end()) continue;
     out.blocks.emplace(charge, at::matmul(block, other->second));
   }
@@ -966,13 +1002,6 @@ void bind_algebra(py::module_& m) {
 #include <string>
 
 namespace sym::engine {
-namespace {
-
-std::shared_ptr<FusionCategory> group_of(const std::vector<Leg>& codomain, const std::vector<Leg>& domain) {
-  if (!codomain.empty()) return codomain.front().group();
-  if (!domain.empty()) return domain.front().group();
-  throw std::invalid_argument("a tensor needs at least one leg to fix its category");
-}
 
 // The domain root that goes with a codomain root at a given total charge: the block of a tensor is
 // fixed by the root of its codomain side, and the domain root is the sector the two sides fuse
@@ -989,6 +1018,14 @@ Sector partner_root(const FusionCategory& group, const Sector& codomain_root, co
         "to the total charge of this tensor");
   }
   return valid.front();
+}
+
+namespace {
+
+std::shared_ptr<FusionCategory> group_of(const std::vector<Leg>& codomain, const std::vector<Leg>& domain) {
+  if (!codomain.empty()) return codomain.front().group();
+  if (!domain.empty()) return domain.front().group();
+  throw std::invalid_argument("a tensor needs at least one leg to fix its category");
 }
 
 std::vector<std::vector<LegCharge>> charges_of(const std::vector<Leg>& legs) {

@@ -32,6 +32,19 @@ namespace sym::engine {
 // side stores that sector dualised.
 std::vector<LegCharge> leg_charges(const Leg& leg);
 
+// The domain root that goes with a codomain root at a given total charge: the block of a tensor is
+// fixed by the root of its codomain side, and the domain root is the sector the two sides fuse
+// through, which the total charge then pins down.
+// Args:
+//   group: the category all sectors belong to.
+//   codomain_root: the sector the codomain side of the block couples to.
+//   qtotal: the total charge of the tensor.
+// Returns:
+//   The domain root that closes `qtotal` with `codomain_root`.
+// Raises:
+//   std::invalid_argument: if more than one domain root closes to `qtotal`.
+Sector partner_root(const FusionCategory& group, const Sector& codomain_root, const Sector& qtotal);
+
 // A leg from its summands, each carrying the multiplicity it appears with, and the direction it
 // points: the slices are the running sum of the summand dimensions, so the leg's index is the
 // concatenation of its summands.
