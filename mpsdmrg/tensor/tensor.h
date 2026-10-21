@@ -185,24 +185,15 @@ void bind_contract(py::module_& m);
 /**
  * The pointwise and trace constructions of a block-sparse tensor of the engine.
  *
- * ``conj`` conjugates the coefficients, ``adjoint`` also turns the tensor around, and ``norm`` and
- * ``inner`` reduce a tensor to the scalar its diagram evaluates to. Every block entry is a
- * coefficient in the orthonormal tree basis, so these sums need no further weight.
+ * ``adjoint`` turns a tensor around into its bra, and ``norm`` and ``inner`` reduce a tensor to the
+ * scalar its diagram evaluates to. Every block entry is a coefficient in the orthonormal tree basis,
+ * so these sums need no further weight.
  */
 
 namespace sym::engine {
 
 /**
- * The complex conjugate of every coefficient, the legs unchanged.
- * Args:
- *   tensor: the tensor to conjugate.
- * Returns:
- *   The tensor with every block conjugated.
- */
-TensorMap conj(const TensorMap& tensor);
-
-/**
- * The adjoint: every block conjugated and transposed, the two sides of the space exchanged.
+ * The bra: every block conjugated and transposed, the two sides of the space exchanged.
  * Args:
  *   tensor: the tensor to turn around.
  * Returns:
@@ -299,10 +290,9 @@ class Tensor {
   std::complex<double> item() const;
   Tensor clone() const;
   Tensor detach() const;
+  // The bra: every block conjugated and transposed and the two sides of the space exchanged, so the
+  // dual of a ket is not merely its complex conjugate.
   Tensor conj() const;
-  // The adjoint: every block conjugated and transposed, and the two sides of the space exchanged, so
-  // that a bra is the dual object of the ket it was built from and not merely its complex conjugate.
-  Tensor adjoint() const;
   Tensor to(const py::kwargs& options) const;
 
   // Fuse the given groups of legs into one leg each; the groups are lists of leg indices.

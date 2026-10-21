@@ -823,14 +823,6 @@ double squared_norm(const at::Tensor& block) {
 
 }  // namespace
 
-TensorMap conj(const TensorMap& tensor) {
-  TensorMap out;
-  out.space = tensor.space;
-  out.qtotal = tensor.qtotal;
-  for (const auto& [charge, block] : tensor.blocks) out.blocks.emplace(charge, at::conj(block));
-  return out;
-}
-
 TensorMap adjoint(const TensorMap& tensor) {
   TensorMap out;
   out.space.group = tensor.space.group;
@@ -953,12 +945,6 @@ std::complex<double> inner(const TensorMap& left, const TensorMap& right) {
 }
 
 void bind_algebra(py::module_& m) {
-  m.def("engine_conj", [](const std::shared_ptr<FusionCategory> group, const py::dict& tensor) {
-    return tensor_as(conj(tensor_of(group, tensor)));
-  }, py::arg("group"), py::arg("tensor"));
-  m.def("engine_adjoint", [](const std::shared_ptr<FusionCategory> group, const py::dict& tensor) {
-    return tensor_as(adjoint(tensor_of(group, tensor)));
-  }, py::arg("group"), py::arg("tensor"));
   m.def("engine_norm", [](const std::shared_ptr<FusionCategory> group, const py::dict& tensor) {
     return norm(tensor_of(group, tensor));
   }, py::arg("group"), py::arg("tensor"));
@@ -1254,11 +1240,6 @@ Tensor Tensor::detach() const {
 }
 
 Tensor Tensor::conj() const {
-  if (!map_) return Tensor(at::conj(plain_));
-  return Tensor(engine::conj(map()));
-}
-
-Tensor Tensor::adjoint() const {
   if (!map_) return Tensor(at::conj(plain_).transpose(-1, -2));
   return Tensor(engine::adjoint(map()));
 }
@@ -1638,7 +1619,6 @@ void bind_tensor(py::module_& m) {
       .def("clone", &Tensor::clone)
       .def("detach", &Tensor::detach)
       .def("conj", &Tensor::conj)
-      .def("adjoint", &Tensor::adjoint)
       .def("to", [](const Tensor& tensor, const py::kwargs& options) { return tensor.to(options); })
       .def("combine_legs", &Tensor::combine_legs)
       .def("__len__", [](const Tensor& tensor) { return static_cast<int64_t>(tensor.blocks().size()); })

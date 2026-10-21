@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from math import sqrt
-from typing import Literal, Sequence
+from typing import Sequence
 
 import torch
 
@@ -183,7 +183,7 @@ class MPS:
             for i in range(self.center, new_center):      # move to the right
                 self._left_canonicalize_site(i, update_center=True)
 
-    def expectation(self,operators, mode:Literal['direct','env'] = 'env')-> complex:
+    def expectation(self,operators)-> complex:
         '''
         Compute the expectation value of operators on the MPS.
         Accepts either a dict[int, operator] of single-site operators or an MPO.
@@ -196,7 +196,6 @@ class MPS:
                        the state at that site; the dictionary is then a product of one-site
                        operators, measured exactly on the dense state, which a state of a
                        non-trivial group does not have.
-            mode: 'direct' or 'env' — contraction strategy (for dict operators only; MPO always uses direct).
         Returns:
             complex: The expectation value of the operators on the MPS.
         Raises:
@@ -225,39 +224,17 @@ class MPS:
             raise ValueError(f"Operator shapes do not match the physical dimension {self.phys_dim}.")
         elif any(idx < 0 or idx >= self.L for idx in operators.keys()):
             raise ValueError(f"Operator indices must be in the range [0, {self.L - 1}].")
-        if mode == 'direct':
-            return self._full_dir_contract(operators) # uses brute-force contraction of the MPS with the given operators to compute the expectation value.
-        elif mode == 'env':
-            return self._full_env_contract(operators) # uses canonical condition.
+        return self._walk_contract(operators)
 
-    def norm(self,mode:Literal['direct','env'] = 'env')->complex:
+    def norm(self)->float:
         '''
         Return the squared norm <self|self>.
-        Args:
-            mode (str): 'env' walks the transfer matrix of every site, which is the squared norm of
-                        the state however it is gauged; 'direct' contracts the dense state instead.
         Returns:
-            complex: the squared norm of the state.
-        Raises:
-            ValueError: If the mode is neither 'direct' nor 'env'.
+            float: the squared norm of the state.
         '''
-        if mode == 'direct':
-            return self._full_dir_contract({})
-        if mode != 'env':
-            raise ValueError(f"A norm is computed in mode 'direct' or 'env', not {mode!r}.")
-        # every block entry multiplies a tree vector that spans a whole fibre of the dense space,
-        # so the norm is the transfer matrix over the sites, not the sum of the block entries
-        trivial = multiplet_leg(self.group, self.group.trivial_sector)
-        env = Tensor.ones(1, 1, legs = (trivial, trivial.conj()),
-                          qtotal = self.group.trivial_sector,
-                          dtype = self.dtype, device = self.device)
-        for tensor in self.tensors:
-            # the walk pairs every site with its conjugate, and a graded contraction glues a leg to
-            # its dual, so both the ket and its conjugate are turned to the same side first
-            ket = linalg.arrange(tensor, 0, [1, 2, 3])
-            env = cached_einsum('ab,ajc->bjc', env, ket)
-            env = cached_einsum('bjc,bjd->cd', env, linalg.arrange(tensor.conj(), 0, [1, 2, 3]))
-        return env.blocks[0].reshape(()).item()
+        # a closed diagram of a ket with its bra is a positive real, while the walk rounds every
+        # bond of it against its dual, which pays the Frobenius-Schur phase of the bond sectors
+        return abs(self._walk_contract({}))
 
     def _apply_gate(self, gate: torch.Tensor, targets: tuple[int, int],
                     max_bond_dim: int | None, tol: float) -> MPS:
@@ -381,7 +358,7 @@ class MPS:
         '''
         Normalize the MPS by dividing each tensor by the square root of the norm.
         '''
-        norm:complex = self.norm(mode='env')
+        norm:float = self.norm()
         self.tensors[self.center] /= sqrt(norm.real)
 
     def _dense_expectation(self, operators: dict[int, torch.Tensor]) -> complex:
@@ -415,62 +392,42 @@ class MPS:
 
     def _mpo_expectation(self, mpo) -> complex:
         '''
-        Compute <psi|O|psi> by contracting MPS* @ MPO @ MPS from left to right.
-        The MPO tensors follow the convention: tensors[0] = left boundary (carries site-0 ops),
-        tensors[1..L-1] = site 1..L-1 operators, tensors[L] = right boundary.
+        Compute <self|O|self> by walking the bra, the ket and the tensors of the MPO to the right.
+        Args:
+            mpo: the MPO to measure, of the same length and physical dimension as the state.
+        Returns:
+            complex: the expectation value, exact up to the floating point error.
         '''
-        # Site 0: use MPO tensors[0] (left boundary + site-0 operators)
-        lenv = cached_einsum('bpa,dqc,uwpq->acw',
-                            self.tensors[0].conj(), self.tensors[0], mpo.tensors[0])
-        for i in range(1, self.L):
-            lenv = cached_einsum('bdw,bpa,dqc,wxpq->acx',
-                                lenv, self.tensors[i].conj(), self.tensors[i], mpo.tensors[i])
-        # the MPO's right edge is a trivial leg of one component, so closing it leaves a scalar
-        edge = Tensor.ones(1, legs=(lenv.legs[2].conj(),), dtype=self.dtype, device=self.device)
-        return cached_einsum('acw,w->ac', lenv, edge).item()
+        trivial = multiplet_leg(self.group, self.group.trivial_sector)
+        lenv = Tensor.ones(1, 1, 1, legs = (trivial, trivial.conj(), trivial.conj()),
+                           qtotal = self.group.trivial_sector,
+                           dtype = self.dtype, device = self.device)
+        for i in range(self.L):
+            lenv = cached_einsum('aic,spa,cqd,ijpq->sjd', lenv, self.tensors[i].conj(),
+                                 self.tensors[i], mpo.tensors[i])
+        # the physical leg of the MPO closes the bra against the ket, which pays the
+        # Frobenius-Schur phase of the physical sector
+        phase = self.group.dual_sign(self.tensors[0].legs[1].sectors[0])
+        return complex(phase * lenv.blocks[0].reshape(-1)[0].item())
 
-    def _full_dir_contract(self,operators:dict[int,Tensor]):
+    def _walk_contract(self,operators:dict[int,Tensor]):
         '''
-        Brute-force contraction of the MPS with the given operators to compute the expectation value.
+        Contract the MPS with the given operators into the transfer walk of every site.
+        Args:
+            operators: site -> matrix in shape (phys_dim, phys_dim), at most one per site.
+        Returns:
+            complex: <self|O|self>, exact up to the floating point error.
         '''
-        if 0 in operators:
-            lenv = cached_einsum('aib,ajc,ij->bc', self.tensors[0].conj(), self.tensors[0],
-                                 operators[0])
-        else:
-            lenv = cached_einsum('aib,aic->bc', self.tensors[0].conj(), self.tensors[0])
-        for i in range(1,self.L):
+        trivial = multiplet_leg(self.group, self.group.trivial_sector)
+        lenv = Tensor.ones(1, 1, legs = (trivial, trivial.conj()),
+                           qtotal = self.group.trivial_sector,
+                           dtype = self.dtype, device = self.device)
+        for i in range(self.L):
+            lenv = cached_einsum('ab,aic->bic', lenv, self.tensors[i])
             if i in operators:
-                lenv = cached_einsum('ab,aic,bjd,ij->cd', lenv, self.tensors[i].conj(),
-                                     self.tensors[i], operators[i])
+                lenv = cached_einsum('bic,dkb,ki->cd', lenv, self.tensors[i].conj(), operators[i])
             else:
-                lenv = cached_einsum('ab,aic,bid->cd', lenv, self.tensors[i].conj(),
-                                     self.tensors[i])
-        return linalg.trace(lenv).item()
-
-
-    def _full_env_contract(self, operators: dict[int, Tensor]):
-        '''
-        Compute the expectation value of a list of operators on the MPS.
-
-        The contraction is gauge independent, so the center is left where it is.
-        '''
-        if not operators: # If the operator list is empty, return the norm of the MPS.
-            return self.norm(mode='env')
-
-        leftmost = min(operators.keys())
-        rightmost = max(operators.keys())
-
-        lenv = cached_einsum('aic,ajd,ij->cd',
-                                    self.tensors[leftmost].conj(),
-                                    self.tensors[leftmost],
-                                    operators[leftmost])
-        for i in range(leftmost + 1, rightmost + 1):
-            if i in operators:
-                lenv = cached_einsum('ab,aic,bjd,ij->cd', lenv,
-                                    self.tensors[i].conj(), self.tensors[i], operators[i])
-            else:
-                lenv = cached_einsum('ab,aic,bid->cd', lenv,
-                                    self.tensors[i].conj(), self.tensors[i])
+                lenv = cached_einsum('bic,dib->cd', lenv, self.tensors[i].conj())
         return linalg.trace(lenv).item()
 
     def entanglement_entropy(self,bond:int,alpha:float|None = None, svd_tol:float = 1e-14)-> float:

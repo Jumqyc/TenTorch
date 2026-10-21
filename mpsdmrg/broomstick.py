@@ -275,24 +275,24 @@ class Broomstick:
     def _cache_lenv(self,i:int):
         '''
         The left environment of the window that starts at site ``i``, grown from the one of site
-        ``i-1``: it meets the ket, the Hamiltonian tensor and the conjugate of the ket there.
+        ``i-1``: it meets the bra, the ket and the Hamiltonian tensor there.
         Args:
             i: the site the new environment belongs to, at least 1.
         '''
         state = self._require_state()
         self.lenv[i] = cached_einsum('aic,spa,cqd,ijpq->sjd', self.lenv[i-1],
-                                     state.tensors[i-1].adjoint(), state.tensors[i-1],
+                                     state.tensors[i-1].conj(), state.tensors[i-1],
                                      self.Hamiltonian.tensors[i-1])
 
     def _cache_renv(self,i:int):
         '''
         The right environment of the window that ends at site ``i``, grown from the one of site
-        ``i+1``: it meets the ket, the Hamiltonian tensor and the conjugate of the ket there.
+        ``i+1``: it meets the bra, the ket and the Hamiltonian tensor there.
         Args:
             i: the site the new environment belongs to, at most ``L-2``.
         '''
         state = self._require_state()
-        self.renv[i] = cached_einsum('spa,cqd,sjd,ijpq->aic', state.tensors[i].adjoint(),
+        self.renv[i] = cached_einsum('spa,cqd,sjd,ijpq->aic', state.tensors[i].conj(),
                                      state.tensors[i], self.renv[i + 1],
                                      self.Hamiltonian.tensors[i])
 
@@ -402,7 +402,7 @@ class Broomstick:
         Returns:
           The norm, a scalar whose imaginary part is round-off.
         '''
-        return self._require_state().norm(mode='env')
+        return self._require_state().norm()
 
     def _compute_energy(self) -> complex:
         '''
@@ -438,13 +438,17 @@ class Broomstick:
         state = self._require_state()
         W = self.Hamiltonian.tensors
         A = state.tensors
-        lenv = cached_einsum('bpa,uwpr,vzrq,dqc->acwz',A[0].conj(), W[0], W[0], A[0])
-        for i in range(1, self.L):
-            lenv = cached_einsum('bdxy,bpa,xwpr,yzrq,dqc->acwz',
+        trivial = multiplet_leg(self.group, self.group.trivial_sector)
+        lenv = Tensor.ones(1, 1, 1, 1, legs=(trivial, trivial.conj(), trivial.conj(),
+                                            trivial.conj()),
+                           qtotal=self.group.trivial_sector,
+                           dtype=self.dtype, device=self.device)
+        for i in range(self.L):
+            lenv = cached_einsum('bdxy,apb,xwpr,yzrq,dqc->acwz',
                                  lenv, A[i].conj(), W[i], W[i], A[i])
         # the MPO's right edges are trivial legs of one component, so closing both leaves a scalar
         edge = Tensor.ones(1, legs=(lenv.legs[2].conj(),), dtype=self.dtype, device=self.device)
-        E2 = float(cached_einsum('acwz,w,z->ac', lenv, edge, edge).real.item().real)
+        E2 = float(cached_einsum('acwz,w,z->ac', lenv, edge, edge).blocks[0].reshape(()).real.item())
 
         E = state.expectation(self.Hamiltonian)
         var = float(E2) - float(E.real) ** 2
