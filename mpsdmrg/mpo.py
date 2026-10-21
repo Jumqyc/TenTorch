@@ -409,20 +409,40 @@ class MPO:
         bond_dim = len(state_idx) + 2  # start (0) + end (bond_dim - 1)
 
         p = self.physical_dim
+        group = self.group
+        phys = phys_leg(group, p, self.site_sector)
+        # the two edges of the chain are trivial, the bond carries the start and the end state
+        bonds = [bond_leg(group, [(group.trivial_sector, dim)], 1)
+                 for dim in [1] + [bond_dim] * (self.L - 1) + [1]]
         tensors = []
         for site in range(self.L):
-            # the two edges of the chain are trivial, the bond carries the start and the end state
-            left = 1 if site == 0 else bond_dim
-            right = 1 if site == self.L - 1 else bond_dim
-            tensors.append(Tensor.zeros((left, right, p, p), dtype=self.dtype, device=self.device))
+            left, right = bonds[site], bonds[site + 1]
+            tensors.append(Tensor.zeros(left.dim, right.dim, p, p,
+                                        legs=(left, right, phys, phys.conj()),
+                                        codomain=2, qtotal=group.trivial_sector,
+                                        dtype=self.dtype, device=self.device))
+
+        def place(tensor: Tensor, out_slot: int, in_slot: int, matrix: torch.Tensor) -> None:
+            '''
+            Add one dense site matrix at a pair of bond slots of a tensor.
+
+            Args:
+              tensor: one MPO tensor, its legs (left bond, right bond, physical, physical dual),
+                  the two bond legs on the codomain.
+              out_slot: the left bond slot the matrix leaves along.
+              in_slot: the right bond slot the matrix enters along.
+              matrix: the dense (physical output, physical input) matrix.
+            '''
+            block = tensor.blocks[0]
+            block[out_slot * tensor.legs[1].dim + in_slot] += matrix.reshape(-1)
 
         eye = torch.eye(p, dtype=self.dtype, device=self.device)
         if self.L > 1:
-            tensors[0][0, 0] = eye                             # site-0 start
-            tensors[self.L - 1][bond_dim - 1, 0] = eye         # right boundary
+            place(tensors[0], 0, 0, eye)                             # site-0 start
+            place(tensors[self.L - 1], bond_dim - 1, 0, eye)         # right boundary
             for i in range(1, self.L - 1):
-                tensors[i][0, 0] = eye                         # bulk start
-                tensors[i][bond_dim - 1, bond_dim - 1] = eye   # bulk end
+                place(tensors[i], 0, 0, eye)                         # bulk start
+                place(tensors[i], bond_dim - 1, bond_dim - 1, eye)   # bulk end
 
         # identity on skipped sites for long-range couplings
         for key, ranges in state_ranges.items():
@@ -433,7 +453,7 @@ class MPO:
             for from_site, to_site in ranges:
                 for k in range(from_site + 1, to_site):
                     if 0 < k < self.L:
-                        tensors[k][s, s] = eye
+                        place(tensors[k], s, s, eye)
 
         # ── place operator matrices ──
         for c_idx, (ops, coeff, locs) in enumerate(self.couplings):
@@ -448,10 +468,7 @@ class MPO:
                 end = 0 if site == self.L - 1 else bond_dim - 1
                 state_out = end if n == len(ops) - 1 else state_idx[keys[n]]
 
-                if site == 0:
-                    tensors[0][0, state_out] += mat
-                else:
-                    tensors[site][state_in, state_out] += mat
+                place(tensors[site], state_in if site else 0, state_out, mat)
         return tensors
 
     def __sizeof__(self):

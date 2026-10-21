@@ -9,7 +9,7 @@ from numpy.typing import NDArray
 from base import COMPLEX, CUDA
 from mpsdmrg import linalg
 from mpsdmrg.symmetry.cat import Group, no_symmetry, has_content
-from mpsdmrg.tensor import Tensor, cached_einsum, multiplet_leg
+from mpsdmrg.tensor import Tensor, bond_leg, cached_einsum, multiplet_leg
 
 from mpsdmrg.mps import MPS
 from mpsdmrg.mpo import MPO
@@ -196,11 +196,14 @@ class Broomstick:
                                        qtotal=group.trivial_sector,
                                        dtype=self.dtype, device=self.device)
         else:
-            # Right boundary environment: MPO bond dim = Hamiltonian.bond_dim, final state (D-1) set to 1
-            self.renv[L] = Tensor.zeros(1, self.Hamiltonian.bond_dim, 1,
-                                        dtype=self.dtype, device=self.device)
-            self.renv[L][0, -1, 0] = 1.0
-            self.lenv[0] = Tensor.ones(1, 1, 1, dtype=self.dtype, device=self.device)
+            group = state.tensors[0].group
+            triv = multiplet_leg(group, group.trivial_sector)
+            self.lenv[0] = Tensor.ones(1, 1, 1, legs=(triv, triv.conj(), triv.conj()),
+                                       qtotal=group.trivial_sector,
+                                       dtype=self.dtype, device=self.device)
+            self.renv[L] = Tensor.ones(1, 1, 1, legs=(triv.conj(), triv, triv),
+                                       qtotal=group.trivial_sector,
+                                       dtype=self.dtype, device=self.device)
 
         for i in range(L - 1, 1, -1):
             self._cache_renv(i)
@@ -235,6 +238,10 @@ class Broomstick:
 
         for sweep in range(num_sweeps):
             E, trunc = self.singlesweep()
+            # the sweep reported the energy of the environments it carried along; rebuild
+            # them from the state it leaves behind, so the number belongs to this state
+            self.cache_envs()
+            E = float(self._compute_energy().real)
             self._last_energy = E
             E_density = E / self.L
             max_bond = max(state.bond_dim)
@@ -311,13 +318,9 @@ class Broomstick:
                 self._cache_lenv(i + 1)
             self.center = i + 1
 
-        # special handling for the last site: renormalize the last tensor to be right-isometric
-        s_norm = linalg.norm(state.tensors[self.L - 1], dim=(1, 2))
-        s_norm = torch.clamp(s_norm, min=1e-30)
-        state.tensors[self.L - 1] = state.tensors[self.L - 1] / s_norm[:, None, None]
-        state.tensors[self.L - 2] = state.tensors[self.L - 2] * s_norm[None, None, :]
-        self.center = self.L - 2
-        state.center = self.L - 2
+        # the last site leaves the right sweep as S Vh, so it is right-canonicalized here
+        state._right_canonicalize_site(self.L - 1)
+        self.center = state.center
         self._cache_renv(self.L - 1)
         for i in range(self.L - 3, -1, -1):
             self.center = i
@@ -327,7 +330,10 @@ class Broomstick:
             if i > 0:
                 self._cache_renv(i + 1)
 
-        return E.item(), max_trunc
+        # the Lanczos eigenvalue carries the squared norm of the state the environments
+        # were built from; the expectation joins the environments themselves, so it is
+        # the energy of the state as it stands
+        return float(self._compute_energy().real), max_trunc
 
     def _lanczos(self,
                  i: int,
@@ -355,7 +361,10 @@ class Broomstick:
             v_k = vecs[k]
             w = helper(v_k)
 
-            alpha = linalg.inner(v_k, w).real
+            # the environments carry the bra bond of the state, so the image sits on the
+            # other side of that bond than the vector does; a contraction pairs the two
+            # as they are, and an inner product of two tensors in one space would not
+            alpha = cached_einsum('aikc,aikc->', v_k.conj(), w).item().real
             alphas[k] = alpha
 
             if k == 0:
@@ -366,8 +375,7 @@ class Broomstick:
             beta = linalg.norm(w).real
             betas[k] = beta
 
-            v_next = w / beta
-            v_next[beta == 0] = 0
+            v_next = w / beta if float(beta) > 0.0 else w * 0.0
             vecs.append(v_next)
         # for performance reasons, we will NOT check for convergence and run
         # all n_iter iterations to avoid GPU→CPU syncs.  The caller can check
@@ -416,8 +424,7 @@ class Broomstick:
                        (0, 1),
                        (2, 3),
                        max_bond=self.max_bond_dim,
-                       tol=self.svd_tol,
-                       direction=direction)
+                       tol=self.svd_tol)
 
         s2_kept = torch.sum(s*s).real
         trunc_err = 1.0 - float(s2_kept)
@@ -426,11 +433,11 @@ class Broomstick:
         new_bond = u.legs[2].multiplets  # kept multiplets, the number of kept singular values
         if direction == 'right':
             mps.tensors[i] = u  # M[i] = U
-            mps.tensors[i + 1] = s.to(vh.dtype).view(-1, 1, 1) * vh  # M[i+1] = S Vh
+            mps.tensors[i + 1] = linalg.absorb(vh, s)  # M[i+1] = S Vh
             mps.center = i + 1  # singular values absorbed into site i+1
 
         elif direction == 'left':
-            mps.tensors[i] = u * s.to(u.dtype).view(1, 1, -1)  # M[i] = U S
+            mps.tensors[i] = linalg.scale(u, 2, s)  # M[i] = U S
             mps.tensors[i + 1] = vh  # M[i+1] = Vh
             mps.center = i  # singular values stay at site i
         mps.bond_dim[i + 1] = new_bond
@@ -449,6 +456,24 @@ class Broomstick:
         self.cache_envs()
         return float(self._compute_energy().real)
 
+    def _norm2(self) -> complex:
+        '''
+        Squared norm of the current MPS state, contracted as a transfer matrix of the
+        sites with their conjugates: the state is a ket, so every site meets its own
+        conjugate at the bond and the physical leg.
+        Returns:
+          The norm, a scalar whose imaginary part is round-off.
+        '''
+        state = self._require_state()
+        group = state.tensors[0].group
+        trivial = multiplet_leg(group, group.trivial_sector)
+        env = Tensor.ones(1, 1, legs=(trivial, trivial.conj()),
+                          qtotal=group.trivial_sector, dtype=self.dtype, device=self.device)
+        for tensor in state.tensors:
+            env = cached_einsum('ab,ajc->bjc', env, tensor)
+            env = cached_einsum('bjc,bjd->cd', env, tensor.conj())
+        return env.blocks[0].reshape(()).item()
+
     def _compute_energy(self) -> complex:
         state = self._require_state()
         lenv = cached_einsum('apc,pqij,aib,cjd->bqd',
@@ -461,7 +486,10 @@ class Broomstick:
                          state.tensors[self.center + 1].conj(),
                          state.tensors[self.center + 1])
 
-        return cached_einsum('bqd,bqd->', lenv, renv).item()
+        # the environments are built from the state's tensors, so this expectation is
+        # quadratic in the state: a state that drifted off the unit sphere reports its
+        # energy scaled by its squared norm
+        return cached_einsum('bqd,bqd->', lenv, renv).item() / self._norm2()
     
     def __sizeof__(self):
         return ((0 if self.state is None else self.state.__sizeof__()) +

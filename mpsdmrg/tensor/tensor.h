@@ -137,6 +137,21 @@ namespace sym::engine {
 TensorMap permute_tensor(const TensorMap& tensor, int64_t keep, const std::vector<int64_t>& order,
                          const c10::Device& device);
 
+// The same map written over any arrangement of its legs: each leg may cross to the other side, so
+// `keep` names how many of them end up in the codomain and `order` lists the legs in their wanted
+// order. The blocks are rebuilt in the tree basis of the new sides.
+// Args:
+//   tensor: a tensor map.
+//   keep: the number of legs the codomain carries afterwards.
+//   order: the legs in their wanted order, as one-based positions in ``tensor``.
+//   device: where the category symbols are read from.
+// Returns:
+//   The same map over rearranged legs.
+// Raises:
+//   std::invalid_argument: if `keep` or `order` does not describe an arrangement of the legs.
+TensorMap arrange_tensor(const TensorMap& tensor, int64_t keep, const std::vector<int64_t>& order,
+                         const c10::Device& device);
+
 // Contract two tensors whose middle legs meet: every codomain leg of ``right`` is glued to a domain
 // leg of ``left``, so ``left`` carries the free codomain legs and ``right`` the free domain legs.
 // The tree bases are orthonormal, so the contraction of one charge is the matrix product of the two

@@ -9,7 +9,7 @@ from base import COMPLEX, CUDA
 from mpsdmrg import linalg
 from mpsdmrg.mpo import MPO
 from mpsdmrg.symmetry.cat import Group, has_content, no_symmetry
-from mpsdmrg.tensor import Tensor, cached_einsum, capped_leg, fuse_legs, multiplet_leg
+from mpsdmrg.tensor import Tensor, bond_leg, cached_einsum, capped_leg, fuse_legs, multiplet_leg
 from mpsdmrg.tensor import phys_leg
 
 
@@ -105,11 +105,14 @@ class MPS:
 
         # Initialize MPS tensors (left_bond_dim, phys_dim, right_bond_dim)
         if init_state is None:
+            phys = phys_leg(group, phys_dim, site_sector)
+            # a bond leg of a bare dimension carries the trivial sector with that multiplicity
+            bonds = [bond_leg(group, [(group.trivial_sector, dim)], 1) for dim in bond_dims]
             self.tensors = [
-            Tensor.rand((bond_dims[i], phys_dim, bond_dims[i + 1]),
-                        dtype=dtype,
-                        device=device) for i in range(L)
-        ]
+                Tensor.rand(bonds[i].dim, phys.dim, bonds[i + 1].dim,
+                            legs=(bonds[i], phys, bonds[i + 1].conj()),
+                            qtotal=group.trivial_sector,
+                            dtype=dtype, device=device) for i in range(L)]
         else:
             # a copy of the list, so the caller's sequence is left alone
             self.tensors = list(init_state)

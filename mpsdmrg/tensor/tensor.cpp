@@ -893,9 +893,34 @@ std::complex<double> trace(const TensorMap& tensor) {
   return total;
 }
 
+namespace {
+
+// The same object written with another split of its sides: the legs agree in order, so the tensor is
+// arranged onto the split of `into` before the entries are combined.
+TensorMap aligned(const TensorMap& tensor, const TensorMap& into, const c10::Device& device) {
+  const int64_t keep = static_cast<int64_t>(into.space.codomain.size());
+  if (static_cast<int64_t>(tensor.space.codomain.size()) == keep) return tensor;
+  std::vector<int64_t> order;
+  for (int64_t at = 0; at < static_cast<int64_t>(tensor.space.size()); ++at) order.push_back(at + 1);
+  return arrange_tensor(tensor, keep, order, device);
+}
+
+}  // namespace
+
 std::complex<double> inner(const TensorMap& left, const TensorMap& right) {
   if (!(left.space.codomain == right.space.codomain && left.space.domain == right.space.domain)) {
-    throw std::invalid_argument("inner: the two tensors do not cover the same space");
+    // Which side a leg sits on is a choice of basis for the same object, so the right operand is
+    // brought onto the split of the left one before the entries are compared.
+    if (left.space.size() != right.space.size()) {
+      throw std::invalid_argument("inner: the two tensors do not cover the same space");
+    }
+    const c10::Device device = left.blocks.empty() ? at::TensorOptions().device()
+                                                   : left.blocks.begin()->second.device();
+    const TensorMap moved = aligned(right, left, device);
+    if (!(left.space.codomain == moved.space.codomain && left.space.domain == moved.space.domain)) {
+      throw std::invalid_argument("inner: the two tensors do not cover the same space");
+    }
+    return inner(left, moved);
   }
   std::complex<double> total(0.0, 0.0);
   for (const auto& [charge, block] : left.blocks) {
@@ -1177,7 +1202,7 @@ Tensor Tensor::combine_legs(const std::vector<std::vector<int64_t>>& groups) con
 
 Tensor& Tensor::operator+=(const Tensor& other) {
   if (!map_ || !other.map_) throw std::logic_error("a bare matrix does not add to a graded tensor");
-  for (const auto& [charge, block] : other.map().blocks) {
+  for (const auto& [charge, block] : aligned(other.map(), *map_, other.device()).blocks) {
     const auto found = map_->blocks.find(charge);
     if (found == map_->blocks.end()) map_->blocks.emplace(charge, block.clone());
     else found->second = found->second + block;
@@ -1187,7 +1212,7 @@ Tensor& Tensor::operator+=(const Tensor& other) {
 
 Tensor& Tensor::operator-=(const Tensor& other) {
   if (!map_ || !other.map_) throw std::logic_error("a bare matrix does not subtract a graded tensor");
-  for (const auto& [charge, block] : other.map().blocks) {
+  for (const auto& [charge, block] : aligned(other.map(), *map_, other.device()).blocks) {
     const auto found = map_->blocks.find(charge);
     if (found == map_->blocks.end()) map_->blocks.emplace(charge, -block);
     else found->second = found->second - block;
@@ -1223,8 +1248,6 @@ Tensor Tensor::operator-() const {
   for (auto& [charge, block] : out.blocks) block = -block;
   return Tensor(std::move(out));
 }
-
-namespace {
 
 // Rearranges the legs of a tensor into a wanted sequence and a wanted split between its sides, so
 // that the component array is only permuted: a leg that crosses changes its direction, and both
@@ -1315,8 +1338,6 @@ TensorMap arrange_tensor(const TensorMap& tensor, int64_t keep, const std::vecto
   return permute_tensor(out, keep, wanted, device);
 }
 
-}  // namespace
-
 Tensor einsum(const std::string& spec, const std::vector<Tensor>& operands) {
   const std::size_t arrow = spec.find("->");
   const std::string sides = arrow == std::string::npos ? spec : spec.substr(0, arrow);
@@ -1403,19 +1424,23 @@ Tensor einsum(const std::string& spec, const std::vector<Tensor>& operands) {
     waiting.erase(waiting.begin() + static_cast<int64_t>(chosen));
     pending.erase(pending.begin() + static_cast<int64_t>(chosen));
   }
-  // The output fixes the side and the order of every kept label.
+  // The output keeps the order the caller wrote. A label that entered on a codomain stays there
+  // while it is still at the front of that order; the first label that entered on a domain ends
+  // the run, and keep_out is the length of the run.
   if (wanted.empty()) return accumulated;
   std::vector<int64_t> order;
   int64_t keep_out = 0;
-  for (const int want_codomain : {0, 1}) {
-    for (const char letter : wanted) {
-      const std::size_t where = labels.find(letter);
-      if (where == std::string::npos) {
-        throw std::invalid_argument("einsum: the output names a label no operand carries");
-      }
-      if (side.at(letter) != want_codomain) continue;
-      order.push_back(static_cast<int64_t>(where) + 1);
-      if (want_codomain == 0) ++keep_out;
+  bool leading = true;
+  for (const char letter : wanted) {
+    const std::size_t where = labels.find(letter);
+    if (where == std::string::npos) {
+      throw std::invalid_argument("einsum: the output names a label no operand carries");
+    }
+    order.push_back(static_cast<int64_t>(where) + 1);
+    if (leading && side.at(letter) == 0) {
+      ++keep_out;
+    } else {
+      leading = false;
     }
   }
   if (order.size() != labels.size()) {

@@ -43,9 +43,8 @@ std::vector<int64_t> leg_order(const TensorMap& tensor, const std::vector<int64_
   return order;
 }
 
-// The map a split factorizes, and the device its blocks live on: the leading legs become the codomain
-// and the trailing ones the domain. repartition hands over the last leg of the crowded side, so a
-// tensor written as a ket is turned round before the boundary is moved, which keeps its order.
+// The map a split factorizes, and the device its blocks live on: the legs the split names first
+// become the codomain and the rest the domain, in the order the split names them.
 struct Prepared {
   TensorMap source;
   c10::Device device;
@@ -54,20 +53,16 @@ struct Prepared {
 Prepared prepare(const TensorMap& tensor, const std::vector<int64_t>& left,
                  const std::vector<int64_t>& right) {
   const std::vector<int64_t> order = leg_order(tensor, left, right);
-  for (std::size_t at = 0; at < order.size(); ++at) {
-    if (order.at(at) != static_cast<int64_t>(at)) {
-      throw std::invalid_argument("a split has to take the first legs of the tensor");
-    }
-  }
   const c10::Device device = tensor.blocks.empty() ? at::TensorOptions().device()
                                                    : tensor.blocks.begin()->second.device();
-  TensorMap source = tensor.space.codomain.empty()
-                         ? repartition_tensor(tensor, tensor.space.size(), device)
-                         : tensor;
-  if (source.space.domain.empty()) {
-    source = repartition_tensor(source, static_cast<int64_t>(left.size()), device);
+  bool arranged = static_cast<int64_t>(tensor.space.codomain.size()) == static_cast<int64_t>(left.size());
+  for (std::size_t at = 0; at < order.size(); ++at) {
+    if (order.at(at) != static_cast<int64_t>(at) + 1) arranged = false;
   }
-  return Prepared{std::move(source), device};
+  if (arranged) return Prepared{tensor, device};
+  std::vector<int64_t> wanted;
+  for (const int64_t at : order) wanted.push_back(at + 1);
+  return Prepared{arrange_tensor(tensor, static_cast<int64_t>(left.size()), wanted, device), device};
 }
 
 // The singular values of every charge, in the order the bond leg lists the charges.
