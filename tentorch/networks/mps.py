@@ -8,7 +8,8 @@ import torch
 from tentorch.config import COMPLEX, CUDA
 from tentorch import linalg
 from tentorch.networks.mpo import MPO
-from tentorch.symmetry.cat import Group, has_content, no_symmetry
+from tentorch.symmetry import FusionCategory
+from tentorch.symmetry.cat import has_content, no_symmetry
 from tentorch.tensors import Tensor, bond_leg, cached_einsum, capped_leg, fuse_legs, multiplet_leg
 from tentorch.tensors import phys_leg
 
@@ -40,7 +41,7 @@ class MPS:
                  dtype = COMPLEX,
                  device = CUDA,
                  *,
-                 group: Group = no_symmetry,
+                 cat: FusionCategory = no_symmetry,
                  site_sector: tuple[int, ...] | None = None,
                  max_bond_dim: int | None = None):
         '''
@@ -55,7 +56,7 @@ class MPS:
             init_state (list[Tensor] | None): Optional initial state for the MPS. If None, random tensors will be generated.
             dtype: data type of the MPS tensors (default: COMPLEX).
             device: device that stores the MPS tensors (default: CUDA).
-            group: the symmetry group of the chain, ``no_symmetry`` by default.  A group whose
+            cat: the symmetry category of the chain, ``no_symmetry`` by default.  A group whose
                 operator content is
                 implemented builds its own start state -- one singlet tensor per site, whose
                 bond legs carry every sector the physical legs to their left fuse to, capped
@@ -71,25 +72,25 @@ class MPS:
             ValueError: If the length of bond_dims does not match L+1, or if a
                 multiplet-carrying group is given without a bond cap.
         '''
-        if init_state is None and has_content(group):
+        if init_state is None and has_content(cat):
             if max_bond_dim is None:
-                raise ValueError(f'{group.name} builds its own start state and needs a bond cap.')
+                raise ValueError(f'{cat.name} builds its own start state and needs a bond cap.')
             # one singlet tensor per site: each bond carries every sector the physical legs to
             # its left fuse to, capped at max_bond_dim, so the state is a singlet and the sweep
             # starts from a bond dimension it can afford
-            phys = phys_leg(group, phys_dim, site_sector)
-            bonds = [multiplet_leg(group, group.trivial_sector)]
+            phys = phys_leg(cat, phys_dim, site_sector)
+            bonds = [multiplet_leg(cat, cat.trivial_sector)]
             for _ in range(L - 1):
                 bonds.append(capped_leg(fuse_legs(bonds[-1], phys), max_bond_dim))
-            if not any(tuple(group.trivial_sector) in group.fusion_outcomes(sector, phys.sectors[0])
+            if not any(tuple(cat.trivial_sector) in cat.fusion_outcomes(sector, phys.sectors[0])
                        for sector in bonds[-1].sectors):
                 raise ValueError(
                     f'A bond of {bonds[-1].dim} states cannot close {L} sites of dimension '
-                    f'{phys_dim} to the trivial sector of {group.name}.')
-            bonds.append(multiplet_leg(group, group.trivial_sector))
+                    f'{phys_dim} to the trivial sector of {cat.name}.')
+            bonds.append(multiplet_leg(cat, cat.trivial_sector))
             init_state = [Tensor.rand((bonds[i].dim, phys.dim, bonds[i + 1].dim),
                                       legs=(bonds[i], phys, bonds[i + 1].conj()),
-                                      qtotal=group.trivial_sector,
+                                      qtotal=cat.trivial_sector,
                                       dtype=dtype, device=device) for i in range(L)]
             bond_dims = [bond.dim for bond in bonds]
         if bond_dims is None:
@@ -100,18 +101,18 @@ class MPS:
             raise ValueError(f"Bond dimension list length {len(bond_dims)} does not match the expected length of {L + 1}.")
         self.dtype = dtype
         self.device = device
-        self.group = group
+        self.cat = cat
         self.center = 0  # Center site index for canonical form
 
         # Initialize MPS tensors (left_bond_dim, phys_dim, right_bond_dim)
         if init_state is None:
-            phys = phys_leg(group, phys_dim, site_sector)
+            phys = phys_leg(cat, phys_dim, site_sector)
             # a bond leg of a bare dimension carries the trivial sector with that multiplicity
-            bonds = [bond_leg(group, [(group.trivial_sector, dim)], 1) for dim in bond_dims]
+            bonds = [bond_leg(cat, [(cat.trivial_sector, dim)], 1) for dim in bond_dims]
             self.tensors = [
                 Tensor.rand(bonds[i].dim, phys.dim, bonds[i + 1].dim,
                             legs=(bonds[i], phys, bonds[i + 1].conj()),
-                            qtotal=group.trivial_sector,
+                            qtotal=cat.trivial_sector,
                             dtype=dtype, device=device) for i in range(L)]
         else:
             # a copy of the list, so the caller's sequence is left alone
@@ -125,7 +126,7 @@ class MPS:
         self.normalize()  # Normalize the MPS upon initialization
 
     @staticmethod
-    def _from_tensors(tensors: list[Tensor], group: Group, dtype: torch.dtype,
+    def _from_tensors(tensors: list[Tensor], cat: FusionCategory, dtype: torch.dtype,
                       device: torch.device) -> MPS:
         '''
         Assemble an MPS from tensors as they are, without canonicalizing or normalizing them.
@@ -136,7 +137,7 @@ class MPS:
 
         Args:
             tensors (list[Tensor]): one tensor per site, legs (left bond, physical, right bond).
-            group (Group): the symmetry the tensors carry.
+            cat: the symmetry the tensors carry.
             dtype (torch.dtype): the element type of the state.
             device (torch.device): the device of the state.
         Returns:
@@ -147,7 +148,7 @@ class MPS:
         state.phys_dim = tensors[0].shape[1]
         state.dtype = dtype
         state.device = device
-        state.group = group
+        state.cat = cat
         state.center = 0
         state.tensors = list(tensors)
         state.bond_dim = _bond_multiplets(state.tensors)
@@ -204,11 +205,11 @@ class MPS:
         if isinstance(operators, MPO):
             return self._mpo_expectation(operators)
         if any(not isinstance(operator, Tensor) or not operator.legs for operator in operators.values()):
-            if has_content(self.group):
+            if has_content(self.cat):
                 # a bare matrix carries every magnetic component, while a symmetry-adapted tensor
                 # stores only the reduced data of its fusion trees
                 raise NotImplementedError(
-                    f'A bare matrix measures on a state of a trivial group; for {self.group.name} '
+                    f'A bare matrix measures on a state of a trivial group; for {self.cat.name} '
                     f'pass the operator as a Tensor of the group or as an MPO.')
             matrices: dict[int, torch.Tensor] = {}
             for site, operator in operators.items():
@@ -251,12 +252,12 @@ class MPS:
             MPS: the state after the gate, not canonicalized.
         '''
         first, second = targets
-        if has_content(self.group):
+        if has_content(self.cat):
             # a bare gate matrix carries every magnetic component, while a symmetry-adapted tensor
             # stores only the reduced data of its fusion trees; the gate belongs on an MPO, whose
             # bond legs carry the charge of every channel
             raise NotImplementedError(
-                f'A bare matrix acts on a state of a trivial group; for {self.group.name} write the '
+                f'A bare matrix acts on a state of a trivial group; for {self.cat.name} write the '
                 f'operator as an MPO, whose bond legs carry the charge of every channel.')
         physical = self.tensors[first].legs[1]
         dim = physical.dim
@@ -270,7 +271,7 @@ class MPS:
         tensors = list(self.tensors)
         tensors[first] = tensor
         tensors[second] = linalg.absorb(rest, singular)
-        return self._from_tensors(tensors, self.group, self.dtype, self.device)
+        return self._from_tensors(tensors, self.cat, self.dtype, self.device)
 
     def apply(self,
               operator: "MPO | torch.Tensor",
@@ -309,18 +310,18 @@ class MPS:
                 raise NotImplementedError('A local operator acts on one site or on two neighbours.')
             site = targets[0]
             phys = self.tensors[site].legs[1]
-            if has_content(self.group):
+            if has_content(self.cat):
                 # a bare matrix carries every magnetic component, while a symmetry-adapted tensor
                 # stores only the reduced data of its fusion trees
                 raise NotImplementedError(
-                    f'A bare matrix acts on a state of a trivial group; for {self.group.name} write '
+                    f'A bare matrix acts on a state of a trivial group; for {self.cat.name} write '
                     f'the operator as an MPO, whose bond legs carry the charge of every channel.')
             matrix = Tensor.from_torch(
                 torch.as_tensor(operator, dtype=self.dtype, device=self.device),
                 legs=(phys, phys.conj()))
             tensors = list(self.tensors)
             tensors[site] = cached_einsum('lsr,ts->ltr', tensors[site], matrix)
-            return self._from_tensors(tensors, self.group, self.dtype, self.device)
+            return self._from_tensors(tensors, self.cat, self.dtype, self.device)
         if operator.L != self.L or operator.physical_dim != self.phys_dim:
             raise ValueError(
                 f'An operator of {operator.L} sites of dimension {operator.physical_dim} does not '
@@ -352,7 +353,7 @@ class MPS:
                                                 tol=tol)
             tensors.append(tensor)
             carry = linalg.absorb(rest, singular)
-        return MPS._from_tensors(tensors, self.group, self.dtype, self.device)
+        return MPS._from_tensors(tensors, self.cat, self.dtype, self.device)
 
     def normalize(self):
         '''
@@ -398,16 +399,16 @@ class MPS:
         Returns:
             complex: the expectation value, exact up to the floating point error.
         '''
-        trivial = multiplet_leg(self.group, self.group.trivial_sector)
+        trivial = multiplet_leg(self.cat, self.cat.trivial_sector)
         lenv = Tensor.ones(1, 1, 1, legs = (trivial, trivial.conj(), trivial.conj()),
-                           qtotal = self.group.trivial_sector,
+                           qtotal = self.cat.trivial_sector,
                            dtype = self.dtype, device = self.device)
         for i in range(self.L):
             lenv = cached_einsum('aic,spa,cqd,ijpq->sjd', lenv, self.tensors[i].conj(),
                                  self.tensors[i], mpo.tensors[i])
         # the physical leg of the MPO closes the bra against the ket, which pays the
         # Frobenius-Schur phase of the physical sector
-        phase = self.group.dual_sign(self.tensors[0].legs[1].sectors[0])
+        phase = self.cat.dual_sign(self.tensors[0].legs[1].sectors[0])
         return complex(phase * lenv.blocks[0].reshape(-1)[0].item())
 
     def _walk_contract(self,operators:dict[int,Tensor]):
@@ -418,9 +419,9 @@ class MPS:
         Returns:
             complex: <self|O|self>, exact up to the floating point error.
         '''
-        trivial = multiplet_leg(self.group, self.group.trivial_sector)
+        trivial = multiplet_leg(self.cat, self.cat.trivial_sector)
         lenv = Tensor.ones(1, 1, legs = (trivial, trivial.conj()),
-                           qtotal = self.group.trivial_sector,
+                           qtotal = self.cat.trivial_sector,
                            dtype = self.dtype, device = self.device)
         for i in range(self.L):
             lenv = cached_einsum('ab,aic->bic', lenv, self.tensors[i])
@@ -518,10 +519,10 @@ class MPS:
                       [t.clone().detach() for t in self.tensors],
                       self.dtype,
                       self.device,
-                      group=self.group)
+                      cat=self.cat)
     def __repr__(self):
         return (f"MPS(L={self.L}, phys_dim={self.phys_dim}, bond_dim={self.bond_dim}, "
-            f"center={self.center}, group={self.group.name})")
+            f"center={self.center}, group={self.cat.name})")
     def __sizeof__(self):
         return sum(t.numel() * t.element_size() for t in self.tensors)
 

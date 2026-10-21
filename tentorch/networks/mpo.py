@@ -5,7 +5,8 @@ import torch
 from numpy.typing import NDArray
 
 from tentorch.config import COMPLEX, CUDA
-from tentorch.symmetry.cat import Group, Sector, content, has_content, no_symmetry
+from tentorch.symmetry import FusionCategory
+from tentorch.symmetry.cat import Sector, content, has_content, no_symmetry
 from tentorch.operators import SpinOperator
 from tentorch.tensors import Tensor, bond_leg, cached_einsum, multiplet_leg, phys_leg
 
@@ -19,7 +20,7 @@ class MPO:
                  mapping:dict[str,Tensor]|None = None,
                  dtype = COMPLEX,
                  device = CUDA,
-                 group:Group = no_symmetry,
+                 cat:FusionCategory = no_symmetry,
                  total:tuple[int,...]|None = None,
                  site_sector:tuple[int,...]|None = None):
         '''
@@ -28,7 +29,7 @@ class MPO:
             phys_dim (int): Physical dimension of the MPO.
             mapping (dict[str, Tensor]): A dictionary mapping operator names to their dense operator tensors. If None, the spin components and the identity are used.
             dtype, device: Data type and device of the tensors.
-            group (Group): Symmetry group of the Hamiltonian; ``no_symmetry`` by default.
+            cat: Symmetry category of the Hamiltonian; ``no_symmetry`` by default.
             total (tuple[int, ...] | None): Total charge the operator carries, for an operator
                 that is not a Hamiltonian; ``None`` means the trivial sector.
             site_sector (tuple[int, ...] | None): The multiplet one site lives in, e.g. ``(1,)``
@@ -38,7 +39,7 @@ class MPO:
         self.dtype = dtype
         self.device = device
         self.L = L
-        self.group: Group = group
+        self.cat: FusionCategory = cat
         self.total: tuple[int, ...] | None = None if total is None else tuple(int(entry) for entry in total)
         self.site_sector = None if site_sector is None else tuple(int(entry) for entry in site_sector)
         self.couplings: list[tuple[tuple[str, ...], complex, tuple[int, ...]]] = []
@@ -81,11 +82,11 @@ class MPO:
                   mapping={k: v.clone() for k, v in self.mapping.items()},
                   dtype=self.dtype,
                   device=self.device,
-                  group=self.group,
+                  cat=self.cat,
                   total=self.total,
                   site_sector=self.site_sector)
         new.couplings = [(ops, coeff, locs) for ops, coeff, locs in self.couplings]
-        new.group = self.group
+        new.cat = self.cat
         if self.tensors:
             new.tensors = [t.clone().detach() for t in self.tensors]
         return new
@@ -140,7 +141,7 @@ class MPO:
             new.tensors = [tensor * other for tensor in new.tensors]
             return new
         elif isinstance(other, MPO):
-            if has_content(self.group) or has_content(other.group):
+            if has_content(self.cat) or has_content(other.cat):
                 raise NotImplementedError(
                     'Composing symmetry-adapted MPOs is not supported; merge the couplings of '
                     'the two Hamiltonians instead.')
@@ -239,10 +240,10 @@ class MPO:
         every other group walks the operator labels of the couplings.  An operator name of several
         letters is the product of those mapping entries on one site.
         '''
-        self.tensors = self._build_adapted() if has_content(self.group) else self._build_labels()
+        self.tensors = self._build_adapted() if has_content(self.cat) else self._build_labels()
 
     def _build_adapted(self) -> list[Tensor]:
-        group, phys_dim = self.group, self.physical_dim
+        group, phys_dim = self.cat, self.physical_dim
         total = group.trivial_sector if self.total is None else self.total
         phys = phys_leg(group, phys_dim, self.site_sector)
         raw = {name: matrix.to(dtype=self.dtype, device=self.device)
@@ -294,7 +295,7 @@ class MPO:
             if len(operators) != 2:
                 raise NotImplementedError(
                     f'The symmetry-adapted builder places two operators per term, not '
-                    f'{len(operators)}; build such a Hamiltonian with group=no_symmetry.')
+                    f'{len(operators)}; build such a Hamiltonian with cat=no_symmetry.')
             left_op, right_op = operators
             pair = torch.kron(raw[left_op], raw[right_op]).reshape(-1)
             pairs = []
@@ -438,7 +439,7 @@ class MPO:
         bond_dim = len(state_idx) + 2  # start (0) + end (bond_dim - 1)
 
         p = self.physical_dim
-        group = self.group
+        group = self.cat
         phys = phys_leg(group, p, self.site_sector)
         # the two edges of the chain are trivial, the bond carries the start and the end state
         bonds = [bond_leg(group, [(group.trivial_sector, dim)], 1)

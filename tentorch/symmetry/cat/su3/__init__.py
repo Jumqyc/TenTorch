@@ -74,3 +74,25 @@ class SU3Content(OperatorContent):
                       for sector in group.fusion_outcomes(site, group.dual_sector(site))}
         return {sector: self.normalize(group, sector, tensor)
                 for sector, tensor in components.items()}
+
+
+FUNDAMENTAL_SECTOR = (1, 0)
+
+
+def fundamental_operators(dtype: torch.dtype = torch.complex128,
+                          device: torch.device | None = None) -> dict[str, torch.Tensor]:
+    '''
+    The operators of the fundamental representation of SU(3): the eight Gell-Mann generators
+    ``'L1'`` to ``'L8'`` and the identity ``'I'``.
+
+    The permutation operator of two sites, the Hamiltonian of the ULS chain, is
+    :math:`P = \\frac{1}{3} + \\frac{1}{2} \\sum_a L_a L_a` in this table.
+    Args:
+        dtype, device: data type and device of the matrices.
+    Returns:
+        The operator names to their ``(3, 3)`` matrices.
+    '''
+    identity = torch.eye(3, dtype = dtype, device = device)
+    generators = {f'L{index + 1}': generator
+                  for index, generator in enumerate(gell_mann(dtype = dtype, device = device))}
+    return {**generators, 'I': identity}

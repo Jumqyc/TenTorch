@@ -57,8 +57,27 @@ after a kernel restart:
 | `Charged.ipynb` | a Hamiltonian with a non-trivial total charge |
 | `ULS.ipynb` | the SU(3) Uimin-Lai-Sutherland chain |
 
-The object that drives a calculation is `Broomstick`: it owns the state, the Hamiltonian and
-the sweep, and it is the only class a caller has to know.
+A calculation starts from a model and one function call:
+
+```python
+import tentorch
+from tentorch.models import heisenberg
+
+model = heisenberg(20, S=0.5)                      # 20 spin-1/2 sites, SU(2) symmetry
+result = tentorch.dmrg(model, max_bond_dim=64, num_sweeps=10)
+print(result.energy, result.state.bond_dim)
+```
+
+A `Model` is the physics only — the sites and the couplings; it holds no state and no numerical
+options. `dmrg` builds the state, sweeps it, and returns the energy, the state and the largest
+discarded weight of the run, so an observable is a call on `result.state` and a bond cap is an
+argument, not a property of the model. `tentorch.algorithms.exact.exact_energy` diagonalises the
+same model in its full Hilbert space, which is how the sweep is checked on short chains.
+
+A site comes from `tentorch.sites` — `spin(S)` and `fundamental_su3()` — and carries the operator
+table the couplings name. The model zoo lives in `tentorch/models` (Heisenberg, Ising, AKLT and
+the SU(3) Uimin-Lai-Sutherland chain), and the notebooks below write their own where the point is
+the Hamiltonian rather than the sweep.
 
 ## The layers
 
@@ -79,7 +98,11 @@ symmetry/cat   ->   symmetry/tree   ->   tensors   ->   linalg
 - `tentorch/linalg` — `svd`, `qr`, `rq` and `svdvals` on block-sparse tensors; the split that
   produces new bond sectors.
 - `tentorch/networks/mps.py`, `tentorch/networks/mpo.py` — the state and the Hamiltonian.
-- `tentorch/algorithms/dmrg.py` — the sweep driver.
+- `tentorch/sites.py`, `tentorch/model.py` — a site's operator table, and the physics of a chain:
+  its sites and its couplings. A `Model` turns itself into an `MPO` on first use.
+- `tentorch/models/` — the chains the examples and the benchmarks run on.
+- `tentorch/algorithms/dmrg.py` — the sweep driver (`DMRG`, `dmrg`), and
+  `tentorch/algorithms/exact.py` — exact diagonalisation, the reference it is checked against.
 
 ## Status and limits
 
@@ -101,8 +124,18 @@ reference. A build with `DENSEPATH=1` keeps a Python switch that forces it
 how it becomes a category, a worked SU(2) fusion example, the diagram algorithm, charge flow,
 and the anchors behind each section.
 
-`test/run_all.py` runs every `test/check_*.py`; each check also runs on its own. Note that
-`test/` is gitignored, so a fresh clone does not carry it.
+`tests/` holds the pytest suite: the sites' operator tables, and the sweep energy of every model
+against exact diagonalization. Run it with
+
+```shell
+.venv/bin/python -m pytest tests -q
+```
+
+`bench/bench_dmrg.py` times the sweep against the bond cap, one line per run:
+
+```shell
+.venv/bin/python bench/bench_dmrg.py --model heisenberg --L 20 --max-bond 16 32 64 --sweeps 5
+```
 
 ## License
 

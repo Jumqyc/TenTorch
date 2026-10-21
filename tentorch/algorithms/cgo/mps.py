@@ -4,11 +4,11 @@ import warnings
 import torch
 
 from tentorch.config import COMPLEX
-from tentorch import MPO, MPS, Broomstick
+from tentorch import DMRG, MPO, MPS
 from tentorch.tensors import Tensor, cached_einsum
 
 from tentorch.algorithms.cgo.sdp import extremal
-from tentorch.algorithms.cgo.ext_register import extends_Broomstick
+from tentorch.algorithms.cgo.ext_register import extends_DMRG
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +296,7 @@ def _solve_cgo_bounds(M_samples: list[torch.Tensor],
     return float(bounds[0]), float(bounds[1])
 
 
-def CGO_projections(self: Broomstick,
+def CGO_projections(self: DMRG,
                     l: int,
                     operators: dict[int, torch.Tensor],
                     num_sample: int = 200,
@@ -354,7 +354,7 @@ def CGO_projections(self: Broomstick,
     eye = torch.eye(self.physical_dim, dtype=self.dtype, device=self.device)
 
     # ── sample anti-Hermitian operators A_i supported on the interior L0 ──
-    l0 = _interior_sites(self.Hamiltonian, lend, rend)
+    l0 = _interior_sites(self.hamiltonian, lend, rend)
     if not l0:
         raise ValueError(
             f"The CGO patch [{lend}, {rend}) has no interior sites. "
@@ -363,7 +363,7 @@ def CGO_projections(self: Broomstick,
     A_samples = _sample_product_operators(
         l0, num_sample, self.physical_dim, self.device, seed
     )
-    H_L = _patch_hamiltonian(self.Hamiltonian, lend, rend)
+    H_L = _patch_hamiltonian(self.hamiltonian, lend, rend)
 
     # ── matrix elements of the patch operators in the boundary basis ──
     #
@@ -462,8 +462,8 @@ def CGO_projections(self: Broomstick,
     return M_samples, B, X, info
 
 
-@extends_Broomstick
-def CGO(self: Broomstick,
+@extends_DMRG
+def CGO(self: DMRG,
         l: int,
         operators: dict[int, torch.Tensor],
         num_sample: int = 200,

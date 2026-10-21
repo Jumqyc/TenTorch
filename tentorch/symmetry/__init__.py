@@ -6,7 +6,8 @@ Python face — operator content and invariant data — is in ``tentorch.symmetr
 fusion trees, their dense expansions and the block contractions over them are the C++
 ``tentorch/symmetry/tree`` layer.
 '''
-from tentorch.symmetry.cat.su3 import gell_mann
+from tentorch.symmetry.cat.su3 import (FUNDAMENTAL_SECTOR, fundamental_operators,
+                                       gell_mann)
 
 from tentorch._ext import (
     BraidingStyle,
