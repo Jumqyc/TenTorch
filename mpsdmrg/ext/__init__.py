@@ -86,13 +86,13 @@ def set_dense_path(enabled: bool) -> None:
     if not hasattr(_extension, 'set_dense_path'):
         raise NotImplementedError('this build has no dense-path switch; rebuild with DENSEPATH=1')
     _extension.set_dense_path(enabled)
+arrange = _extension.arrange
 fermion_parity = _extension.fermion_parity
 fibonacci = _extension.fibonacci
 inner = _extension.inner
 no_symmetry = _extension.no_symmetry
 norm = _extension.norm
 qr = _extension.qr
-arrange = _extension.arrange
 rq = _extension.rq
 su2_symmetry = _extension.su2_symmetry
 su3_symmetry = _extension.su3_symmetry

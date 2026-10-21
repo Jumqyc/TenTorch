@@ -1,7 +1,8 @@
 """The splittings of the block-sparse tensor of ``mpsdmrg``.
 
-Exposes ``svd``, ``qr``, ``rq``, ``svdvals``, ``norm``, ``inner``, ``trace``, ``lanczos``, ``absorb``
-and ``scale``; each acts on a ``Tensor`` of the tensor layer and returns the factors as ``Tensor``.
+Exposes ``svd``, ``qr``, ``rq``, ``svdvals``, ``norm``, ``inner``, ``arrange``, ``trace``, ``lanczos``,
+``absorb`` and ``scale``; each acts on a ``Tensor`` of the tensor layer and returns the factors as
+``Tensor``.
 """
 from mpsdmrg import ext as _engine
 from typing import Any, Callable, Sequence, cast
@@ -10,24 +11,11 @@ import string
 
 import torch
 
-from mpsdmrg.ext import Tensor, cached_einsum, inner, norm, qr, rq, svdvals, trace  # noqa: F401
+from mpsdmrg.ext import (  # noqa: F401
+    Tensor, arrange, cached_einsum, inner, norm, qr, rq, svdvals, trace)
 
 __all__ = ['absorb', 'arrange', 'inner', 'lanczos', 'norm', 'qr', 'rq', 'scale', 'svd', 'svdvals',
            'trace']
-
-
-def arrange(t: Tensor, keep: int, order: Sequence[int]) -> Tensor:
-    '''
-    Move the legs of a tensor to the sides and the order an equation wants them.
-
-    Args:
-        t: the tensor to rearrange.
-        keep: how many of the legs point out of the result; the rest point in.
-        order: the legs in their new order, as one-based leg positions of *t*.
-    Returns:
-        Tensor: the same tensor, with the legs on the requested sides in the requested order.
-    '''
-    return cast(Tensor, _engine.arrange(t, keep, list(order)))
 
 
 def svd(t: Tensor, left: Sequence[int], right: Sequence[int],
