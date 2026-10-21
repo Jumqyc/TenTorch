@@ -13,10 +13,10 @@ from typing import Any
 import opt_einsum
 import torch
 
-from tentorch.ext import _engine
-from tentorch.ext import Group, Tensor  # noqa: F401
-from tentorch.ext import bond_leg, capped_leg, fuse_legs, multiplet_leg, site_leg  # noqa: F401
-from tentorch.ext import cached_einsum as _engine_einsum
+from tentorch._ext import _engine
+from tentorch._ext import Group, Tensor  # noqa: F401
+from tentorch._ext import bond_leg, capped_leg, fuse_legs, multiplet_leg, site_leg  # noqa: F401
+from tentorch._ext import cached_einsum as _engine_einsum
 
 _PLANS: dict[tuple, list] = {}
 

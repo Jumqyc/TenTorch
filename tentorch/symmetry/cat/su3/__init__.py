@@ -9,7 +9,7 @@ from typing import Any
 
 import torch
 
-from tentorch.ext import Group, Sector
+from tentorch._ext import Group, Sector
 from tentorch.symmetry.cat.content import OperatorContent
 
 

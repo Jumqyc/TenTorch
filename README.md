@@ -63,23 +63,23 @@ the sweep, and it is the only class a caller has to know.
 ## The layers
 
 ```
-symmetry/cat   ->   symmetry/tree   ->   tensor   ->   linalg
- the category        legs and trees      blocks       splits
-                                                    |
-                                                    v
-                                          mps / mpo / broomstick
+symmetry/cat   ->   symmetry/tree   ->   tensors   ->   linalg
+ the category        legs and trees      blocks        splits
+                                                     |
+                                                     v
+                               networks/mps, networks/mpo, algorithms/dmrg
 ```
 
 - `tentorch/symmetry/cat` — the category: sectors, fusion outcomes, the associator, the braiding,
   the duality. Adding a symmetry means adding one subclass here.
 - `tentorch/symmetry/tree` — a `Leg` carries one sector (or several, with multiplicity); a
   `FusionTree` is an ordered coupling path, and it is what keys one dense block.
-- `tentorch/tensor` — a `Tensor` holds one dense block per charge key, and `cached_einsum`
+- `tentorch/tensors` — a `Tensor` holds one dense block per charge key, and `cached_einsum`
   contracts a whole network of them.
 - `tentorch/linalg` — `svd`, `qr`, `rq` and `svdvals` on block-sparse tensors; the split that
   produces new bond sectors.
-- `tentorch/mps.py`, `tentorch/mpo.py`, `tentorch/broomstick.py` — the state, the Hamiltonian and
-  the sweep driver.
+- `tentorch/networks/mps.py`, `tentorch/networks/mpo.py` — the state and the Hamiltonian.
+- `tentorch/algorithms/dmrg.py` — the sweep driver.
 
 ## Status and limits
 
@@ -93,7 +93,7 @@ Clebsch-Gordan tensor still works wherever the route applies.
 
 The dense route is also the faster of the two at present, by roughly 12 times, so it stays the
 reference. A build with `DENSEPATH=1` keeps a Python switch that forces it
-(`tentorch.ext.set_dense_path`), which is how the two routes are compared on the same operands.
+(`tentorch._ext.set_dense_path`), which is how the two routes are compared on the same operands.
 
 ## Documentation and tests
 

@@ -3,8 +3,8 @@ from math import sqrt
 import torch
 
 from tentorch.config import COMPLEX, CUDA
-from tentorch.ext import FusionCategory, su2_symmetry
-from tentorch.tensor import Tensor
+from tentorch._ext import FusionCategory, su2_symmetry
+from tentorch.tensors import Tensor
 
 
 class SpinOperator:

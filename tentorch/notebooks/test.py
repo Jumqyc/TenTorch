@@ -1,7 +1,7 @@
 import sys
 
 from tentorch import Broomstick, MPO, MPS, SpinOperator
-from tentorch.tensor import Tensor
+from tentorch.tensors import Tensor
 import numpy as np
 import torch
 

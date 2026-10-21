@@ -15,6 +15,6 @@ include = ["FreeFermion*", "CGO*", "tentorch*"]
 exclude = ["FreeFermion.cuda.build*", "CGO.cuda.build*", "*.notebooks*"]
 
 [tool.setuptools.package-data]
+tentorch = ["**/*.cpp", "**/*.h", "**/*.pyi"]
 "FreeFermion.cuda" = ["*.cu"]
 "CGO.cuda" = ["*.cu"]
-"tentorch.symmetry.data" = ["*.cpp"]

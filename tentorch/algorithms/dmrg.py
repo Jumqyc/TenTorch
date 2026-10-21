@@ -9,11 +9,11 @@ from numpy.typing import NDArray
 from tentorch.config import COMPLEX, CUDA
 from tentorch import linalg
 from tentorch.symmetry.cat import Group, no_symmetry, has_content
-from tentorch.tensor import Tensor, bond_leg, cached_einsum, multiplet_leg
-from tentorch.ext import inner
+from tentorch.tensors import Tensor, bond_leg, cached_einsum, multiplet_leg
+from tentorch._ext import inner
 
-from tentorch.mps import MPS
-from tentorch.mpo import MPO
+from tentorch.networks.mps import MPS
+from tentorch.networks.mpo import MPO
 
 class Broomstick:
     '''

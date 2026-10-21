@@ -7,7 +7,7 @@ so a further group adds a folder instead of a branch.
 """
 from __future__ import annotations
 
-from tentorch.ext import (  # noqa: F401
+from tentorch._ext import (  # noqa: F401
     BraidingStyle, FusionStyle, Group, Sector, ZNSymmetry,
     fermion_parity, no_symmetry, su2_symmetry, su3_symmetry,
     u1_symmetry, z2_symmetry)

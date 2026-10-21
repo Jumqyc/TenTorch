@@ -5,7 +5,7 @@ import torch
 
 from tentorch.config import COMPLEX
 from tentorch import MPO, MPS, Broomstick
-from tentorch.tensor import Tensor, cached_einsum
+from tentorch.tensors import Tensor, cached_einsum
 
 from CGO.sdp import extremal
 from CGO.ext_register import extends_Broomstick

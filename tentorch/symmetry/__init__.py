@@ -8,7 +8,7 @@ fusion trees, their dense expansions and the block contractions over them are th
 '''
 from tentorch.symmetry.cat.su3 import gell_mann
 
-from tentorch.ext import (
+from tentorch._ext import (
     BraidingStyle,
     FusionCategory,
     FusionStyle,

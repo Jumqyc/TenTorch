@@ -19,8 +19,8 @@ SOURCES = (os.path.join(HERE, 'bindings.cpp'),
            os.path.join(HERE, '..', 'symmetry', 'cat', 'su3', 'su3.cpp'),
            os.path.join(HERE, '..', 'symmetry', 'cat', 'symbol.cpp'),
            os.path.join(HERE, '..', 'symmetry', 'tree', 'tree.cpp'),
-           os.path.join(HERE, '..', 'tensor', 'diagram.cpp'),
-           os.path.join(HERE, '..', 'tensor', 'tensor.cpp'),
+           os.path.join(HERE, '..', 'tensors', 'diagram.cpp'),
+           os.path.join(HERE, '..', 'tensors', 'tensor.cpp'),
            os.path.join(HERE, '..', 'linalg', 'linalg.cpp'))
 HEADERS = tuple(sorted(glob.glob(os.path.join(HERE, '..', '**', '*.h'), recursive = True)))
 PCH = os.path.join(HERE, 'pch.h')
@@ -111,7 +111,7 @@ def build_extension(verbose: bool, jobs: int) -> Any:
     '''
     Compile the stale units, link the engine and load it.
 
-    The one build path: ``main`` and the import of ``tentorch.ext`` both come through here, so
+    The one build path: ``main`` and the import of ``tentorch._ext`` both come through here, so
     the lock handling, the precompiled header and the job cap cannot drift apart.
 
     Args:

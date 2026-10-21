@@ -1,7 +1,7 @@
 // The factorizations of the engine: singular value, rank revealing and their spectra.
 #include "linalg.h"
 
-#include "../tensor/diagram.h"
+#include "../tensors/diagram.h"
 
 #include <pybind11/complex.h>
 #include <pybind11/stl.h>

@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from tentorch.config import COMPLEX, CUDA
-from tentorch.ext.build import (BUILD_DIR, GIB_PER_JOB, HEADERS, LIBRARY, SOURCES,
+from tentorch._ext.build import (BUILD_DIR, GIB_PER_JOB, HEADERS, LIBRARY, SOURCES,
                                 available_gib, build_extension)
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -102,7 +102,7 @@ trace = _extension.trace
 u1_symmetry = _extension.u1_symmetry
 z2_symmetry = _extension.z2_symmetry
 
-# ``tentorch.tensor`` refers to ``_expr_cache`` by name to drop the contraction plans; the engine
+# ``tentorch.tensors`` refers to ``_expr_cache`` by name to drop the contraction plans; the engine
 # keeps its plans inside the extension, so the name drops every cache the engine keeps.
 _expr_cache = SimpleNamespace(clear = _extension.clear_caches)
 

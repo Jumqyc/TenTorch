@@ -7,10 +7,10 @@ import torch
 
 from tentorch.config import COMPLEX, CUDA
 from tentorch import linalg
-from tentorch.mpo import MPO
+from tentorch.networks.mpo import MPO
 from tentorch.symmetry.cat import Group, has_content, no_symmetry
-from tentorch.tensor import Tensor, bond_leg, cached_einsum, capped_leg, fuse_legs, multiplet_leg
-from tentorch.tensor import phys_leg
+from tentorch.tensors import Tensor, bond_leg, cached_einsum, capped_leg, fuse_legs, multiplet_leg
+from tentorch.tensors import phys_leg
 
 
 def _bond_multiplets(tensors: list[Tensor]) -> list[int]:

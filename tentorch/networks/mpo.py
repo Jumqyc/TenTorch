@@ -7,7 +7,7 @@ from numpy.typing import NDArray
 from tentorch.config import COMPLEX, CUDA
 from tentorch.symmetry.cat import Group, Sector, content, has_content, no_symmetry
 from tentorch.operators import SpinOperator
-from tentorch.tensor import Tensor, bond_leg, cached_einsum, multiplet_leg, phys_leg
+from tentorch.tensors import Tensor, bond_leg, cached_einsum, multiplet_leg, phys_leg
 
 class MPO:
     '''
@@ -55,7 +55,7 @@ class MPO:
             }
         self.mapping = dict(mapping)
         if not all(isinstance(matrix, Tensor) for matrix in self.mapping.values()):
-            raise TypeError('The mapping of an MPO holds tentorch.tensor.Tensor matrices.')
+            raise TypeError('The mapping of an MPO holds tentorch.tensors.Tensor matrices.')
 
     @property
     def _buffers(self) -> dict[str, torch.Tensor]:
