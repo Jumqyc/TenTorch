@@ -128,16 +128,12 @@ def build_extension(verbose: bool, jobs: int) -> Any:
     clear_stale_lock(verbose)
     build_pch(verbose)
 
-    # ``DENSEPATH=0`` compiles the dense route out, so a contraction the categorical route
-    # declines raises instead of falling back; the default build keeps it as the reference.
-    dense = os.environ.get('DENSEPATH', '1') != '0'
-
     from torch.utils.cpp_extension import load
 
     module: Any = load(
         name = 'symmetry_ext',
         sources = list(SOURCES),
-        extra_cflags = ['-O3', '-include', PCH] + (['-DDENSEPATH'] if dense else []),
+        extra_cflags = ['-O3', '-include', PCH],
         build_directory = BUILD_DIR,
         verbose = verbose)
     # the loader treats this script as an input, so a successful build has to stamp the library

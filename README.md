@@ -106,17 +106,26 @@ symmetry/cat   ->   symmetry/tree   ->   tensors   ->   linalg
 
 ## Status and limits
 
-A contraction has two routes for the weight of an output tree: a categorical one, which needs
-nothing but associators and braidings, and a dense one, which builds the trees densely and
-contracts them. The categorical route is exact on the layouts the library issues today — the 22
-layouts of one L=6 SU(2) Heisenberg sweep reproduce the dense route to 8e-16. It declines the
-shapes it does not model — a multiplicity pairing, a leg that is both contracted and kept, a leg
-count the chain cannot express — and those fall back to the dense route, so a category without a
-Clebsch-Gordan tensor still works wherever the route applies.
+Every contraction is block-sparse: a block is a dense array keyed by a fusion tree, and a
+contraction multiplies the matching blocks and weighs each output tree by the recoupling factors
+of the category. There is no dense fallback — a layout the engine cannot express raises rather
+than silently materialising a dense tensor.
 
-The dense route is also the faster of the two at present, by roughly 12 times, so it stays the
-reference. A build with `DENSEPATH=1` keeps a Python switch that forces it
-(`tentorch._ext.set_dense_path`), which is how the two routes are compared on the same operands.
+`tests/` checks the sweep against exact diagonalisation, which is the reference: the Heisenberg
+chain at L=4 and L=6, with and without SU(2); the transverse-field Ising chain at L=6; and the
+AKLT chain at L=6 against its analytic energy. Every one of them agrees to better than 1e-10.
+
+Known limits:
+
+- The SU(3) route does not build a symmetric state yet. `MPS.canonicalize` raises `IndexError:
+  the tree does not belong to this block` on L=6, and the left-grown bond of a chain whose length
+  is not a multiple of three cannot close to the trivial sector. The SU(3) operators and the exact
+  energy of the ULS chain are available; its sweep is not.
+- `aklt()` builds without a multiplet-carrying category: its biquadratic term is a product of two
+  site operators, which the adapted MPO route cannot place on invariant channels yet, so it
+  raises instead of returning a wrong energy.
+- A symmetry-free chain is the slow path, because its bond cap grows like $2^i$ while SU(2) caps
+  the number of multiplets.
 
 ## Documentation and tests
 

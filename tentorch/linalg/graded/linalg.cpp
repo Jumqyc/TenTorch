@@ -282,14 +282,6 @@ void bind_linalg(py::module_& m) {
   });
   m.def("default_device", [] { return default_device(); });
   m.def("default_scalar", [] { return default_scalar(); });
-  // The engine has one route: every contraction is the block multiplication of the tree basis.
-  m.def("dense_path", [] { return false; });
-  m.def("set_dense_path", [](bool enabled) {
-    if (enabled) {
-      throw std::invalid_argument("set_dense_path: the engine has no dense route to force");
-    }
-  }, py::arg("enabled") = true);
-
   m.def("arrange", [](const engine::Tensor& tensor, int64_t keep,
                       const std::vector<int64_t>& order) {
     const engine::TensorMap& map = tensor.map();
