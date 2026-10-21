@@ -84,11 +84,18 @@ class Broomstick:
         self.device = device or (mps.device if mps is not None else
                                  (mpo.device if mpo is not None else CUDA))
         self.state: MPS | None = mps
-        self.group = group
+        # the objects the engine drives carry their symmetry; driving a state or a Hamiltonian
+        # under another group silently changes the pairing the sweep contracts with
+        if mps is not None and mpo is not None and mps.group.name != mpo.group.name:
+            raise ValueError(f'The state is {mps.group.name} but the Hamiltonian is {mpo.group.name}.')
+        carried = mps if mps is not None else mpo
+        self.group: Group = group if carried is None else carried.group
         self.site_sector = None if site_sector is None else tuple(int(entry) for entry in site_sector)
+        if mpo is not None:
+            self.site_sector = mpo.site_sector
         self.Hamiltonian = mpo if mpo is not None else MPO(
             self.L, self.physical_dim, mapping=mapping, dtype=self.dtype, device=self.device,
-            group=group, site_sector=self.site_sector)
+            group=self.group, site_sector=self.site_sector)
         self.max_bond_dim = max_bond_dim
         self.svd_tol = svd_tol
 
