@@ -5,14 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tentorch"
 version = "0.1.0"
-description = "free-fermion, Gaussian tensor network and CGO routines of this repository"
+description = "Block-sparse tensor networks: MPS, MPO, the DMRG sweep, the symmetry behind them, and the Gaussian fermion states built on the same pieces"
 requires-python = ">=3.12"
 
 [tool.setuptools.packages.find]
 where = ["."]
 namespaces = true
 include = ["tentorch*"]
-exclude = ["tentorch.*.cuda.build*", "tentorch.*.notebooks*"]
+exclude = ["tentorch.*.cuda.build*"]
 
 [tool.setuptools.package-data]
 tentorch = ["**/*.cpp", "**/*.h", "**/*.pyi"]
