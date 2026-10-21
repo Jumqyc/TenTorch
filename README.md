@@ -39,7 +39,7 @@ installing anything.
 The engine is a C++ extension. It compiles itself on first import, or ahead of time with
 
 ```shell
-.venv/bin/python tentorch/ext/build.py --jobs 1
+.venv/bin/python tentorch/_ext/build.py --jobs 1
 ```
 
 One compile job needs about 2.5 GiB of host memory and the build refuses to start below that
@@ -47,7 +47,7 @@ rather than swap the machine to death; `--jobs` above one multiplies the require
 
 ## Getting started
 
-The notebooks in `tentorch/notebooks/` are the worked examples, and each one runs top to bottom
+The notebooks in `examples/` are the worked examples, and each one runs top to bottom
 after a kernel restart:
 
 | notebook | what it shows |

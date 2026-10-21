@@ -4,7 +4,7 @@ from torch import Tensor
 from dataclasses import dataclass
 
 from tentorch.config import CUDA,REAL
-from FreeFermion.linalg import RandPureCov, symplectic_form
+from tentorch.linalg.freefermion.covariance import RandPureCov, symplectic_form
 
 from typing import Optional
 

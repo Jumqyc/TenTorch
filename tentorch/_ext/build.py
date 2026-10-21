@@ -21,7 +21,7 @@ SOURCES = (os.path.join(HERE, 'bindings.cpp'),
            os.path.join(HERE, '..', 'symmetry', 'tree', 'tree.cpp'),
            os.path.join(HERE, '..', 'tensors', 'diagram.cpp'),
            os.path.join(HERE, '..', 'tensors', 'tensor.cpp'),
-           os.path.join(HERE, '..', 'linalg', 'linalg.cpp'))
+           os.path.join(HERE, '..', 'linalg', 'graded', 'linalg.cpp'))
 HEADERS = tuple(sorted(glob.glob(os.path.join(HERE, '..', '**', '*.h'), recursive = True)))
 PCH = os.path.join(HERE, 'pch.h')
 PCH_OUTPUT = PCH + '.gch'

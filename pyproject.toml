@@ -11,10 +11,10 @@ requires-python = ">=3.12"
 [tool.setuptools.packages.find]
 where = ["."]
 namespaces = true
-include = ["FreeFermion*", "CGO*", "tentorch*"]
-exclude = ["FreeFermion.cuda.build*", "CGO.cuda.build*", "*.notebooks*"]
+include = ["tentorch*"]
+exclude = ["tentorch.*.cuda.build*", "tentorch.*.notebooks*"]
 
 [tool.setuptools.package-data]
 tentorch = ["**/*.cpp", "**/*.h", "**/*.pyi"]
-"FreeFermion.cuda" = ["*.cu"]
-"CGO.cuda" = ["*.cu"]
+"tentorch.linalg.freefermion.cuda" = ["*.cu"]
+"tentorch.algorithms.cgo.cuda" = ["*.cu"]

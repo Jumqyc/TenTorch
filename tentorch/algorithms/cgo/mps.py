@@ -7,8 +7,8 @@ from tentorch.config import COMPLEX
 from tentorch import MPO, MPS, Broomstick
 from tentorch.tensors import Tensor, cached_einsum
 
-from CGO.sdp import extremal
-from CGO.ext_register import extends_Broomstick
+from tentorch.algorithms.cgo.sdp import extremal
+from tentorch.algorithms.cgo.ext_register import extends_Broomstick
 
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@
 
 #include "../symmetry/cat/symbol.h"
 #include "diagram.h"
-#include "../linalg/linalg.h"
+#include "../linalg/graded/linalg.h"
 
 #include <pybind11/complex.h>
 #include <pybind11/stl.h>

@@ -340,7 +340,7 @@ class Geometry:
         Raises:
             ValueError: if the edge and bond_dim counts disagree.
         '''
-        from FreeFermion.GfPEPS import Bond, Graph
+        from tentorch.networks.gfpeps import Bond, Graph
 
         if len(edges) != len(bond_dims):
             raise ValueError(f'{len(edges)} edges but {len(bond_dims)} bond dimensions')

@@ -3,7 +3,7 @@ The C++ symmetry engine of ``tentorch``.
 
 Exposes the charge groups with their legs and fusion trees, the block-sparse ``Tensor`` with
 ``cached_einsum``, and the ``svd``/``qr``/``rq``/``svdvals``/``norm``/``inner``/``trace``
-splittings.  The engine is compiled by ``tentorch/ext/build.py`` into
+splittings.  The engine is compiled by ``tentorch/_ext/build.py`` into
 ``tentorch/ext/build/symmetry_ext.so``; an import recompiles it when the shared object
 is missing or older than one of the sources, the headers or the build script.
 '''
@@ -43,7 +43,7 @@ else:
             f'{free:.1f} GiB of host memory is available but compiling the engine needs '
             f'{GIB_PER_JOB:.1f} GiB.  {stale} is newer than the built engine, so this import '
             f'has to recompile it: free some memory, then build with '
-            f'`PYTHONPATH=. .venv/bin/python -u tentorch/ext/build.py --jobs 1`.')
+            f'`PYTHONPATH=. .venv/bin/python -u tentorch/_ext/build.py --jobs 1`.')
     _extension = build_extension(verbose = False, jobs = 1)
 
 # the engine allocates a fresh block buffer with the project's device and dtype

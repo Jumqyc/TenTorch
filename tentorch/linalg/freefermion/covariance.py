@@ -2,7 +2,7 @@ import math
 import torch
 from torch import Tensor
 from tentorch.config import CUDA, COMPLEX
-from FreeFermion.cuda.fermion import pfaffian
+from tentorch.linalg.freefermion.cuda.fermion import pfaffian
 
 def symplectic_form(num_modes: int,
                       dtype: torch.dtype = torch.float64,

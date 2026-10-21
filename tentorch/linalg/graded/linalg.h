@@ -4,7 +4,7 @@
 #include <optional>
 #include <utility>
 
-#include "../tensors/tensor.h"
+#include "../../tensors/tensor.h"
 
 #ifndef MPSDMRG_ENGINE_SPLIT_H
 #define MPSDMRG_ENGINE_SPLIT_H

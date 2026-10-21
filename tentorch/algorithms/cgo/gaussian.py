@@ -6,9 +6,9 @@ import itertools
 import torch
 from torch import Tensor
 from tentorch.config import CUDA
-from CGO.cuda.project import project
-from FreeFermion.linalg import hamiltonian, wick, williamson
-from CGO.sdp import extremal
+from tentorch.algorithms.cgo.cuda.project import project
+from tentorch.linalg.freefermion.covariance import hamiltonian, wick, williamson
+from tentorch.algorithms.cgo.sdp import extremal
 
 type Term = tuple[complex, list[int]] # one (coefficient, labels) term of a Majorana string
 

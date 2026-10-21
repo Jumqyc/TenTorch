@@ -9,7 +9,7 @@
 #include "../symmetry/cat/fibonacci/fibonacci.h"
 #include "../symmetry/cat/su2/su2.h"
 #include "../symmetry/cat/su3/su3.h"
-#include "../linalg/linalg.h"
+#include "../linalg/graded/linalg.h"
 #include "../tensors/tensor.h"
 #include "../tensors/diagram.h"
 #include "../symmetry/cat/symbol.h"

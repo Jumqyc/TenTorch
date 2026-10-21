@@ -1,9 +1,9 @@
-"""Python side of the CUDA extension of ``CGO/gaussian.py``.  The kernels live in
-``CGO/cuda/project.cu`` and are built just in time with
+"""Python side of the CUDA extension of ``tentorch/algorithms/cgo/gaussian.py``.  The kernels live in
+``tentorch/algorithms/cgo/cuda/project.cu`` and are built just in time with
 ``torch.utils.cpp_extension.load``; the compiled module is cached in
-``CGO/cuda/build``, so only the first import pays for the compilation.  The first
+``tentorch/algorithms/cgo/cuda/build``, so only the first import pays for the compilation.  The first
 build needs ninja (``python -m pip install ninja``); later imports load the cached
-``CGO/cuda/build/project_ext.so`` directly.
+``tentorch/algorithms/cgo/cuda/build/project_ext.so`` directly.
 """
 import importlib.util
 import os
@@ -43,7 +43,7 @@ def project(rotation: Tensor,
             *terms: tuple[complex, list[int]]) -> Tensor:
     '''
     Projected Majorana strings on the mixed register of a patch, P_V gamma_A P_V
-    (CGO/cuda/project.cu): every label rotates to the canonical basis of the patch, the
+    (tentorch/algorithms/cgo/cuda/project.cu): every label rotates to the canonical basis of the patch, the
     pure modes contract in their ground state by Wick's theorem, and the mixed Majoranas
     stay an operator on their register.
     Args:

@@ -1,9 +1,9 @@
 """Python side of the CUDA extension of the free-fermion contraction helpers of
-``FreeFermion/linalg.py``.  The kernels live in ``FreeFermion/cuda/fermion.cu``
+``tentorch/linalg/freefermion/covariance.py``.  The kernels live in ``tentorch/linalg/freefermion/cuda/fermion.cu``
 and are built just in time with ``torch.utils.cpp_extension.load``; the compiled
-module is cached in ``FreeFermion/cuda/build``, so only the first import pays for
+module is cached in ``tentorch/linalg/freefermion/cuda/build``, so only the first import pays for
 the compilation.  The first build needs ninja (``python -m pip install ninja``);
-later imports load the cached ``FreeFermion/cuda/build/fermion_ext.so`` directly.
+later imports load the cached ``tentorch/linalg/freefermion/cuda/build/fermion_ext.so`` directly.
 """
 import importlib.util
 import os
@@ -39,7 +39,7 @@ else:
 
 def operator_vectors(coeff: Tensor, codes: Tensor) -> Tensor:
     '''
-    Batched mode-basis vectors of a list of operators (FreeFermion/cuda/fermion.cu):
+    Batched mode-basis vectors of a list of operators (tentorch/linalg/freefermion/cuda/fermion.cu):
     kind 0 gives the unit vector of d_k, kind 1 the unit vector of d_k^dag and
     kind 2 the inverse expansion of the physical Majorana gamma_mu.
     Args:
@@ -56,7 +56,7 @@ def operator_vectors(coeff: Tensor, codes: Tensor) -> Tensor:
 
 def vacuum_contraction(vectors: Tensor, num_modes: int) -> Tensor:
     '''
-    Batched Wick contraction matrices K_ij = <0|A_i A_j|0> (FreeFermion/cuda/fermion.cu):
+    Batched Wick contraction matrices K_ij = <0|A_i A_j|0> (tentorch/linalg/freefermion/cuda/fermion.cu):
     the sum of the first half of a_i with the second half of a_j, upper triangle
     kept and antisymmetrised.
     Args:
@@ -71,7 +71,7 @@ def vacuum_contraction(vectors: Tensor, num_modes: int) -> Tensor:
 def pfaffian(matrices: Tensor) -> Tensor:
     '''
     Batched Pfaffian by skew-symmetric elimination with two-by-two pivots
-    (FreeFermion/cuda/fermion.cu), one block per matrix; a matrix without a pivot candidate
+    (tentorch/linalg/freefermion/cuda/fermion.cu), one block per matrix; a matrix without a pivot candidate
     gives 0, an odd size gives 0 and size 0 gives 1.
     Args:
         matrices: real or complex antisymmetric matrices, shape (..., m, m) with at
