@@ -234,18 +234,30 @@ class MPS:
         '''
         Return the squared norm <self|self>.
         Args:
-            mode (str): 'env' reads the centre tensor, which is the squared norm while the state is
-                        canonical and contracts the whole state otherwise; 'direct' always contracts.
+            mode (str): 'env' walks the transfer matrix of every site, which is the squared norm of
+                        the state however it is gauged; 'direct' contracts the dense state instead.
         Returns:
             complex: the squared norm of the state.
         Raises:
             ValueError: If the mode is neither 'direct' nor 'env'.
         '''
-        if mode == 'direct' or not self._canonical:
+        if mode == 'direct':
             return self._full_dir_contract({})
-        if mode == 'env':
-            return cached_einsum('abc,abc->', self.tensors[self.center].conj(), self.tensors[self.center]).item()
-        raise ValueError(f"A norm is computed in mode 'direct' or 'env', not {mode!r}.")
+        if mode != 'env':
+            raise ValueError(f"A norm is computed in mode 'direct' or 'env', not {mode!r}.")
+        # every block entry multiplies a tree vector that spans a whole fibre of the dense space,
+        # so the norm is the transfer matrix over the sites, not the sum of the block entries
+        trivial = multiplet_leg(self.group, self.group.trivial_sector)
+        env = Tensor.ones(1, 1, legs = (trivial, trivial.conj()),
+                          qtotal = self.group.trivial_sector,
+                          dtype = self.dtype, device = self.device)
+        for tensor in self.tensors:
+            # the walk pairs every site with its conjugate, and a graded contraction glues a leg to
+            # its dual, so both the ket and its conjugate are turned to the same side first
+            ket = linalg.arrange(tensor, 0, [1, 2, 3])
+            env = cached_einsum('ab,ajc->bjc', env, ket)
+            env = cached_einsum('bjc,bjd->cd', env, linalg.arrange(tensor.conj(), 0, [1, 2, 3]))
+        return env.blocks[0].reshape(()).item()
 
     def _apply_gate(self, gate: torch.Tensor, targets: tuple[int, int],
                     max_bond_dim: int | None, tol: float) -> MPS:
@@ -360,7 +372,7 @@ class MPS:
             # the left group (the new bond and the physical leg) becomes this site's tensor, the
             # right group (the two virtual legs) becomes the carry into the next site
             tensor, singular, rest = linalg.svd(merged, (0, 1), (2, 3), max_bond=max_bond_dim,
-                                                tol=tol, direction='right')
+                                                tol=tol)
             tensors.append(tensor)
             carry = linalg.absorb(rest, singular)
         return MPS._from_tensors(tensors, self.group, self.dtype, self.device)
@@ -385,7 +397,10 @@ class MPS:
         Returns:
             complex: the expectation value, exact up to the floating point error.
         '''
-        tensors = [tensor.blocks[0] for tensor in self.tensors]
+        # one block holds the whole array of a trivial group; the sites are taken on the same
+        # side so that its shape is the legs in order, whatever side the split left them on
+        tensors = [tensor.blocks[0].reshape(*(leg.dim for leg in tensor.legs))
+                   for tensor in self.tensors]
         environment = torch.ones(1, 1, dtype=self.dtype, device=self.device)
         for site in range(self.L):
             operator = operators.get(site)

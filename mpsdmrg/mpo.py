@@ -331,50 +331,79 @@ class MPO:
             else:
                 left, right = bond, bond.conj()
             tensor = Tensor.zeros(left.dim, right.dim, phys_dim, phys_dim,
-                                  legs=(left, right, phys, phys.conj()), qtotal=group.trivial_sector,
+                                  legs=(left, right, phys, phys.conj()), codomain=2,
+                                  qtotal=group.trivial_sector,
                                   dtype=self.dtype, device=self.device)
-            for block, q in zip(tensor.blocks, tensor.qdata):
-                left_block, right_block = cast(int, q[0]), cast(int, q[1])
-                if left_block == 0 and right_block == 0:
-                    # the rail carries the normalization of the site's physical multiplet
-                    rail = np.sqrt(phys_dim)
-                    if site == self.L - 1:
-                        block[0, 0, 0, 0] = cast(Any, singles.get(site, 0.0))
-                        block[1, 0, 0, 0] = rail
-                    elif site == 0:
-                        block[0, 0, 0, 0] = cast(Any, rail + singles.get(site, 0.0))
-                    else:
-                        block[0, 0, 0, 0] = cast(Any, rail + singles.get(site, 0.0))
-                        block[1, 1, 0, 0] = rail
-                # a trivial component is placed in this same block, after the two rail slots
-                left_sector = tuple(left.sector(left_block, True))
-                right_sector = tuple(right.sector(right_block, True))
-                for first, last, pairs, base_of in placed:
-                    if not first <= site <= last:
-                        continue
-                    span = last - first
-                    for sector, coeff, left_value, right_value in pairs:
-                        # the rails hold the first two slots of the trivial block, the components follow
-                        base = (2 if sector == group.trivial_sector else 0) + base_of[sector]
-                        # the tree carries one Clebsch-Gordan vertex per placement; each vertex is
-                        # normalized to the dimension of the sector it couples to, the bond's and the site's
-                        if site == first and left_sector == group.trivial_sector and right_sector == sector:
-                            block[0, base + max(span - 1, 0), 0, 0] = np.sqrt(coeff) * left_value
-                        if site == last and left_sector == sector and right_sector == group.trivial_sector:
-                            end = 1 if site != self.L - 1 else 0
-                            # the closing placement carries the conjugate component, whose phase is
-                            # the Frobenius-Schur sign of the sector
-                            block[base, end, 0, 0] = (np.sqrt(coeff) * right_value
-                                                      * content(group).placement_phase(group, sector))
-                        elif (first < site < last and left_sector == sector
-                              and right_sector == sector
-                              and (len(q) <= 4 or q[4] == group.trivial_sector)):
-                            # only the path that pairs the two bond legs through the trivial
-                            # sector carries the operator across the site; the other fusion
-                            # paths would add the adjoint of the site to the operator
-                            remaining = last - site
-                            block[base + remaining, base + remaining - 1, 0, 0] = float(
-                                np.sqrt(group.quantum_dim(sector) * phys_dim))
+            blocks = {tuple(charge): block for charge, block in zip(tensor.qdata, tensor.blocks)}
+
+            def place(charge: tuple, left_block: int, right_block: int, members: tuple,
+                      value: Any) -> None:
+                """Write one amplitude at the chosen blocks, through the tree layout of the engine.
+
+                Args:
+                  charge: the block the entry belongs to, a sector or a tuple of sectors.
+                  left_block, right_block: the block each bond leg carries.
+                  members: the two members inside the bond blocks, in the order (left, right).
+                  value: the amplitude.
+                """
+                row, column = tensor.slot(tuple(charge), [left_block, right_block, 0, 0],
+                                          [members[0], members[1], 0, 0])
+                blocks[tuple(charge)][row, column] = value
+
+            # A rail carries the bond state across a site; the operator it stands for is the
+            # identity, and the bond legs of a rail pair through the trivial sector. A term opens
+            # with its sector on the right bond and closes with the same sector on the left one.
+            trivial = group.trivial_sector
+            rail = np.sqrt(phys_dim)
+            sectors_of = {tuple(leg.sector(at, True)): at
+                          for leg in (left, right) for at in range(leg.nblocks)}
+
+            def bond_slot(sector: tuple) -> int:
+                """The block a bond leg carries a sector in.
+
+                Args:
+                  sector: the sector, as a tuple.
+                Returns:
+                  The index of the block that holds the sector.
+                """
+                return sectors_of[tuple(sector)]
+
+            # the two rail slots of the trivial block
+            place(trivial, 0, 0, (0, 0),
+                  (rail if site != self.L - 1 else 0.0) + singles.get(site, 0.0))
+            if site == self.L - 1:
+                place(trivial, 0, 0, (1, 0), rail)
+            elif site > 0:
+                place(trivial, 0, 0, (1, 1), rail)
+            for first, last, pairs, base_of in placed:
+                if not first <= site <= last:
+                    continue
+                span = last - first
+                for sector, coeff, left_value, right_value in pairs:
+                    # the rails hold the first two slots of the trivial block, the components follow
+                    base = (2 if sector == trivial else 0) + base_of[sector]
+                    block = bond_slot(sector)
+                    # each placement carries the square root of the amplitude, so the two of them
+                    # together put the amplitude of the term on the bond
+                    if site == first:
+                        place(sector, 0, block, (0, base + max(span - 1, 0)),
+                              np.sqrt(coeff) * left_value / np.sqrt(group.quantum_dim(sector)))
+                    if site == last:
+                        end = 1 if site != self.L - 1 else 0
+                        # the closing placement carries the conjugate component, whose phase is the
+                        # Frobenius-Schur sign of the sector; the tree of the closing vertex stands
+                        # on the other side of the cut, which is the minus that makes the term
+                        # contract the operator with itself rather than with its adjoint
+                        place(sector, block, 0, (base, end),
+                              np.sqrt(coeff) * right_value / np.sqrt(group.quantum_dim(sector)))
+                    elif first < site < last:
+                        # only the path that pairs the two bond legs through the trivial sector
+                        # carries the operator across the site; the other fusion paths would add
+                        # the adjoint of the site to the operator
+                        remaining = last - site
+                        place(trivial, block, block, (base + remaining, base + remaining - 1),
+                              float(np.sqrt(phys_dim)))
+
             tensors.append(tensor)
         return tensors
 

@@ -44,13 +44,16 @@ struct Split {
  *   right: the legs of the second factor, in order; 1-based indices into the leg list.
  *   max_bond: the largest number of singular values to keep; all of them when unset.
  *   tol: singular values at or below this are dropped.
+ *   absorb: 0 leaves the values out of the factors, 1 multiplies the first factor's bond leg by
+ *     them, 2 multiplies the second factor's bond leg.
  * Returns:
- *   Split: the two factors and the values, which the factors do not carry.
+ *   Split: the two factors and the values; a factor keeps the sides its legs had in the input.
  * Raises:
  *   std::invalid_argument: if the two groups do not partition the legs of the tensor.
  */
 Split svd(const TensorMap& tensor, const std::vector<int64_t>& left,
-          const std::vector<int64_t>& right, std::optional<int64_t> max_bond, double tol);
+          const std::vector<int64_t>& right, std::optional<int64_t> max_bond, double tol,
+          int64_t absorb = 0);
 
 /**
  * QR decomposition of a tensor over two leg groups.

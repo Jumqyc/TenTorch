@@ -1,10 +1,10 @@
 """The splittings of the block-sparse tensor of ``mpsdmrg``.
 
-Exposes ``svd``, ``qr``, ``rq``, ``svdvals``, ``norm``, ``inner``, ``trace``, ``absorb`` and
-``scale``; each acts on a ``Tensor`` of the tensor layer and returns the factors as ``Tensor``.
+Exposes ``svd``, ``qr``, ``rq``, ``svdvals``, ``norm``, ``inner``, ``trace``, ``lanczos``, ``absorb``
+and ``scale``; each acts on a ``Tensor`` of the tensor layer and returns the factors as ``Tensor``.
 """
 from mpsdmrg import ext as _engine
-from typing import Any, Sequence, cast
+from typing import Any, Callable, Sequence, cast
 
 import string
 
@@ -12,7 +12,22 @@ import torch
 
 from mpsdmrg.ext import Tensor, cached_einsum, inner, norm, qr, rq, svdvals, trace  # noqa: F401
 
-__all__ = ['absorb', 'inner', 'norm', 'qr', 'rq', 'scale', 'svd', 'svdvals', 'trace']
+__all__ = ['absorb', 'arrange', 'inner', 'lanczos', 'norm', 'qr', 'rq', 'scale', 'svd', 'svdvals',
+           'trace']
+
+
+def arrange(t: Tensor, keep: int, order: Sequence[int]) -> Tensor:
+    '''
+    Move the legs of a tensor to the sides and the order an equation wants them.
+
+    Args:
+        t: the tensor to rearrange.
+        keep: how many of the legs point out of the result; the rest point in.
+        order: the legs in their new order, as one-based leg positions of *t*.
+    Returns:
+        Tensor: the same tensor, with the legs on the requested sides in the requested order.
+    '''
+    return cast(Tensor, _engine.arrange(t, keep, list(order)))
 
 
 def svd(t: Tensor, left: Sequence[int], right: Sequence[int],
@@ -24,12 +39,64 @@ def svd(t: Tensor, left: Sequence[int], right: Sequence[int],
         t: the tensor to split.
         left: the legs of the first factor, in order.
         right: the legs of the second factor, in order.
-        **kwargs: forwarded to the engine (``max_bond``, ``tol``, ``direction``).
+        **kwargs: forwarded to the engine (``max_bond``, ``tol``, ``absorb``).
     Returns:
         tuple: (first factor, singular values, second factor).
     '''
     return cast(tuple[Tensor, torch.Tensor, Tensor],
                 _engine.svd(t, left, right, **kwargs))
+
+
+def lanczos(func: Callable[[Tensor], Tensor], v: Tensor,
+            n_iter: int = 8) -> tuple[float, Tensor]:
+    '''
+    Ground state of a Hermitian operator by the Lanczos recursion.
+
+    Args:
+        func: the action of the operator on a tensor with the legs of *v*.
+        v: starting vector.
+        n_iter: number of Krylov steps.
+    Returns:
+        tuple: the lowest Ritz value and its vector, on the legs of *v*.
+    '''
+    def pair(a: Tensor, b: Tensor) -> float:
+        return inner(a, b).real
+
+    start = v / pair(v, v) ** 0.5
+
+    vecs: list[Tensor] = [start]
+    alphas = torch.zeros(n_iter, dtype=torch.float64, device=start.device)
+    betas = torch.zeros(n_iter, dtype=torch.float64, device=start.device)
+    for k in range(n_iter):
+        current = vecs[k]
+        w = func(current)
+        alphas[k] = pair(current, w)
+        w = w - alphas[k] * current
+        if k > 0:
+            w = w - betas[k - 1] * vecs[k - 1]
+        # the three-term recurrence loses orthogonality once the Krylov space fills up, and a
+        # tridiagonal built on a dependent basis gives Ritz values no better than the starting
+        # vector; folding the residual against every vector already built keeps it orthonormal
+        for _ in range(2):
+            for previous in vecs[:k + 1]:
+                w = w - pair(previous, w) * previous
+        beta = pair(w, w) ** 0.5
+        betas[k] = beta
+        vecs.append(w / beta if float(beta) > 0.0 else w * 0.0)
+    # a negligible beta closes the Krylov space: the vectors generated after it are round-off,
+    # and folding them into the tridiagonal mixes in directions that are not orthogonal to the
+    # ones already found, which loses the normalisation of the ground vector
+    closed = (betas < 1e-12).nonzero()
+    n_eff = n_iter if closed.numel() == 0 else min(n_iter, int(closed[0]) + 1)
+    T = torch.diag(alphas[:n_eff])
+    if n_eff > 1:
+        T = T + torch.diag(betas[:n_eff - 1], diagonal=1) \
+              + torch.diag(betas[:n_eff - 1], diagonal=-1)
+    eigvals, eigvecs = torch.linalg.eigh(T)
+    ground = vecs[0] * eigvecs[0, 0].to(dtype=start.dtype)
+    for k in range(1, n_eff):
+        ground = ground + eigvecs[k, 0].to(dtype=start.dtype) * vecs[k]
+    return float(eigvals[0]), ground
 
 
 def scale(t: Tensor, leg: int, values: torch.Tensor) -> Tensor:
@@ -58,21 +125,22 @@ def scale(t: Tensor, leg: int, values: torch.Tensor) -> Tensor:
         raise ValueError(f'scaling leg {leg} takes {at} values, one per copy of the leg, '
                          f'not {values.numel()}')
     dtype = t.blocks[0].dtype if t.blocks else torch.complex128
-    # the diagonal carries the leg and its dual, so the output leg is the leg of *t* and
-    # lands on the side that leg sits on
-    codomain = 2 if leg < len(t.map()['codomain']) else 1
+    # The diagonal is a map from the scaled leg to its dual, so the leg it leaves behind keeps
+    # the direction and the side of the leg it scales, and the result carries the legs of *t*.
+    on_codomain = leg < len(t.map()['codomain'])
     diagonal = Tensor(
         charges=[tuple(bond.sector(qi)) for qi in range(bond.nblocks)],
         blocks=[block.to(dtype) for block in blocks],
-        legs=(bond.conj(), bond),
+        legs=(bond, bond.conj()) if on_codomain else (bond.conj(), bond),
         qtotal=bond.group.trivial_sector,
-        codomain=codomain)
+        codomain=1)
     count = len(t.legs)
     letters = string.ascii_lowercase
     kept = letters[count]
-    spec = (f'{letters[:count]},{letters[leg]}{kept}'
-            f'->{letters[:leg]}{kept}{letters[leg + 1:count]}')
-    return cached_einsum(spec, t, diagonal)
+    glue = f'{letters[leg]}{kept}' if on_codomain else f'{kept}{letters[leg]}'
+    spec = f'{letters[:count]},{glue}->{letters[:leg]}{kept}{letters[leg + 1:count]}'
+    scaled = cached_einsum(spec, t, diagonal)
+    return arrange(scaled, len(t.map()['codomain']), range(1, count + 1))
 
 
 def absorb(second: Tensor, values: torch.Tensor) -> Tensor:

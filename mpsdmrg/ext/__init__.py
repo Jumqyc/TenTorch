@@ -92,6 +92,7 @@ inner = _extension.inner
 no_symmetry = _extension.no_symmetry
 norm = _extension.norm
 qr = _extension.qr
+arrange = _extension.arrange
 rq = _extension.rq
 su2_symmetry = _extension.su2_symmetry
 su3_symmetry = _extension.su3_symmetry

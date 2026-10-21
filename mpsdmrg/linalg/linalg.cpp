@@ -43,6 +43,22 @@ std::vector<int64_t> leg_order(const TensorMap& tensor, const std::vector<int64_
   return order;
 }
 
+// The side every leg of the tensor sits on: false for the codomain, true for the domain.
+std::vector<bool> leg_sides(const TensorMap& tensor) {
+  std::vector<bool> sides(tensor.space.size(), false);
+  for (std::size_t at = 0; at < tensor.space.domain.size(); ++at) {
+    sides.at(tensor.space.codomain.size() + at) = true;
+  }
+  return sides;
+}
+
+// The legs in their current order, as the one-based positions an arrangement takes.
+std::vector<int64_t> natural_order(int64_t size) {
+  std::vector<int64_t> order(size);
+  for (int64_t at = 0; at < size; ++at) order.at(at) = at + 1;
+  return order;
+}
+
 // The map a split factorizes, and the device its blocks live on: the legs the split names first
 // become the codomain and the rest the domain, in the order the split names them.
 struct Prepared {
@@ -107,7 +123,8 @@ std::vector<at::Tensor> keep_flags(const std::vector<Part>& parts, std::optional
 // tensor whose legs all lie on one side is first turned into a map, so every block is a matrix and
 // factorises on its own.
 Split svd(const TensorMap& tensor, const std::vector<int64_t>& left,
-          const std::vector<int64_t>& right, std::optional<int64_t> max_bond, double tol) {
+          const std::vector<int64_t>& right, std::optional<int64_t> max_bond, double tol,
+          int64_t absorb) {
   const auto [source, device] = prepare(tensor, left, right);
   const std::shared_ptr<FusionCategory> group = source.space.codomain.front().group();
   std::vector<Part> parts;
@@ -137,13 +154,32 @@ Split svd(const TensorMap& tensor, const std::vector<int64_t>& left,
   split.second.space.codomain = {leg_of(group, bond, 1)};
   split.second.space.domain = source.space.domain;
   split.second.qtotal = tensor.qtotal;
+  std::map<Sector, at::Tensor> kept;
   for (std::size_t at = 0; at < parts.size(); ++at) {
     const at::Tensor index = flags.at(at).nonzero().squeeze(-1);
     if (index.size(0) == 0) continue;
+    kept.emplace(parts.at(at).charge, at::index_select(parts.at(at).values, 0, index));
     split.first.blocks.emplace(parts.at(at).charge,
                                at::index_select(parts.at(at).u, 1, index).to(device).contiguous());
     split.second.blocks.emplace(parts.at(at).charge,
                                 at::index_select(parts.at(at).vh, 0, index).to(device).contiguous());
+  }
+  // The values are put on a factor here when a caller wants to keep them out of its own arithmetic;
+  // the bond is the last index of the first factor and the first index of the second.
+  if (absorb == 1) {
+    for (auto& [charge, block] : split.first.blocks) {
+      block = block * kept.at(charge).reshape({1, -1});
+    }
+  } else if (absorb == 2) {
+    for (auto& [charge, block] : split.second.blocks) {
+      block = kept.at(charge).reshape({-1, 1}) * block;
+    }
+  }
+  if (!split.first.blocks.empty()) {
+    auto flatten = [&device](TensorMap factor) {
+      return arrange_tensor(factor, 0, natural_order(static_cast<int64_t>(factor.space.size())), device);
+    };
+    split.first = flatten(split.first);
   }
   split.singular = spectrum.empty()
                        ? at::zeros({0}, at::TensorOptions().dtype(at::kDouble).device(device))
@@ -254,24 +290,38 @@ void bind_linalg(py::module_& m) {
     }
   }, py::arg("enabled") = true);
 
+  m.def("arrange", [](const engine::Tensor& tensor, int64_t keep,
+                      const std::vector<int64_t>& order) {
+    const engine::TensorMap& map = tensor.map();
+    const c10::Device device = map.blocks.empty() ? at::TensorOptions().device()
+                                                  : map.blocks.begin()->second.device();
+    return engine::Tensor(engine::arrange_tensor(map, keep, order, device));
+  }, py::arg("tensor"), py::arg("keep"), py::arg("order"));
   m.def("svd", [](const engine::Tensor& tensor, const std::vector<int64_t>& left,
-                  const std::vector<int64_t>& right, const py::object& max_bond, double tol) {
+                  const std::vector<int64_t>& right, const py::object& max_bond, double tol,
+                  int64_t absorb) {
     const std::optional<int64_t> bond =
         max_bond.is_none() ? std::optional<int64_t>{} : std::optional<int64_t>{max_bond.cast<int64_t>()};
-    engine::Split split = engine::svd(tensor.map(), left, right, bond, tol);
+    engine::Split split = engine::svd(tensor.map(), left, right, bond, tol, absorb);
     return py::make_tuple(engine::Tensor(std::move(split.first)), split.singular,
                           engine::Tensor(std::move(split.second)));
   }, py::arg("tensor"), py::arg("left"), py::arg("right"), py::arg("max_bond") = py::none(),
-     py::arg("tol") = 0.0);
+     py::arg("tol") = 0.0, py::arg("absorb") = 0);
   m.def("qr", [](const engine::Tensor& tensor, const std::vector<int64_t>& left,
                  const std::vector<int64_t>& right) {
-    auto [first, second] = engine::qr(tensor.map(), left, right);
-    return py::make_tuple(engine::Tensor(std::move(first)), engine::Tensor(std::move(second)));
+    // A = Q R with Q orthonormal in its rows: the singular values are folded into R, so Q is the
+    // first factor of the SVD and R carries the rest.
+    engine::Split split = engine::svd(tensor.map(), left, right, std::nullopt, 0.0, 2);
+    return py::make_tuple(engine::Tensor(std::move(split.first)),
+                          engine::Tensor(std::move(split.second)));
   }, py::arg("tensor"), py::arg("left"), py::arg("right"));
   m.def("rq", [](const engine::Tensor& tensor, const std::vector<int64_t>& left,
                  const std::vector<int64_t>& right) {
-    auto [first, second] = engine::qr(tensor.map(), left, right);
-    return py::make_tuple(engine::Tensor(std::move(first)), engine::Tensor(std::move(second)));
+    // A = R Q with Q orthonormal in its rows: here the singular values go to R, which is the
+    // first factor.
+    engine::Split split = engine::svd(tensor.map(), left, right, std::nullopt, 0.0, 1);
+    return py::make_tuple(engine::Tensor(std::move(split.first)),
+                          engine::Tensor(std::move(split.second)));
   }, py::arg("tensor"), py::arg("left"), py::arg("right"));
   m.def("svdvals", [](const engine::Tensor& tensor, const std::vector<int64_t>& left,
                       const std::vector<int64_t>& right) {

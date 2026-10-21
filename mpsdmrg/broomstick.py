@@ -10,6 +10,7 @@ from base import COMPLEX, CUDA
 from mpsdmrg import linalg
 from mpsdmrg.symmetry.cat import Group, no_symmetry, has_content
 from mpsdmrg.tensor import Tensor, bond_leg, cached_einsum, multiplet_leg
+from mpsdmrg.ext import inner
 
 from mpsdmrg.mps import MPS
 from mpsdmrg.mpo import MPO
@@ -238,10 +239,9 @@ class Broomstick:
 
         for sweep in range(num_sweeps):
             E, trunc = self.singlesweep()
-            # the sweep reported the energy of the environments it carried along; rebuild
-            # them from the state it leaves behind, so the number belongs to this state
+            # the Lanczos eigenvalue of the last site is the variational energy of the state the
+            # sweep leaves behind; the environments are rebuilt from that state for the next sweep
             self.cache_envs()
-            E = float(self._compute_energy().real)
             self._last_energy = E
             E_density = E / self.L
             max_bond = max(state.bond_dim)
@@ -273,20 +273,28 @@ class Broomstick:
 
 
     def _cache_lenv(self,i:int):
+        '''
+        The left environment of the window that starts at site ``i``, grown from the one of site
+        ``i-1``: it meets the ket, the Hamiltonian tensor and the conjugate of the ket there.
+        Args:
+            i: the site the new environment belongs to, at least 1.
+        '''
         state = self._require_state()
-        self.lenv[i] = cached_einsum('aic,apb,cqd,ijpq->bjd',
-                                        self.lenv[i-1], 
-                                        state.tensors[i-1].conj(), 
-                                        state.tensors[i-1],
-                                        self.Hamiltonian.tensors[i-1])
-    
+        self.lenv[i] = cached_einsum('aic,spa,cqd,ijpq->sjd', self.lenv[i-1],
+                                     state.tensors[i-1].adjoint(), state.tensors[i-1],
+                                     self.Hamiltonian.tensors[i-1])
+
     def _cache_renv(self,i:int):
+        '''
+        The right environment of the window that ends at site ``i``, grown from the one of site
+        ``i+1``: it meets the ket, the Hamiltonian tensor and the conjugate of the ket there.
+        Args:
+            i: the site the new environment belongs to, at most ``L-2``.
+        '''
         state = self._require_state()
-        self.renv[i] = cached_einsum('apb,cqd,bjd,ijpq->aic',
-                                        state.tensors[i].conj(), 
-                                        state.tensors[i],
-                                        self.renv[i + 1],
-                                        self.Hamiltonian.tensors[i])
+        self.renv[i] = cached_einsum('spa,cqd,sjd,ijpq->aic', state.tensors[i].adjoint(),
+                                     state.tensors[i], self.renv[i + 1],
+                                     self.Hamiltonian.tensors[i])
 
     def singlesweep(self):
         '''
@@ -330,85 +338,13 @@ class Broomstick:
             if i > 0:
                 self._cache_renv(i + 1)
 
-        # the Lanczos eigenvalue carries the squared norm of the state the environments
-        # were built from; the expectation joins the environments themselves, so it is
-        # the energy of the state as it stands
-        return float(self._compute_energy().real), max_trunc
-
-    def _lanczos(self,
-                 i: int,
-                 v0: Tensor,
-                 n_iter: int = 8) -> tuple[torch.Tensor, Tensor]:
-        v0 = v0 / linalg.norm(v0)
-
-        vecs: list[Tensor] = []
-        alphas = torch.zeros(n_iter, dtype=torch.float64, device=v0.device)
-        betas = torch.zeros(n_iter, dtype=torch.float64, device=v0.device)
-
-        # pre computed contraction
-        lenv = cached_einsum('apb,pqij->abqij', 
-                            self.lenv[i],
-                            self.Hamiltonian.tensors[i])
-        renv = cached_einsum('crd,qrkl->cdqkl',
-                            self.renv[i + 2],
-                            self.Hamiltonian.tensors[i + 1])
-        def helper(v: Tensor) -> Tensor:
-            return cached_einsum('abqij,cdqkl,bjld->aikc', lenv, renv, v)
-    
-        vecs.append(v0)
-
-        for k in range(n_iter):
-            v_k = vecs[k]
-            w = helper(v_k)
-
-            # the environments carry the bra bond of the state, so the image sits on the
-            # other side of that bond than the vector does; a contraction pairs the two
-            # as they are, and an inner product of two tensors in one space would not
-            alpha = cached_einsum('aikc,aikc->', v_k.conj(), w).item().real
-            alphas[k] = alpha
-
-            if k == 0:
-                w = w - alpha * v_k
-            else:
-                w = w - alpha * v_k - betas[k - 1] * vecs[k - 1]
-
-            beta = linalg.norm(w).real
-            betas[k] = beta
-
-            v_next = w / beta if float(beta) > 0.0 else w * 0.0
-            vecs.append(v_next)
-        # for performance reasons, we will NOT check for convergence and run
-        # all n_iter iterations to avoid GPU→CPU syncs.  The caller can check
-        # the eigenvalue convergence if desired.
-
-        # A negligible beta closes the Krylov space: the vectors generated after it are
-        # round-off, and folding them into the tridiagonal mixes in directions that are not
-        # orthogonal to the ones already found, which loses the normalisation of the ground
-        # vector.  Keeping only the vectors up to the closing restores it.
-        closed = (betas < 1e-12).nonzero()
-        n_eff = n_iter if closed.numel() == 0 else min(n_iter, int(closed[0]) + 1)
-        T = torch.diag(alphas[:n_eff])
-        if n_eff > 1:
-            T = T + torch.diag(betas[:n_eff - 1], diagonal=1) \
-                  + torch.diag(betas[:n_eff - 1], diagonal=-1)
-
-        eigvals, eigvecs_T = torch.linalg.eigh(T)
-
-        E0 = eigvals[0]
-        coeffs = eigvecs_T[:n_eff, 0].to(dtype=v0.dtype)
-        v_ground = vecs[0] * coeffs[0]
-        for k in range(1, n_eff):
-            v_ground = v_ground + coeffs[k] * vecs[k]
-
-        return E0, v_ground
+        return float(E), max_trunc
 
     def update(self, direction: Literal['left', 'right'],
-               n_iter: int = 8) -> tuple[torch.Tensor, float]:
+               n_iter: int = 8) -> tuple[float, float]:
         '''
         Perform 2-site optimization of MPS with effective Hamiltonian.
-        Returns (energy_tensor, truncation_error_tensor) — both are 0-d GPU
-        tensors to avoid GPU→CPU syncs.  The caller is responsible for
-        syncing only when needed (e.g. for progress display).
+        Returns (energy, truncation_error) — both plain floats, synced once per site.
         Args:
             direction: 'left' or 'right', indicating the sweep direction.
             n_iter: Maximum number of Lanczos iterations for the effective Hamiltonian diagonalization.
@@ -418,30 +354,32 @@ class Broomstick:
 
         assert self.center == mps.center, "Center site index mismatch between Broomstick and MPS."
 
+        # the two site tensor and the two environments, in the order the state carries its legs
         state = cached_einsum('bjx,xld->bjld', mps.tensors[i], mps.tensors[i + 1])
-        E, v = self._lanczos(i, state, n_iter=n_iter)
-        u, s, vh = linalg.svd(v,
-                       (0, 1),
-                       (2, 3),
-                       max_bond=self.max_bond_dim,
-                       tol=self.svd_tol)
+        lenv = cached_einsum('apb,pqij->abqij', self.lenv[i], self.Hamiltonian.tensors[i])
+        renv = cached_einsum('crd,qrkl->cdqkl', self.renv[i + 2], self.Hamiltonian.tensors[i + 1])
 
-        s2_kept = torch.sum(s*s).real
-        trunc_err = 1.0 - float(s2_kept)
+        # the action closes the bra and the ket physical leg on each other, and the graded
+        # contraction pairs them with the Frobenius-Schur phase of the physical sector
+        phase = self.group.dual_sign(mps.tensors[i].legs[1].sectors[0])
 
-        s /= torch.sqrt(s2_kept)
-        new_bond = u.legs[2].multiplets  # kept multiplets, the number of kept singular values
-        if direction == 'right':
-            mps.tensors[i] = u  # M[i] = U
-            mps.tensors[i + 1] = linalg.absorb(vh, s)  # M[i+1] = S Vh
-            mps.center = i + 1  # singular values absorbed into site i+1
+        def action(v: Tensor) -> Tensor:
+            return phase * cached_einsum('abqij,cdqkl,bjld->aikc', lenv, renv, v)
 
-        elif direction == 'left':
-            mps.tensors[i] = linalg.scale(u, 2, s)  # M[i] = U S
-            mps.tensors[i + 1] = vh  # M[i+1] = Vh
-            mps.center = i  # singular values stay at site i
-        mps.bond_dim[i + 1] = new_bond
-        return E.real, trunc_err
+        E, v = linalg.lanczos(action, state, n_iter)
+        # the values are folded into the factor that carries the gauge of the sweep, so the two new
+        # site tensors are the factors themselves and the caller does no scaling of its own
+        u, s, vh = linalg.svd(v, (0, 1), (2, 3), max_bond=self.max_bond_dim, tol=self.svd_tol,
+                              absorb=2 if direction == 'right' else 1)
+        trunc_err = 1.0 - float(torch.sum(s * s).real)
+        mps.tensors[i], mps.tensors[i + 1] = u, vh
+        mps.bond_dim[i + 1] = u.legs[2].multiplets
+        mps.center = i + 1 if direction == 'right' else i
+        self.center = mps.center
+        # the split keeps the block entries, not the tree-basis norm of the state, so the two
+        # new sites are gauged back onto the unit sphere here
+        mps.normalize()
+        return float(E), trunc_err
 
     @property
     def energy(self) -> float:
@@ -464,33 +402,26 @@ class Broomstick:
         Returns:
           The norm, a scalar whose imaginary part is round-off.
         '''
-        state = self._require_state()
-        group = state.tensors[0].group
-        trivial = multiplet_leg(group, group.trivial_sector)
-        env = Tensor.ones(1, 1, legs=(trivial, trivial.conj()),
-                          qtotal=group.trivial_sector, dtype=self.dtype, device=self.device)
-        for tensor in state.tensors:
-            env = cached_einsum('ab,ajc->bjc', env, tensor)
-            env = cached_einsum('bjc,bjd->cd', env, tensor.conj())
-        return env.blocks[0].reshape(()).item()
+        return self._require_state().norm(mode='env')
 
     def _compute_energy(self) -> complex:
-        state = self._require_state()
-        lenv = cached_einsum('apc,pqij,aib,cjd->bqd',
-                             self.lenv[self.center],
-                         self.Hamiltonian.tensors[self.center],
-                         state.tensors[self.center].conj(),
-                         state.tensors[self.center])
-        renv = cached_einsum('apc,qpij,bia,djc->bqd',self.renv[self.center + 2],
-                         self.Hamiltonian.tensors[self.center + 1],
-                         state.tensors[self.center + 1].conj(),
-                         state.tensors[self.center + 1])
+        '''
+        The expectation of the Hamiltonian in the current state, measured on the centre window.
 
-        # the environments are built from the state's tensors, so this expectation is
-        # quadratic in the state: a state that drifted off the unit sphere reports its
-        # energy scaled by its squared norm
-        return cached_einsum('bqd,bqd->', lenv, renv).item() / self._norm2()
-    
+        The two-site tensor meets the environments of the current sweep, so the value is contracted
+        with the same pairing as the operator the sweep optimises.
+        Returns:
+          The energy, a complex scalar whose imaginary part is round-off.
+        '''
+        state = self._require_state()
+        i = min(self.center, self.L - 2)
+        two = cached_einsum('bjx,xld->bjld', state.tensors[i], state.tensors[i + 1])
+        lenv = cached_einsum('apb,pqij->abqij', self.lenv[i], self.Hamiltonian.tensors[i])
+        renv = cached_einsum('crd,qrkl->cdqkl', self.renv[i + 2], self.Hamiltonian.tensors[i + 1])
+        image = cached_einsum('abqij,cdqkl,bjld->aikc', lenv, renv, two)
+        phase = self.group.dual_sign(state.tensors[i].legs[1].sectors[0])
+        return complex(phase * inner(two, image) / inner(two, two))
+
     def __sizeof__(self):
         return ((0 if self.state is None else self.state.__sizeof__()) +
                 self.Hamiltonian.__sizeof__() +

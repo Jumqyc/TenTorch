@@ -289,10 +289,20 @@ class Tensor {
   c10::Device device() const;
   bool is_dense() const;
 
+  // The row and column one entry occupies in the component array of a block: `blocks` names, per
+  // leg, the block that leg carries and `members` the member inside it, and the block is the one
+  // labelled by `charge`. Throws std::invalid_argument when no tree spans those blocks or the
+  // charge is no coupling of the side.
+  std::pair<int64_t, int64_t> slot(const Sector& charge, const std::vector<int64_t>& blocks,
+                                   const std::vector<int64_t>& members) const;
+
   std::complex<double> item() const;
   Tensor clone() const;
   Tensor detach() const;
   Tensor conj() const;
+  // The adjoint: every block conjugated and transposed, and the two sides of the space exchanged, so
+  // that a bra is the dual object of the ket it was built from and not merely its complex conjugate.
+  Tensor adjoint() const;
   Tensor to(const py::kwargs& options) const;
 
   // Fuse the given groups of legs into one leg each; the groups are lists of leg indices.

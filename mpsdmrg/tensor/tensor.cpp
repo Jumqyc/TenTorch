@@ -657,13 +657,20 @@ std::vector<FusionTree> join_trees(const FusionCategory& group, const FusionTree
 // of its dual, so the name is taken in the same direction on both sides of a contraction; two legs with
 // the same name have the same tree basis, and their blocks are multiplied row by row.
 std::string leg_name(const Leg& leg) {
-  std::string key;
+  std::vector<std::string> entries;
   for (int64_t at = 0; at < leg.nblocks(); ++at) {
     const Sector sector =
         leg.qconj() < 0 ? leg.group()->dual_sector(leg.sector(at)) : leg.sector(at);
-    for (const int64_t component : sector) key += std::to_string(component) + ",";
-    key += "x" + std::to_string(leg.multiplicity(at)) + ";";
+    std::string entry;
+    for (const int64_t component : sector) entry += std::to_string(component) + ",";
+    entry += "x" + std::to_string(leg.multiplicity(at)) + ";";
+    entries.push_back(entry);
   }
+  // The blocks of a leg and of its dual are listed in opposite order, so the name is built from the
+  // sorted entries: two legs that carry the same sectors with the same multiplicities agree.
+  std::sort(entries.begin(), entries.end());
+  std::string key;
+  for (const std::string& entry : entries) key += entry;
   return key;
 }
 
@@ -837,7 +844,19 @@ TensorMap adjoint(const TensorMap& tensor) {
   for (const auto& [root, block] : tensor.blocks) {
     out.blocks.emplace(root, at::conj(block).transpose(0, 1).contiguous());
   }
-  return out;
+  // The legs of the result stand in the reverse order of the legs of the argument, as in the dense
+  // transpose, so the first leg of the bra is the dual of the last leg of the ket. Each side is
+  // reversed inside itself, which keeps every leg on the side the adjoint already gave it.
+  const int64_t total = static_cast<int64_t>(out.space.size());
+  if (total == 0) return out;
+  const int64_t codomain = static_cast<int64_t>(out.space.codomain.size());
+  std::vector<int64_t> order(static_cast<std::size_t>(total), 0);
+  for (int64_t at = 0; at < total; ++at) {
+    order.at(at) = at < codomain ? codomain - at : total - (at - codomain);
+  }
+  const c10::Device device = out.blocks.empty() ? at::TensorOptions().device()
+                                               : out.blocks.begin()->second.device();
+  return arrange_tensor(out, codomain, order, device);
 }
 
 double norm(const TensorMap& tensor) {
@@ -1050,6 +1069,60 @@ Tensor Tensor::filled(const std::vector<Leg>& codomain, const std::vector<Leg>& 
   return Tensor(std::move(out));
 }
 
+std::pair<int64_t, int64_t> Tensor::slot(const Sector& charge, const std::vector<int64_t>& blocks,
+                                         const std::vector<int64_t>& members) const {
+  const TensorMap& tensor = map();
+  const std::vector<Leg>& out_legs = tensor.space.codomain;
+  const std::vector<Leg>& in_legs = tensor.space.domain;
+  const int64_t total = static_cast<int64_t>(out_legs.size() + in_legs.size());
+  if (static_cast<int64_t>(blocks.size()) != total || static_cast<int64_t>(members.size()) != total) {
+    throw std::invalid_argument("an entry names one block and one member for every leg");
+  }
+  if (tensor.blocks.find(charge) == tensor.blocks.end()) {
+    throw std::invalid_argument("the tensor carries no block at that charge");
+  }
+  const FusionCategory& group = *tensor.space.group;
+  // The tree of one side is fixed by the sectors the chosen blocks carry and by the charge the
+  // side couples to, and the row follows from the member inside every block.
+  const auto side_row = [&group](const std::vector<Leg>& legs, const int64_t offset,
+                                 const Sector& coupled, const std::vector<int64_t>& blocks,
+                                 const std::vector<int64_t>& members) {
+    std::vector<Sector> sectors;
+    std::vector<bool> isdual;
+    std::vector<int64_t> mults;
+    std::vector<std::vector<LegCharge>> choices;
+    for (const Leg& leg : legs) choices.push_back(leg_charges(leg));
+    for (std::size_t at = 0; at < legs.size(); ++at) {
+      const Leg& leg = legs.at(at);
+      const int64_t index = blocks.at(offset + static_cast<int64_t>(at));
+      if (index < 0 || index >= leg.nblocks()) {
+        throw std::invalid_argument("an entry names a block its leg does not carry");
+      }
+      sectors.push_back(leg.sector(index));
+      isdual.push_back(leg.qconj() < 0);
+      mults.push_back(members.at(offset + static_cast<int64_t>(at)));
+    }
+    if (legs.empty()) return int64_t{0};
+    const std::map<Sector, std::vector<FusionTree>> trees = trees_by_charge(group, choices);
+    const auto where = trees.find(coupled);
+    if (where == trees.end()) {
+      throw std::invalid_argument("that charge is no coupling of the side");
+    }
+    const SideLayout layout = side_layout(legs, where->second);
+    const FusionTree wanted{sectors, isdual, {}, std::vector<int64_t>(sectors.size() - 1, 0), coupled};
+    const auto index = index_of(layout.trees).find(wanted);
+    if (index == index_of(layout.trees).end()) {
+      throw std::invalid_argument("those blocks span no tree of that charge");
+    }
+    return row_index(layout, index->second, mults);
+  };
+  const Sector partner = out_legs.empty() || in_legs.empty()
+                             ? tensor.qtotal
+                             : partner_root(group, charge, tensor.qtotal);
+  return {side_row(out_legs, 0, charge, blocks, members),
+          side_row(in_legs, static_cast<int64_t>(out_legs.size()), partner, blocks, members)};
+}
+
 Tensor Tensor::from_dense(const at::Tensor& data, std::optional<std::vector<Leg>> legs,
                           std::optional<Sector> qtotal) {
   if (!legs) return Tensor(data);
@@ -1183,6 +1256,11 @@ Tensor Tensor::detach() const {
 Tensor Tensor::conj() const {
   if (!map_) return Tensor(at::conj(plain_));
   return Tensor(engine::conj(map()));
+}
+
+Tensor Tensor::adjoint() const {
+  if (!map_) return Tensor(at::conj(plain_).transpose(-1, -2));
+  return Tensor(engine::adjoint(map()));
 }
 
 Tensor Tensor::to(const py::kwargs& options) const {
@@ -1553,9 +1631,14 @@ void bind_tensor(py::module_& m) {
       })
       .def("element_size", [](const Tensor& tensor) { return tensor.blocks().front().element_size(); })
       .def("item", &Tensor::item)
+      .def("slot", [](const Tensor& tensor, const py::tuple& charge, const std::vector<int64_t>& blocks,
+                      const std::vector<int64_t>& members) {
+        return tensor.slot(py::cast<Sector>(charge), blocks, members);
+      })
       .def("clone", &Tensor::clone)
       .def("detach", &Tensor::detach)
       .def("conj", &Tensor::conj)
+      .def("adjoint", &Tensor::adjoint)
       .def("to", [](const Tensor& tensor, const py::kwargs& options) { return tensor.to(options); })
       .def("combine_legs", &Tensor::combine_legs)
       .def("__len__", [](const Tensor& tensor) { return static_cast<int64_t>(tensor.blocks().size()); })

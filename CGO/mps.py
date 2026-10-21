@@ -5,7 +5,7 @@ import torch
 
 from base import COMPLEX
 from mpsdmrg import MPO, MPS, Broomstick
-from mpsdmrg.tensor import cached_einsum
+from mpsdmrg.tensor import Tensor, cached_einsum
 
 from CGO.sdp import extremal
 from CGO.ext_register import extends_Broomstick
@@ -96,14 +96,14 @@ def _boundary_envs(state: MPS,
 
     E = torch.ones(1, 1, 1, 1, dtype=state.dtype, device=state.device)
     for site in range(lend):
-        T = state[site].to_torch()
-        E = cached_einsum('acbd,bsx,dsy->acxy', E, T, T.conj()).to_torch()
+        T = _dense(state[site])
+        E = _dense(cached_einsum('acbd,bsx,dsy->acxy', E, T, T.conj()))
     left = E.reshape(D_l, D_l)
 
     E = torch.ones(1, 1, 1, 1, dtype=state.dtype, device=state.device)
     for site in range(state.L - 1, rend - 1, -1):
-        T = state[site].to_torch()
-        E = cached_einsum('asx,csy,xybd->acbd', T, T.conj(), E).to_torch()
+        T = _dense(state[site])
+        E = _dense(cached_einsum('asx,csy,xybd->acbd', T, T.conj(), E))
     right = E.reshape(D_r, D_r)
     return left, right
 
@@ -178,6 +178,26 @@ def _select_boundary_indices(weights: torch.Tensor,
     return (torch.sort(order_l[:k]).values, torch.sort(order_r[:k]).values)
 
 
+def _dense(tensor):
+    '''
+    The array a tensor holds in its single sector.
+
+    A block is the (codomain rows, domain columns) array of its sector, so a tensor whose
+    sectors are one-dimensional has the whole array in its one block, read in leg order; a
+    bare matrix without legs already is that array.
+    Args:
+        tensor: a tensor of one sector, or a bare array, which is returned as it is.
+    Returns:
+        torch.Tensor: the array in the dimensions of the legs.
+    '''
+    if not isinstance(tensor, Tensor):
+        return tensor
+    blocks = tensor.blocks
+    if len(blocks) != 1:
+        raise ValueError(f'An array is read from a tensor of one sector, not {len(blocks)}.')
+    return blocks[0].reshape(*tensor.shape)
+
+
 def _product_matrix(state: MPS,
                     lend: int,
                     rend: int,
@@ -192,13 +212,13 @@ def _product_matrix(state: MPS,
     identity elsewhere.  One contraction per site produces all
     (D_l*D_r)**2 matrix elements at once, instead of one per boundary pair.
     '''
-    T = state[lend].to_torch()
-    lenv = cached_einsum('kpc,qp,lqd->klcd', T, ops.get(lend, eye), T.conj())
+    T = _dense(state[lend])
+    lenv = cached_einsum('kpc,qp,lqd->klcd', T, _dense(ops.get(lend, eye)), T.conj())
     for site in range(lend + 1, rend):
-        T = state[site].to_torch()
+        T = _dense(state[site])
         lenv = cached_einsum('klcd,cpe,qp,dqf->klef',
-                             lenv, T, ops.get(site, eye), T.conj())
-    return lenv.to_torch().permute(0, 2, 1, 3)
+                             lenv, T, _dense(ops.get(site, eye)), T.conj())
+    return _dense(lenv).permute(0, 2, 1, 3)
 
 
 def _mpo_commutator_matrix(state: MPS,
@@ -219,26 +239,26 @@ def _mpo_commutator_matrix(state: MPS,
     '''
     def local_operator(side: str, site: int) -> torch.Tensor:
         '''Local factor G[in, out, bra_phys, ket_phys] of H_L R or R H_L.'''
-        W = H_L.tensors[site - lend].to_torch()
+        W = _dense(H_L.tensors[site - lend])
         R = R_ops.get(site, eye)
         if side == 'right':                     # R acts on the ket leg
-            return cached_einsum('iost,tu->iosu', W, R).to_torch()
+            return _dense(cached_einsum('iost,tu->iosu', W, R))
         # R acts on the bra leg: its first index stays open and pairs with the
         # bra state.
-        return cached_einsum('sp,iopt->iost', R, W).to_torch()
+        return _dense(cached_einsum('sp,iopt->iost', R, W))
 
     def one_sided(side: str) -> torch.Tensor:
-        T = state[lend].to_torch()
-        lenv = cached_einsum('kpc,oqp,lqd->klcdo', T,
+        T = _dense(state[lend])
+        lenv = cached_einsum('kpc,oqp,lqd->klcdo', T, _dense(R_ops.get(lend, eye)),
                              local_operator(side, lend)[0], T.conj())
         for site in range(lend + 1, rend):
-            T = state[site].to_torch()
+            T = _dense(state[site])
             # the last index of lenv is the incoming MPO index, i.e. the first
             # leg of the local operator
             lenv = cached_einsum('klcds,cpe,soqp,dqf->klefo',
                                  lenv, T, local_operator(side, site), T.conj())
         # the MPO right boundary is the end state D-1
-        return lenv.to_torch()[..., -1].permute(0, 2, 1, 3)
+        return _dense(lenv)[..., -1].permute(0, 2, 1, 3)
 
     return 1j * (one_sided('right') - one_sided('left'))
 

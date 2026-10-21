@@ -94,10 +94,18 @@ def _pairwise(spec: str, tensors: tuple[Any, ...]) -> Tensor:
     '''
     operands = list(tensors)
     for inds, _, equation, _, _ in _plan(spec, tuple(tuple(t.shape) for t in tensors)):
+        if not set(equation.split('->')[0].split(',')[0]) & set(
+                equation.split('->')[0].split(',')[1]):
+            # a step that shares no label is an outer product; the engine contracts only tensors
+            # that glue a leg, so the whole equation goes through its own greedy order instead
+            return _engine_einsum(spec, *tensors)
         # the plan lists a pair from the larger position down and names its operands in that
         # order, so popping in that order hands the engine the operands its equation expects
         pair = [operands.pop(position) for position in inds]
-        operands.append(_engine_einsum(equation, *pair))
+        # a step over raw arrays is a plain dense contraction; only a charged operand goes to
+        # the engine, whose operands carry legs
+        operands.append(_engine_einsum(equation, *pair) if isinstance(pair[0], Tensor)
+                        else torch.einsum(equation, *pair))
     return operands[0]
 
 
@@ -114,6 +122,9 @@ def cached_einsum(spec: str, *tensors: Any) -> Tensor:
     Returns:
       The contraction.
     '''
+    if not any(isinstance(t, Tensor) for t in tensors):
+        # a call made of bare arrays is a plain dense contraction
+        return torch.einsum(spec, *tensors)
     if len(tensors) > 2:
         if any(isinstance(t, Tensor) and not t.is_dense for t in tensors):
             return _pairwise(spec, tensors)
