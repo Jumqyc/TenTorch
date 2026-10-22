@@ -17,7 +17,7 @@ on the GPU as ordinary `torch` operations.
 ## What it does
 
 Density matrix renormalisation group (DMRG) ground states of one-dimensional Hamiltonians, with
-the symmetry of the model carried exactly by the tensors: U(1), Z_n, SU(2), SU(3), Fibonacci,
+the symmetry of the model carried exactly by the tensors: U(1), Z_n, SU(2), Fibonacci,
 fermion parity, or no symmetry at all. A block is keyed by a fusion tree of sectors, so the
 block structure follows the category's fusion rules rather than a crystallographic group. The
 Fibonacci category has no Clebsch-Gordan tensor, so it is reachable exactly where the
@@ -55,7 +55,6 @@ after a kernel restart:
 | `Heisenberg.ipynb` | the spin-1/2 Heisenberg chain, with and without SU(2) symmetry |
 | `AKLT.ipynb` | the AKLT state, its exact energy and its correlations |
 | `Charged.ipynb` | a Hamiltonian with a non-trivial total charge |
-| `ULS.ipynb` | the SU(3) Uimin-Lai-Sutherland chain |
 
 A calculation starts from a model and one function call:
 
@@ -74,10 +73,9 @@ discarded weight of the run, so an observable is a call on `result.state` and a 
 argument, not a property of the model. `tests/exact.py` diagonalises the
 same model in its full Hilbert space, which is how the sweep is checked on short chains.
 
-A site comes from `tentorch.sites` — `spin(S)` and `fundamental_su3()` — and carries the operator
-table the couplings name. The model zoo lives in `tentorch/models` (Heisenberg, Ising, AKLT and
-the SU(3) Uimin-Lai-Sutherland chain), and the notebooks below write their own where the point is
-the Hamiltonian rather than the sweep.
+A site comes from `tentorch.sites` — `spin(S)` — and carries the operator table the couplings
+name. The model zoo lives in `tentorch/models` (Heisenberg, Ising and AKLT), and the notebooks
+below write their own where the point is the Hamiltonian rather than the sweep.
 
 ## The layers
 
@@ -117,13 +115,9 @@ AKLT chain at L=6 against its analytic energy. Every one of them agrees to bette
 
 Known limits:
 
-- The SU(3) route builds a symmetric state: `MPS(L, 3, cat=su3_symmetry, site_sector=(1, 0))`
-  canonicalises at L=3 and L=6, and the start state grows from both ends so the middle bond meets
-  its dual. Its sweep is not right yet: the adapted MPO places an operator multiplet of rank two
-  or more with the wrong weight, so the ULS chain and every spin greater than one half miss the
-  exact energy (`heisenberg(4, S=1.0)` returns -0.6458 against -4.6458) while every spin-one-half
-  chain is exact. A bond whose charge cannot close the sites to their left and right (a chain
-  whose length is not a multiple of three) carries no state at all, which is the physics.
+- The adapted MPO places an operator multiplet of rank two or more with the wrong weight, so a
+  chain with a spin greater than one half misses the exact energy (`heisenberg(4, S=1.0)` returns
+  -0.6458 against -4.6458) while every spin-one-half chain is exact.
 - A chain whose boundary carries a non-trivial charge does not canonicalise: a block is keyed by
   the root of its codomain, and a total charge other than the trivial one has more than one domain
   root that fuses to it.
