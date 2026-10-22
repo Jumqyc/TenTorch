@@ -60,10 +60,11 @@ std::vector<PairTerm> bend_right(const FusionCategory& group, const FusionTreePa
   if (n1 >= 2) new_out.vertices.pop_back();
   new_out.coupled = a;
 
-  // The domain side gains that leg turned around; its own old coupling becomes the new inner
-  // coupling, and its root is the sector that closes `qtotal` with the root the codomain side kept.
+  // The domain side gains that leg as a bra, so it keeps the sector it stores and points the other
+  // way; its own old coupling becomes the new inner coupling, and its root is the sector that
+  // closes `qtotal` with the root the codomain side kept.
   FusionTree new_in = in;
-  new_in.sectors.push_back(group.dual_sector(stored));
+  new_in.sectors.push_back(stored);
   new_in.isdual.push_back(!out.isdual.back());
   if (in.size() > 1) new_in.inner.push_back(in.coupled);
   if (in.size() > 0) new_in.vertices.push_back(row);
@@ -108,10 +109,11 @@ std::vector<PairTerm> bend_left(const FusionCategory& group, const FusionTreePai
   if (n2 >= 2) new_in.vertices.pop_back();
   new_in.coupled = a;
 
-  // The codomain side gains that leg turned around; its own old coupling becomes the new inner
-  // coupling, and its root is the sector that closes `qtotal` with the root the domain side kept.
+  // The codomain side gains that leg as a ket, so it keeps the sector it stores and points the
+  // other way; its own old coupling becomes the new inner coupling, and its root is the sector that
+  // closes `qtotal` with the root the domain side kept.
   FusionTree new_out = out;
-  new_out.sectors.push_back(group.dual_sector(stored));
+  new_out.sectors.push_back(stored);
   new_out.isdual.push_back(!in.isdual.back());
   if (out.size() > 1) new_out.inner.push_back(out.coupled);
   if (out.size() > 0) new_out.vertices.push_back(row);

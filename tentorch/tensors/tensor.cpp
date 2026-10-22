@@ -322,12 +322,12 @@ TensorMap repartition_tensor(const TensorMap& tensor, int64_t keep, const c10::D
   out.space.codomain = tensor.space.codomain;
   out.space.domain = tensor.space.domain;
   while (static_cast<int64_t>(out.space.codomain.size()) > keep) {
-    const Leg moved = out.space.codomain.back().turned();
+    const Leg moved = out.space.codomain.back().conj();
     out.space.codomain.pop_back();
     out.space.domain.push_back(moved);
   }
   while (static_cast<int64_t>(out.space.codomain.size()) < keep) {
-    const Leg moved = out.space.domain.back().turned();
+    const Leg moved = out.space.domain.back().conj();
     out.space.domain.pop_back();
     out.space.codomain.push_back(moved);
   }

@@ -418,11 +418,6 @@ Leg Leg::fuse(const Leg& other) const {
 
 Leg Leg::conj() const { return Leg(group_, sectors_, slices_, -qconj_); }
 
-Leg Leg::turned() const {
-  Leg turned = Leg(group_, sectors_, slices_, -qconj_);
-  for (Sector& sector : turned.sectors_) sector = group_->dual_sector(sector);
-  return turned;
-}
 
 std::string Leg::repr() const {
   return "Leg(dim=" + std::to_string(dim()) + ", qconj=" + std::to_string(qconj_) +
