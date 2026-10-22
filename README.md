@@ -71,7 +71,7 @@ print(result.energy, result.state.bond_dim)
 A `Model` is the physics only — the sites and the couplings; it holds no state and no numerical
 options. `dmrg` builds the state, sweeps it, and returns the energy, the state and the largest
 discarded weight of the run, so an observable is a call on `result.state` and a bond cap is an
-argument, not a property of the model. `tentorch.algorithms.exact.exact_energy` diagonalises the
+argument, not a property of the model. `tests/exact.py` diagonalises the
 same model in its full Hilbert space, which is how the sweep is checked on short chains.
 
 A site comes from `tentorch.sites` — `spin(S)` and `fundamental_su3()` — and carries the operator
@@ -102,7 +102,7 @@ symmetry/cat   ->   symmetry/tree   ->   tensors   ->   linalg
   its sites and its couplings. A `Model` turns itself into an `MPO` on first use.
 - `tentorch/models/` — the chains the examples and the benchmarks run on.
 - `tentorch/algorithms/dmrg.py` — the sweep driver (`DMRG`, `dmrg`), and
-  `tentorch/algorithms/exact.py` — exact diagonalisation, the reference it is checked against.
+  `tests/exact.py` — exact diagonalisation, the reference the sweep tests compare against.
 
 ## Status and limits
 

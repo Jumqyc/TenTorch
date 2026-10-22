@@ -2,7 +2,7 @@
 import pytest
 
 from tentorch import dmrg, no_symmetry, su2_symmetry
-from tentorch.algorithms.exact import exact_energy
+from tests.exact import exact_energy
 from tentorch.models import aklt, heisenberg, ising
 
 TOL = 1e-10

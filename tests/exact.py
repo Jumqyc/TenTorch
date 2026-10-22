@@ -1,5 +1,5 @@
-'''Exact diagonalization of a model in its full Hilbert space: the reference a sweep is checked
-against on chains small enough to hold every state.'''
+'''Exact diagonalization of a model in its full Hilbert space, the reference the sweep tests
+compare against on chains small enough to hold every state.'''
 import numpy as np
 import scipy.sparse as sparse
 import scipy.sparse.linalg as sparse_linalg

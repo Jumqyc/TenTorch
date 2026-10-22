@@ -7,7 +7,6 @@ comes from ``tentorch.symmetry`` (``su2_symmetry`` and its siblings), a leg from
 and a splitting from ``tentorch.linalg``.
 """
 from tentorch.algorithms.dmrg import DMRG, DMRGResult, dmrg
-from tentorch.algorithms.exact import exact_energy
 from tentorch.model import Model
 from tentorch.models import aklt, heisenberg, ising, uls
 from tentorch.sites import Site, fundamental_su3, spin
