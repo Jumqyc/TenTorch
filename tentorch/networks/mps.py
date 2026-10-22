@@ -222,7 +222,7 @@ class MPS:
                     f'pass the operator as a Tensor of the group or as an MPO.')
             matrices: dict[int, torch.Tensor] = {}
             for site, operator in operators.items():
-                matrix = (operator.blocks[0] if isinstance(operator, Tensor)
+                matrix = (next(iter(operator.blocks.values())) if isinstance(operator, Tensor)
                           else torch.as_tensor(operator))
                 if matrix.shape != (self.phys_dim, self.phys_dim):
                     raise ValueError(f"Operator shapes do not match the physical dimension {self.phys_dim}.")
@@ -386,7 +386,7 @@ class MPS:
         '''
         # one block holds the whole array of a trivial group; the sites are taken on the same
         # side so that its shape is the legs in order, whatever side the split left them on
-        tensors = [tensor.blocks[0].reshape(*(leg.dim for leg in tensor.legs))
+        tensors = [next(iter(tensor.blocks.values())).reshape(*(leg.dim for leg in tensor.legs))
                    for tensor in self.tensors]
         environment = torch.ones(1, 1, dtype=self.dtype, device=self.device)
         for site in range(self.L):
@@ -415,7 +415,7 @@ class MPS:
         for i in range(self.L):
             lenv = cached_einsum('aic,spa,cqd,ijpq->sjd', lenv, self.tensors[i].conj(),
                                  self.tensors[i], mpo.tensors[i])
-        return complex(lenv.blocks[0].reshape(-1)[0].item())
+        return complex(next(iter(lenv.blocks.values())).reshape(-1)[0].item())
 
     def _walk_contract(self,operators:dict[int,Tensor]):
         '''

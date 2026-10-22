@@ -11,7 +11,6 @@ from tentorch.operators import SpinOperator
 from tentorch.symmetry import FusionCategory, fundamental_operators, no_symmetry, su3_symmetry
 from tentorch.symmetry.cat import has_content
 from tentorch.symmetry.cat.su3 import FUNDAMENTAL_SECTOR
-from tentorch.tensors import Tensor
 
 
 class Site:
@@ -32,7 +31,7 @@ class Site:
                  phys_dim: int,
                  cat: FusionCategory,
                  sector: tuple[int, ...] | None,
-                 operators: dict[str, Tensor]):
+                 operators: dict[str, torch.Tensor]):
         if 'I' not in operators:
             raise ValueError("A site names its identity operator 'I'.")
         for name, matrix in operators.items():
@@ -54,7 +53,7 @@ class Site:
         Raises:
             KeyError: If the site has no operator of that name.
         '''
-        return self.operators[name].blocks[0]
+        return self.operators[name]
 
     def __repr__(self) -> str:
         '''The dimension, the category and the operator names.'''
@@ -81,10 +80,9 @@ def spin(S: float,
     if S < 0:
         raise ValueError(f'A spin cannot be negative, got {S}.')
     phys_dim = int(round(2 * S)) + 1
-    components = SpinOperator(phys_dim, dtype = dtype, device = device).data.blocks[0]
-    operators = {name: Tensor.from_torch(component) for name, component
-                 in zip('XYZ', components)}
-    operators['I'] = Tensor.from_torch(torch.eye(phys_dim, dtype = dtype, device = device))
+    components = SpinOperator(phys_dim, dtype = dtype, device = device).data
+    operators = {name: component for name, component in zip('XYZ', components)}
+    operators['I'] = torch.eye(phys_dim, dtype = dtype, device = device)
     # an SU(2) multiplet is named by twice its spin, which is one less than its dimension
     return Site(phys_dim, cat, (phys_dim - 1,) if has_content(cat) else None, operators)
 
@@ -99,5 +97,5 @@ def fundamental_su3(dtype = COMPLEX, device = CUDA) -> Site:
         The site, of dimension 3 and multiplet ``(1, 0)``.
     '''
     matrices = fundamental_operators(dtype = dtype, device = device)
-    operators = {name: Tensor.from_torch(matrix) for name, matrix in matrices.items()}
+    operators = dict(matrices)
     return Site(3, su3_symmetry, FUNDAMENTAL_SECTOR, operators)

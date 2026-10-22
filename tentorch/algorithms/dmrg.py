@@ -309,7 +309,7 @@ class DMRG:
         # the two right edges of the MPO are trivial legs of one component, so closing both
         # leaves a scalar
         edge = Tensor.ones(1, legs=(lenv.legs[2].conj(),), dtype=self.dtype, device=self.device)
-        E2 = float(cached_einsum('acwz,w,z->ac', lenv, edge, edge).blocks[0].reshape(()).real.item())
+        E2 = float(next(iter(cached_einsum('acwz,w,z->ac', lenv, edge, edge).blocks.values())).reshape(()).real.item())
         E = float(state.expectation(self.hamiltonian).real)
         return max(E2 - E * E, 0.0)
 

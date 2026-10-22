@@ -278,13 +278,6 @@ void bind_linalg(py::module_& m) {
   });
   m.def("default_device", [] { return default_device(); });
   m.def("default_scalar", [] { return default_scalar(); });
-  m.def("arrange", [](const engine::Tensor& tensor, int64_t keep,
-                      const std::vector<int64_t>& order) {
-    const engine::TensorMap& map = tensor.map();
-    const c10::Device device = map.blocks.empty() ? at::TensorOptions().device()
-                                                  : map.blocks.begin()->second.device();
-    return engine::Tensor(engine::arrange_tensor(map, keep, order, device));
-  }, py::arg("tensor"), py::arg("keep"), py::arg("order"));
   m.def("svd", [](const engine::Tensor& tensor, const std::vector<int64_t>& left,
                   const std::vector<int64_t>& right, const py::object& max_bond, double tol,
                   int64_t absorb) {
@@ -319,6 +312,11 @@ void bind_linalg(py::module_& m) {
   m.def("inner", [](const engine::Tensor& left, const engine::Tensor& right) {
     return engine::inner(left.map(), right.map());
   });
+  m.def("absorb", [](const engine::Tensor& tensor, const at::Tensor& values) {
+    // Fold the values of a split into the factor whose first codomain leg is the bond: the leg
+    // keeps the space it carries, so the second factor stays a factor of the same tensor.
+    return tensor.absorb(values);
+  }, py::arg("tensor"), py::arg("values"));
   m.def("trace", [](const engine::Tensor& tensor) {
     // Closes the legs pairwise and hands back the scalar they leave as a tensor with no leg.
     const engine::TensorMap& source = tensor.map();

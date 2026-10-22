@@ -32,7 +32,7 @@ class SpinOperator:
             buffer[1, i + 1, i] = sqrt(s * (s + 1) - m * (m - 1)) # S-
         buffer[0], buffer[1] = 0.5 * (buffer[0] + buffer[1]), -0.5j * (buffer[0] - buffer[1]) # Sx, Sy
 
-        self.data = Tensor.from_torch(buffer)
+        self.data = buffer
         self.phys_dim = phys_dim
 
     def __repr__(self):

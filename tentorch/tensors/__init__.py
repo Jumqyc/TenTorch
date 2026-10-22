@@ -128,7 +128,7 @@ def cached_einsum(spec: str, *tensors: Any) -> Tensor:
     if len(tensors) > 2:
         if any(isinstance(t, Tensor) and not t.is_dense for t in tensors):
             return _pairwise(spec, tensors)
-        raw = [t.blocks[0] if isinstance(t, Tensor) else t for t in tensors]
+        raw = [next(iter(t.blocks.values())) if isinstance(t, Tensor) else t for t in tensors]
         if all(t.dtype == raw[0].dtype for t in raw[1:]):
             return _pairwise(spec, tensors)
     return _engine_einsum(spec, *tensors)

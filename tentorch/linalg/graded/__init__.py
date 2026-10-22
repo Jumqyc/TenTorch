@@ -1,21 +1,17 @@
 """The splittings of the block-sparse tensor of ``tentorch``.
 
-Exposes ``svd``, ``qr``, ``rq``, ``svdvals``, ``norm``, ``inner``, ``arrange``, ``trace``, ``lanczos``,
-``absorb`` and ``scale``; each acts on a ``Tensor`` of the tensor layer and returns the factors as
-``Tensor``.
+Exposes ``svd``, ``qr``, ``rq``, ``svdvals``, ``norm``, ``inner``, ``trace``, ``lanczos`` and
+``absorb``; each acts on a ``Tensor`` of the tensor layer and returns the factors as ``Tensor``.
 """
 from tentorch import _ext as _engine
 from typing import Any, Callable, Sequence, cast
 
-import string
-
 import torch
 
 from tentorch._ext import (  # noqa: F401
-    Tensor, arrange, cached_einsum, inner, norm, qr, rq, svdvals, trace)
+    Tensor, cached_einsum, inner, norm, qr, rq, svdvals, trace)
 
-__all__ = ['absorb', 'arrange', 'inner', 'lanczos', 'norm', 'qr', 'rq', 'scale', 'svd', 'svdvals',
-           'trace']
+__all__ = ['absorb', 'inner', 'lanczos', 'norm', 'qr', 'rq', 'svd', 'svdvals', 'trace']
 
 
 def svd(t: Tensor, left: Sequence[int], right: Sequence[int],
@@ -87,51 +83,6 @@ def lanczos(func: Callable[[Tensor], Tensor], v: Tensor,
     return float(eigvals[0]), ground
 
 
-def scale(t: Tensor, leg: int, values: torch.Tensor) -> Tensor:
-    '''
-    Multiply one leg of a tensor by a vector, one value per copy of the leg.
-
-    The diagonal tensor that carries the values is contracted with *leg*, so the result has
-    the same legs as *t* and every entry is scaled by the value of its copy along *leg*.
-
-    Args:
-        t: the tensor to scale.
-        leg: the position of the leg to scale.
-        values: one value per copy of that leg, in the block order the leg lists its sectors.
-    Returns:
-        Tensor: the scaled tensor, with the legs of *t*.
-    Raises:
-        ValueError: If *values* does not hold one entry per copy of *leg*.
-    '''
-    bond = t.legs[leg]
-    blocks, at = [], 0
-    for qi in range(bond.nblocks):
-        copies = bond.multiplicity(qi)
-        blocks.append(torch.diag(values[at:at + copies]))
-        at += copies
-    if at != values.numel():
-        raise ValueError(f'scaling leg {leg} takes {at} values, one per copy of the leg, '
-                         f'not {values.numel()}')
-    dtype = t.blocks[0].dtype if t.blocks else torch.complex128
-    # The diagonal maps the dual of the scaled leg onto it, so the leg it glues is the dual and the
-    # leg the result carries is the one it scaled: a non-self-dual leg would otherwise come back
-    # at its dual space, and the result would no longer carry the legs of *t*.
-    on_codomain = leg < len(t.map()['codomain'])
-    diagonal = Tensor(
-        charges=[tuple(bond.sector(qi)) for qi in range(bond.nblocks)],
-        blocks=[block.to(dtype) for block in blocks],
-        legs=(bond.conj(), bond) if on_codomain else (bond, bond.conj()),
-        qtotal=bond.group.trivial_sector,
-        codomain=1)
-    count = len(t.legs)
-    letters = string.ascii_lowercase
-    kept = letters[count]
-    glue = f'{letters[leg]}{kept}' if on_codomain else f'{kept}{letters[leg]}'
-    spec = f'{letters[:count]},{glue}->{letters[:leg]}{kept}{letters[leg + 1:count]}'
-    scaled = cached_einsum(spec, t, diagonal)
-    return arrange(scaled, len(t.map()['codomain']), range(1, count + 1))
-
-
 def absorb(second: Tensor, values: torch.Tensor) -> Tensor:
     '''
     Fold the singular values of a split into the second factor.
@@ -143,4 +94,4 @@ def absorb(second: Tensor, values: torch.Tensor) -> Tensor:
     Returns:
         Tensor: the second factor with every bond window scaled by its singular value.
     '''
-    return scale(second, 0, values)
+    return cast(Tensor, _engine.absorb(second, values))

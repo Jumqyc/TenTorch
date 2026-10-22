@@ -195,7 +195,7 @@ def _dense(tensor):
     blocks = tensor.blocks
     if len(blocks) != 1:
         raise ValueError(f'An array is read from a tensor of one sector, not {len(blocks)}.')
-    return blocks[0].reshape(*tensor.shape)
+    return next(iter(blocks.values())).reshape(*tensor.shape)
 
 
 def _product_matrix(state: MPS,

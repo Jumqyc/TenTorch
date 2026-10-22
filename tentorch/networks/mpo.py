@@ -17,7 +17,7 @@ class MPO:
     def __init__(self,
                  L:int,
                  phys_dim:int,
-                 mapping:dict[str,Tensor]|None = None,
+                 mapping:dict[str,torch.Tensor]|None = None,
                  dtype = COMPLEX,
                  device = CUDA,
                  cat:FusionCategory = no_symmetry,
@@ -27,7 +27,7 @@ class MPO:
         Args:
             L (int): Length of the MPO (number of sites).
             phys_dim (int): Physical dimension of the MPO.
-            mapping (dict[str, Tensor]): A dictionary mapping operator names to their dense operator tensors. If None, the spin components and the identity are used.
+            mapping (dict[str, torch.Tensor]): A dictionary mapping operator names to their dense operator matrices. If None, the spin components and the identity are used.
             dtype, device: Data type and device of the tensors.
             cat: Symmetry category of the Hamiltonian; ``no_symmetry`` by default.
             total (tuple[int, ...] | None): Total charge the operator carries, for an operator
@@ -52,16 +52,11 @@ class MPO:
                 'X': spin_op[0],
                 'Y': spin_op[1],
                 'Z': spin_op[2],
-                'I': Tensor.from_torch(torch.eye(phys_dim, dtype=dtype, device=device))
+                'I': torch.eye(phys_dim, dtype=dtype, device=device)
             }
         self.mapping = dict(mapping)
-        if not all(isinstance(matrix, Tensor) for matrix in self.mapping.values()):
-            raise TypeError('The mapping of an MPO holds tentorch.tensors.Tensor matrices.')
-
-    @property
-    def _buffers(self) -> dict[str, torch.Tensor]:
-        '''The dense buffers of the mapping, for the contractions that build the tensors.'''
-        return {name: matrix.blocks[0] for name, matrix in self.mapping.items()}
+        if not all(isinstance(matrix, torch.Tensor) for matrix in self.mapping.values()):
+            raise TypeError('The mapping of an MPO holds torch matrices.')
 
     def to(self, device):
         '''
@@ -225,11 +220,11 @@ class MPO:
         '''
         if op_string not in self.mapping:
             # a several-letter name is the product of those mapping entries on one site
-            buffers = self._buffers
+            buffers = self.mapping
             mat = buffers[op_string[0]]
             for ch in op_string[1:]:
                 mat = mat @ buffers[ch]
-            self.mapping[op_string] = Tensor.from_torch(mat.to(dtype=self.dtype, device=self.device))
+            self.mapping[op_string] = mat.to(dtype=self.dtype, device=self.device)
         return op_string
 
     def build(self) -> None:
@@ -247,7 +242,7 @@ class MPO:
         total = group.trivial_sector if self.total is None else self.total
         phys = phys_leg(group, phys_dim, self.site_sector)
         raw = {name: matrix.to(dtype=self.dtype, device=self.device)
-               for name, matrix in self._buffers.items()}
+               for name, matrix in self.mapping.items()}
         components = {tuple(sector): tensor.to(dtype=self.dtype, device=self.device)
                       for sector, tensor in content(group).tensor_operators(
                           group, raw, phys, self.dtype, self.device).items()}
@@ -343,7 +338,7 @@ class MPO:
                                   legs=(left, right, phys, phys.conj()), codomain=2,
                                   qtotal=group.trivial_sector,
                                   dtype=self.dtype, device=self.device)
-            blocks = {tuple(charge): block for charge, block in zip(tensor.qdata, tensor.blocks)}
+            blocks = tensor.blocks
 
             def place(charge: tuple, left_block: int, right_block: int, members: tuple,
                       value: Any) -> None:
@@ -418,7 +413,7 @@ class MPO:
 
     def _build_labels(self) -> list[Tensor]:
         raw = {name: matrix.to(dtype=self.dtype, device=self.device)
-               for name, matrix in self._buffers.items()}
+               for name, matrix in self.mapping.items()}
         first_site_counts: dict[tuple, int] = {}
         for c_idx, (ops, _, locs) in enumerate(self.couplings):
             if len(ops) > 1 and locs[1] - locs[0] == 1:
@@ -471,7 +466,7 @@ class MPO:
               in_slot: the right bond slot the matrix enters along.
               matrix: the dense (physical output, physical input) matrix.
             '''
-            block = tensor.blocks[0]
+            block = next(iter(tensor.blocks.values()))
             block[out_slot * tensor.legs[1].dim + in_slot] += matrix.reshape(-1)
 
         eye = torch.eye(p, dtype=self.dtype, device=self.device)

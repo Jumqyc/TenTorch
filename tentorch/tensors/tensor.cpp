@@ -1316,6 +1316,49 @@ Tensor Tensor::combine_legs(const std::vector<std::vector<int64_t>>& groups) con
   throw std::logic_error("combine_legs: not implemented");
 }
 
+Tensor Tensor::absorb(const at::Tensor& values) const {
+  if (!map_) throw std::logic_error("absorb: a plain tensor carries no bond leg to scale");
+  TensorMap out = map();
+  if (out.space.codomain.empty()) {
+    throw std::invalid_argument("absorb: the tensor has no codomain leg to scale");
+  }
+  const Leg& bond = out.space.codomain.front();
+  std::vector<int64_t> offsets(static_cast<std::size_t>(bond.nblocks()) + 1, 0);
+  for (int64_t qi = 0; qi < bond.nblocks(); ++qi) {
+    offsets.at(qi + 1) = offsets.at(qi) + bond.multiplicity(qi);
+  }
+  if (values.numel() != offsets.back()) {
+    throw std::invalid_argument("absorb: the values hold " + std::to_string(values.numel()) +
+                                " entries, not one per copy of the bond leg (" +
+                                std::to_string(offsets.back()) + ")");
+  }
+  const auto groups = trees_by_charge(*out.space.group, out.codomain_charges());
+  for (auto& [charge, block] : out.blocks) {
+    const SideLayout layout = side_layout(out.space.codomain, groups.at(charge));
+    at::Tensor scaled = block.clone();
+    for (std::size_t at = 0; at < layout.trees.size(); ++at) {
+      const Sector& stored = layout.trees.at(at).sectors.front();
+      int64_t qi = 0;
+      while (qi < bond.nblocks() && !(bond.sector(qi) == stored)) ++qi;
+      if (qi == bond.nblocks()) {
+        throw std::invalid_argument(
+            "absorb: a tree of a block carries a sector the bond leg does not");
+      }
+      const int64_t base = layout.base.at(at);
+      const int64_t count = layout.base.at(at + 1) - base;
+      const std::vector<int64_t>& shape = layout.mults.at(at);
+      std::vector<int64_t> broadcast(shape.size(), 1);
+      broadcast.at(0) = shape.at(0);
+      const at::Tensor weights = values.narrow(0, offsets.at(qi), bond.multiplicity(qi));
+      const at::Tensor cell =
+          block.narrow(0, base, count).view(shape) * weights.view(broadcast);
+      scaled.narrow(0, base, count).copy_(cell.reshape({count}));
+    }
+    block = scaled;
+  }
+  return Tensor(std::move(out));
+}
+
 
 Tensor& Tensor::operator+=(const Tensor& other) {
   if (!map_ || !other.map_) throw std::logic_error("a bare matrix does not add to a graded tensor");
@@ -1598,6 +1641,8 @@ Tensor filled_of(const py::args& shape, const py::kwargs& options, int kind) {
       options.contains("dtype") ? options["dtype"].cast<at::ScalarType>() : at::kComplexDouble;
   const c10::Device device =
       options.contains("device") ? options["device"].cast<c10::Device>() : at::TensorOptions().device();
+  // An empty list of legs is a tensor without a symmetry, the same as naming no legs at all.
+  if (!legs.is_none() && py::len(legs) == 0) legs = py::none();
   if (legs.is_none()) {
     std::vector<int64_t> dims;
     for (const py::handle& entry : shape) dims.push_back(entry.cast<int64_t>());
@@ -1624,6 +1669,7 @@ void bind_tensor(py::module_& m) {
       .def("map", [](const Tensor& tensor) { return tensor_as(tensor.map()); })
       .def(py::init([](const std::vector<Sector>& charges, const std::vector<at::Tensor>& blocks,
                        const std::vector<Leg>& legs, const py::object& qtotal, int64_t codomain) {
+        if (legs.empty()) throw std::invalid_argument("a tensor of charges needs legs");
         TensorMap map;
         map.space.group = legs.front().group();
         map.space.codomain.assign(legs.begin(), legs.begin() + codomain);
@@ -1633,6 +1679,28 @@ void bind_tensor(py::module_& m) {
         return Tensor(std::move(map));
       }),
            py::arg("charges"), py::arg("blocks"), py::arg("legs"), py::arg("qtotal") = py::none(),
+           py::arg("codomain") = -1)
+      .def(py::init([](const py::dict& blocks, const py::object& named,
+                       const py::object& qtotal, int64_t codomain) {
+        const std::vector<Leg> legs =
+            named.is_none() ? std::vector<Leg>{} : named.cast<std::vector<Leg>>();
+        if (legs.empty()) {
+          // with no legs the one block of the trivial charge is the whole tensor, a bare matrix
+          if (blocks.size() != 1) throw std::invalid_argument("a tensor without legs holds one block");
+          return Tensor(blocks.begin()->second.cast<at::Tensor>());
+        }
+        TensorMap map;
+        map.space.group = legs.front().group();
+        if (codomain < 0) codomain = static_cast<int64_t>(legs.size());
+        map.space.codomain.assign(legs.begin(), legs.begin() + codomain);
+        map.space.domain.assign(legs.begin() + codomain, legs.end());
+        map.qtotal = qtotal.is_none() ? map.space.group->trivial_sector() : qtotal.cast<Sector>();
+        for (const auto& item : blocks) {
+          map.blocks.emplace(item.first.cast<Sector>(), item.second.cast<at::Tensor>());
+        }
+        return Tensor(std::move(map));
+      }),
+           py::arg("blocks"), py::arg("legs") = py::none(), py::arg("qtotal") = py::none(),
            py::arg("codomain") = -1)
       .def_static("zeros", [](const py::args& shape, const py::kwargs& options) { return filled_of(shape, options, 0); })
       .def_static("ones", [](const py::args& shape, const py::kwargs& options) { return filled_of(shape, options, 1); })
@@ -1645,7 +1713,66 @@ void bind_tensor(py::module_& m) {
                                                                : std::optional<Sector>{qtotal.cast<Sector>()});
                   },
                   py::arg("data"), py::arg("legs") = py::none(), py::arg("qtotal") = py::none())
-      .def_property_readonly("blocks", &Tensor::blocks)
+      .def_property_readonly("blocks", [](const Tensor& tensor) {
+        // The blocks as a mapping from the charge they couple to.  The torch tensors are the ones
+        // the engine holds, so writing an entry writes into the tensor.
+        py::dict out;
+        if (!tensor.graded()) {
+          out[py::tuple()] = tensor.plain();
+          return out;
+        }
+        for (const auto& [charge, block] : tensor.map().blocks) {
+          out[py::tuple(py::cast(charge))] = block;
+        }
+        return out;
+      })
+      .def("to_dict", [](const Tensor& tensor) {
+        // The whole tensor as plain Python: its legs, the total charge, where the codomain ends and
+        // one torch tensor per coupled charge.
+        py::dict out;
+        if (!tensor.graded()) {
+          out["legs"] = py::list();
+          out["qtotal"] = py::tuple();
+          out["codomain"] = 0;
+          py::dict plain;
+          plain[py::tuple()] = tensor.plain();
+          out["blocks"] = plain;
+          return out;
+        }
+        out["legs"] = py::cast(tensor.legs());
+        out["qtotal"] = py::tuple(py::cast(tensor.qtotal()));
+        out["codomain"] = static_cast<int64_t>(tensor.map().space.codomain.size());
+        py::dict blocks;
+        for (const auto& [charge, block] : tensor.map().blocks) {
+          blocks[py::tuple(py::cast(charge))] = block;
+        }
+        out["blocks"] = blocks;
+        return out;
+      })
+      .def("set_block", [](Tensor& tensor, const py::tuple& charge, const at::Tensor& block) {
+        // One block, keyed by the charge the two sides couple to.  The trees of that charge fix the
+        // shape a block of it has, so a block of another shape has no place in the tensor.
+        TensorMap& map = tensor.map();
+        const Sector key = charge.cast<Sector>();
+        const auto codomain = trees_by_charge(*map.space.group, map.codomain_charges());
+        const auto domain = trees_by_charge(*map.space.group, map.domain_charges());
+        const auto out = codomain.find(key);
+        const auto in = domain.find(key);
+        const int64_t rows =
+            out == codomain.end() ? 0 : side_layout(map.space.codomain, out->second).rows();
+        const int64_t columns =
+            in == domain.end() ? 0 : side_layout(map.space.domain, in->second).rows();
+        if (rows == 0 || columns == 0) {
+          throw std::invalid_argument("set_block: this charge is no coupling of the two sides");
+        }
+        if (block.dim() != 2 || block.size(0) != rows || block.size(1) != columns) {
+          throw std::invalid_argument("set_block: the block of this charge is " +
+                                      std::to_string(rows) + "x" + std::to_string(columns) +
+                                      ", so a block of " + std::to_string(block.numel()) +
+                                      " entries is not the one it wants");
+        }
+        map.blocks[key] = block;
+      }, py::arg("charge"), py::arg("block"))
       .def_property_readonly("qdata", &Tensor::charges)
       .def_property_readonly("charges", [](const Tensor& tensor) {
         py::list out;
