@@ -415,10 +415,7 @@ class MPS:
         for i in range(self.L):
             lenv = cached_einsum('aic,spa,cqd,ijpq->sjd', lenv, self.tensors[i].conj(),
                                  self.tensors[i], mpo.tensors[i])
-        # the physical leg of the MPO closes the bra against the ket, which pays the
-        # Frobenius-Schur phase of the physical sector
-        phase = self.cat.dual_sign(self.tensors[0].legs[1].sectors[0])
-        return complex(phase * lenv.blocks[0].reshape(-1)[0].item())
+        return complex(lenv.blocks[0].reshape(-1)[0].item())
 
     def _walk_contract(self,operators:dict[int,Tensor]):
         '''

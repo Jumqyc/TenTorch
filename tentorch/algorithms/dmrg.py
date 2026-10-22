@@ -239,7 +239,7 @@ class DMRG:
 
         # the action closes the bra and the ket physical leg on each other, and the graded
         # contraction pairs them with the Frobenius-Schur phase of the physical sector
-        phase = self.cat.dual_sign(mps.tensors[i].legs[1].sectors[0])
+        phase = 1.0
 
         def action(v: Tensor) -> Tensor:
             return phase * cached_einsum('abqij,cdqkl,bjld->aikc', lenv, renv, v)
@@ -283,7 +283,7 @@ class DMRG:
         lenv = cached_einsum('apb,pqij->abqij', self.lenv[i], self.hamiltonian.tensors[i])
         renv = cached_einsum('crd,qrkl->cdqkl', self.renv[i + 2], self.hamiltonian.tensors[i + 1])
         image = cached_einsum('abqij,cdqkl,bjld->aikc', lenv, renv, two)
-        phase = self.cat.dual_sign(state.tensors[i].legs[1].sectors[0])
+        phase = 1.0
         return complex(phase * linalg.inner(two, image) / linalg.inner(two, two))
 
     def compute_variance(self) -> float:

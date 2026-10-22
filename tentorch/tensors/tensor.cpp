@@ -321,13 +321,21 @@ TensorMap repartition_tensor(const TensorMap& tensor, int64_t keep, const c10::D
   out.qtotal = tensor.qtotal;
   out.space.codomain = tensor.space.codomain;
   out.space.domain = tensor.space.domain;
+  // A leg that crosses sides keeps the space it indexes: the side fixes the direction of its charges,
+  // so the stored sector dualises with it and the sector the leg points at stays what it was.
+  const auto crossed = [&group](const Leg& leg) {
+    std::vector<Sector> sectors;
+    sectors.reserve(leg.sectors().size());
+    for (const Sector& sector : leg.sectors()) sectors.push_back(group.dual_sector(sector));
+    return Leg(leg.group(), sectors, leg.slices(), -leg.qconj());
+  };
   while (static_cast<int64_t>(out.space.codomain.size()) > keep) {
-    const Leg moved = out.space.codomain.back().conj();
+    const Leg moved = crossed(out.space.codomain.back());
     out.space.codomain.pop_back();
     out.space.domain.push_back(moved);
   }
   while (static_cast<int64_t>(out.space.codomain.size()) < keep) {
-    const Leg moved = out.space.domain.back().conj();
+    const Leg moved = crossed(out.space.domain.back());
     out.space.domain.pop_back();
     out.space.codomain.push_back(moved);
   }

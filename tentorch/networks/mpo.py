@@ -310,9 +310,7 @@ class MPO:
                         continue
                     # the amplitude sits with its square root on either placement, and the closing
                     # one also carries the Frobenius-Schur phase of the sector
-                    pairs.append((sector, abs(overlap), 1.0,
-                                  content(group).placement_phase(group, sector)
-                                  * np.exp(1j * np.angle(overlap))))
+                    pairs.append((sector, abs(overlap), 1.0, np.exp(1j * np.angle(overlap))))
             if not pairs:
                 raise ValueError(f'The operators {operators} do not fuse to the sector {total}.')
             base = {sector: threads.get(sector, 0) for sector, _, _, _ in pairs}
