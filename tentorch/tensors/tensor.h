@@ -311,16 +311,16 @@ class Tensor {
   // Fuse the given groups of legs into one leg each; the groups are lists of leg indices.
   Tensor combine_legs(const std::vector<std::vector<int64_t>>& groups) const;
 
-  // Multiply the first codomain leg by a vector of values, one value per copy of that leg: every
-  // block entry picks the copy its row names, so the leg keeps the space it carries and no leg has
-  // to move.  This is what the singular values of a split do to the second factor.
+  // Multiply every block row by a value, one per copy of the single codomain leg: the row that
+  // names a copy takes the value of that copy, so the leg keeps the space it carries and no leg
+  // has to move.  This is what the singular values of a split do to the second factor.
   // Args:
-  //   values: one value per copy of the first codomain leg, in the block order of that leg.
+  //   values: one value per copy of the codomain leg, in the order that leg lists them.
   // Returns:
   //   The tensor with that leg scaled.
   // Raises:
-  //   std::invalid_argument: if `values` does not hold one entry per copy of the leg, or a tree of
-  //     a block carries a sector that leg does not.
+  //   std::invalid_argument: if the tensor does not have exactly one codomain leg, or `values`
+  //     does not hold one entry per copy of it.
   Tensor absorb(const at::Tensor& values) const;
 
   // Sum of every block entry times its tree tensor: the component array of a tensor whose legs all

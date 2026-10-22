@@ -1319,46 +1319,23 @@ Tensor Tensor::combine_legs(const std::vector<std::vector<int64_t>>& groups) con
 Tensor Tensor::absorb(const at::Tensor& values) const {
   if (!map_) throw std::logic_error("absorb: a plain tensor carries no bond leg to scale");
   TensorMap out = map();
-  if (out.space.codomain.empty()) {
-    throw std::invalid_argument("absorb: the tensor has no codomain leg to scale");
+  if (out.space.codomain.size() != 1) {
+    throw std::invalid_argument(
+        "absorb: the tensor needs exactly one codomain leg, the bond a split made");
   }
   const Leg& bond = out.space.codomain.front();
-  std::vector<int64_t> offsets(static_cast<std::size_t>(bond.nblocks()) + 1, 0);
-  for (int64_t qi = 0; qi < bond.nblocks(); ++qi) {
-    offsets.at(qi + 1) = offsets.at(qi) + bond.multiplicity(qi);
-  }
-  if (values.numel() != offsets.back()) {
+  if (values.numel() != bond.multiplets()) {
     throw std::invalid_argument("absorb: the values hold " + std::to_string(values.numel()) +
                                 " entries, not one per copy of the bond leg (" +
-                                std::to_string(offsets.back()) + ")");
+                                std::to_string(bond.multiplets()) + ")");
   }
-  const auto groups = trees_by_charge(*out.space.group, out.codomain_charges());
+  // The rows of a block run over the copies of the bond leg in its own order, so the row that
+  // names a copy takes the value of that copy.
   for (auto& [charge, block] : out.blocks) {
-    const SideLayout layout = side_layout(out.space.codomain, groups.at(charge));
-    at::Tensor scaled = block.clone();
-    for (std::size_t at = 0; at < layout.trees.size(); ++at) {
-      const Sector& stored = layout.trees.at(at).sectors.front();
-      int64_t qi = 0;
-      while (qi < bond.nblocks() && !(bond.sector(qi) == stored)) ++qi;
-      if (qi == bond.nblocks()) {
-        throw std::invalid_argument(
-            "absorb: a tree of a block carries a sector the bond leg does not");
-      }
-      const int64_t base = layout.base.at(at);
-      const int64_t count = layout.base.at(at + 1) - base;
-      const std::vector<int64_t>& shape = layout.mults.at(at);
-      std::vector<int64_t> broadcast(shape.size(), 1);
-      broadcast.at(0) = shape.at(0);
-      const at::Tensor weights = values.narrow(0, offsets.at(qi), bond.multiplicity(qi));
-      const at::Tensor cell =
-          block.narrow(0, base, count).view(shape) * weights.view(broadcast);
-      scaled.narrow(0, base, count).copy_(cell.reshape({count}));
-    }
-    block = scaled;
+    block = block * values.to(block.scalar_type()).view({-1, 1});
   }
   return Tensor(std::move(out));
 }
-
 
 Tensor& Tensor::operator+=(const Tensor& other) {
   if (!map_ || !other.map_) throw std::logic_error("a bare matrix does not add to a graded tensor");

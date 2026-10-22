@@ -246,45 +246,8 @@ class MPS:
         # bond of it against its dual, which pays the Frobenius-Schur phase of the bond sectors
         return abs(self._walk_contract({}))
 
-    def _apply_gate(self, gate: torch.Tensor, targets: tuple[int, int],
-                    max_bond_dim: int | None, tol: float) -> MPS:
-        '''
-        Return the state with a two-site operator applied to one bond.
-
-        Args:
-            gate: the matrix of the operator in the product basis of the two sites, in shape
-                (dim, dim, dim, dim) read as (bra1, bra2, ket1, ket2).
-            targets: the two neighbouring sites the gate acts on.
-            max_bond_dim (int | None): largest number of multiplets the split keeps; ``None`` keeps all.
-            tol (float): singular values at or below this are dropped.
-        Returns:
-            MPS: the state after the gate, not canonicalized.
-        '''
-        first, second = targets
-        if has_content(self.cat):
-            # a bare gate matrix carries every magnetic component, while a symmetry-adapted tensor
-            # stores only the reduced data of its fusion trees; the gate belongs on an MPO, whose
-            # bond legs carry the charge of every channel
-            raise NotImplementedError(
-                f'A bare matrix acts on a state of a trivial group; for {self.cat.name} write the '
-                f'operator as an MPO, whose bond legs carry the charge of every channel.')
-        physical = self.tensors[first].legs[1]
-        dim = physical.dim
-        matrix = Tensor.from_torch(
-            torch.as_tensor(gate, dtype=self.dtype, device=self.device).reshape(dim, dim, dim, dim),
-            legs=(physical, physical, physical.conj(), physical.conj()))
-        merged = cached_einsum('lsr,rtu->lstu', self.tensors[first], self.tensors[second])
-        merged = cached_einsum('lstu,pqst->lpqu', merged, matrix)
-        tensor, singular, rest = linalg.svd(merged, (0, 1), (2, 3), max_bond=max_bond_dim,
-                                            tol=tol, direction='right')
-        tensors = list(self.tensors)
-        tensors[first] = tensor
-        tensors[second] = linalg.absorb(rest, singular)
-        return self._from_tensors(tensors, self.cat, self.dtype, self.device)
-
     def apply(self,
-              operator: "MPO | torch.Tensor",
-              sites: "int | Sequence[int] | None" = None,
+              operator: "MPO",
               max_bond_dim: int | None = None,
               tol: float = 0.0) -> MPS:
         '''
@@ -303,34 +266,7 @@ class MPS:
             MPS: the state after the operator.
         Raises:
             ValueError: If the operator does not act on this state.
-            NotImplementedError: If a bare matrix is applied to a state of a non-trivial group.
         '''
-        if not isinstance(operator, MPO):
-            if sites is None:
-                raise ValueError('Applying a local operator needs the sites it acts on.')
-            targets = ((int(sites),) if isinstance(sites, int)
-                       else tuple(int(site) for site in sites))
-            if len(targets) == 2:
-                if targets[1] != targets[0] + 1:
-                    raise NotImplementedError(
-                        f'A two-site operator acts on two neighbours, not on {targets}.')
-                return self._apply_gate(operator, (targets[0], targets[1]), max_bond_dim, tol)
-            if len(targets) != 1:
-                raise NotImplementedError('A local operator acts on one site or on two neighbours.')
-            site = targets[0]
-            phys = self.tensors[site].legs[1]
-            if has_content(self.cat):
-                # a bare matrix carries every magnetic component, while a symmetry-adapted tensor
-                # stores only the reduced data of its fusion trees
-                raise NotImplementedError(
-                    f'A bare matrix acts on a state of a trivial group; for {self.cat.name} write '
-                    f'the operator as an MPO, whose bond legs carry the charge of every channel.')
-            matrix = Tensor.from_torch(
-                torch.as_tensor(operator, dtype=self.dtype, device=self.device),
-                legs=(phys, phys.conj()))
-            tensors = list(self.tensors)
-            tensors[site] = cached_einsum('lsr,ts->ltr', tensors[site], matrix)
-            return self._from_tensors(tensors, self.cat, self.dtype, self.device)
         if operator.L != self.L or operator.physical_dim != self.phys_dim:
             raise ValueError(
                 f'An operator of {operator.L} sites of dimension {operator.physical_dim} does not '
