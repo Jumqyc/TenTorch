@@ -1,6 +1,7 @@
 .venv/
 .vscode/
 __pycache__/
+.pytest_cache
 
 test_p/
 test/.cache/

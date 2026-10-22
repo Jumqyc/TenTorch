@@ -425,20 +425,30 @@ std::string Leg::repr() const {
 }
 
 bool Leg::operator==(const Leg& other) const {
-  return same_group(*group_, *other.group_) && sectors_ == other.sectors_ &&
-         slices_ == other.slices_ && qconj_ == other.qconj_;
+  // The space a leg carries is what its sectors point at, not how a tensor happens to store them:
+  // the same sector reads as (stored, +1) on one side of a tensor and as (dual, -1) on the other.
+  if (!same_group(*group_, *other.group_) || slices_ != other.slices_ ||
+      sectors_.size() != other.sectors_.size()) {
+    return false;
+  }
+  for (std::size_t at = 0; at < sectors_.size(); ++at) {
+    if (sector(static_cast<int64_t>(at), true) != other.sector(static_cast<int64_t>(at), true)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 std::size_t Leg::hash() const {
   std::size_t seed = std::hash<std::string>()(group_->name()) ^
                      std::hash<std::string>()(group_->type_name());
-  for (const Sector& sector : sectors_) {
-    seed = hash_sector(seed, sector);
+  for (std::size_t at = 0; at < sectors_.size(); ++at) {
+    seed = hash_sector(seed, sector(static_cast<int64_t>(at), true));
   }
   for (int64_t value : slices_) {
     seed = seed * 1000003 + std::hash<int64_t>()(value);
   }
-  return seed * 1000003 + std::hash<int64_t>()(qconj_);
+  return seed;
 }
 
 FusionTree::FusionTree(std::shared_ptr<FusionCategory> group, std::vector<Sector> sectors,

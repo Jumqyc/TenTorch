@@ -251,10 +251,15 @@ class MPO:
         components = {tuple(sector): tensor.to(dtype=self.dtype, device=self.device)
                       for sector, tensor in content(group).tensor_operators(
                           group, raw, phys, self.dtype, self.device).items()}
-        # one unit placement of a sector acts as the channel of its pair, and a projection divides
-        # by the norm that member of the multiplet carries
+        # what a site holds when one bond thread closes there is the fusion tree of the sector, so
+        # the channel the builder projects onto is the channel of that tree and not the channel of
+        # the multiplet the dense generators give: the two differ by a normalisation and by the
+        # order of their members, and a coefficient computed in one basis is applied in the other
+        trees = {sector: group.fusion_tensor(sector, phys.sectors[0], phys.sectors[0],
+                                             device=self.device).to(self.dtype)
+                 for sector in components}
         channels = {sector: content(group).channel(group, sector, tensor)
-                    for sector, tensor in components.items()}
+                    for sector, tensor in trees.items()}
         norms = {sector: torch.einsum('mab,mab->m', tensor.conj(), tensor).real
                  for sector, tensor in components.items()}
         # only the operators the couplings name are expanded; the trivial component is the one
@@ -297,15 +302,20 @@ class MPO:
                     f'The symmetry-adapted builder places two operators per term, not '
                     f'{len(operators)}; build such a Hamiltonian with cat=no_symmetry.')
             left_op, right_op = operators
-            pair = torch.kron(raw[left_op], raw[right_op]).reshape(-1)
+            # the channel is written with the bra of both operators on the row index, so the pair
+            # has to be laid out the same way; a plain kron puts them in the other order
+            pair = torch.einsum('ac,be->abce', raw[left_op], raw[right_op]).reshape(-1)
             pairs = []
             for sector in amplitudes[left_op]:
                 for partner in amplitudes[right_op]:
                     if total not in {tuple(outcome)
                                        for outcome in group.fusion_outcomes(sector, partner)}:
                         continue
-                    overlap = complex(coeff) * complex(
-                        torch.vdot(channels[sector].reshape(-1), pair))
+                    # the exact coefficient of the tree's channel in the pair, so the placement
+                    # reproduces the operator itself and not its shadow on another basis
+                    channel = channels[sector].reshape(-1)
+                    overlap = (complex(coeff) * complex(torch.vdot(channel, pair))
+                               / float(trees[sector].abs().pow(2).sum()))
                     if abs(overlap) < 1e-12:
                         continue
                     # the amplitude sits with its square root on either placement, and the closing
@@ -386,7 +396,7 @@ class MPO:
                     # together put the amplitude of the term on the bond
                     if site == first:
                         place(sector, 0, block, (0, base + max(span - 1, 0)),
-                              np.sqrt(coeff) * left_value / np.sqrt(group.quantum_dim(sector)))
+                              np.sqrt(coeff) * left_value)
                     if site == last:
                         end = 1 if site != self.L - 1 else 0
                         # the closing placement carries the conjugate component, whose phase is the
@@ -394,7 +404,7 @@ class MPO:
                         # on the other side of the cut, which is the minus that makes the term
                         # contract the operator with itself rather than with its adjoint
                         place(sector, block, 0, (base, end),
-                              np.sqrt(coeff) * right_value / np.sqrt(group.quantum_dim(sector)))
+                              np.sqrt(coeff) * right_value)
                     elif first < site < last:
                         # only the path that pairs the two bond legs through the trivial sector
                         # carries the operator across the site; the other fusion paths would add

@@ -60,9 +60,17 @@ const Sector& outcome_of(const FusionTree& tree, int64_t vertex) {
 
 Leg leg_of(std::shared_ptr<FusionCategory> group,
            const std::vector<std::pair<Sector, int64_t>>& summands, int64_t qconj) {
+  // The blocks of a leg stand in the order of their sectors, the order every other route gives
+  // them, so two legs that carry the same sectors compare equal after a split or a fusion.
+  std::vector<std::size_t> order(summands.size());
+  std::iota(order.begin(), order.end(), 0);
+  std::stable_sort(order.begin(), order.end(), [&summands](std::size_t a, std::size_t b) {
+    return summands.at(a).first < summands.at(b).first;
+  });
   std::vector<Sector> sectors;
   std::vector<int64_t> slices{0};
-  for (const auto& [sector, multiplicity] : summands) {
+  for (const std::size_t at : order) {
+    const auto& [sector, multiplicity] = summands.at(at);
     sectors.push_back(sector);
     slices.push_back(slices.back() + multiplicity * group->sector_dim(sector));
   }
@@ -109,8 +117,12 @@ at::Tensor tree_tensor(const FusionCategory& group, const FusionTree& tree,
   check_tree(group, tree);
   const auto options = at::TensorOptions().dtype(group.fusion_dtype()).device(device);
   const int64_t size = tree.size();
-  // An empty tree is the vector the coupled sector spans, not a scalar: its norm is that dimension.
-  if (size == 0) return at::ones({group.sector_dim(tree.coupled)}, options);
+  // An empty tree is the unit vector the coupled sector spans, so a block entry is the coefficient of
+  // the basis vector and a singular value is a singular value of the state, not of it times a dimension.
+  if (size == 0) {
+    const double dimension = static_cast<double>(group.sector_dim(tree.coupled));
+    return at::ones({group.sector_dim(tree.coupled)}, options) / std::sqrt(dimension);
+  }
   // A tree records the sector every leg carries on its space; the fusion runs on the sector the leg
   // points at, which is the conjugate one for a leg that carries duals.
   const auto physical = [&](int64_t axis) {
@@ -211,6 +223,7 @@ int64_t row_index(const SideLayout& layout, int64_t tree, const std::vector<int6
 #include <pybind11/complex.h>
 
 #include <map>
+#include <numeric>
 #include <stdexcept>
 
 namespace sym::engine {

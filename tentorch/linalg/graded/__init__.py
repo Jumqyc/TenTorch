@@ -113,13 +113,14 @@ def scale(t: Tensor, leg: int, values: torch.Tensor) -> Tensor:
         raise ValueError(f'scaling leg {leg} takes {at} values, one per copy of the leg, '
                          f'not {values.numel()}')
     dtype = t.blocks[0].dtype if t.blocks else torch.complex128
-    # The diagonal is a map from the scaled leg to its dual, so the leg it leaves behind keeps
-    # the direction and the side of the leg it scales, and the result carries the legs of *t*.
+    # The diagonal maps the dual of the scaled leg onto it, so the leg it glues is the dual and the
+    # leg the result carries is the one it scaled: a non-self-dual leg would otherwise come back
+    # at its dual space, and the result would no longer carry the legs of *t*.
     on_codomain = leg < len(t.map()['codomain'])
     diagonal = Tensor(
         charges=[tuple(bond.sector(qi)) for qi in range(bond.nblocks)],
         blocks=[block.to(dtype) for block in blocks],
-        legs=(bond, bond.conj()) if on_codomain else (bond.conj(), bond),
+        legs=(bond.conj(), bond) if on_codomain else (bond, bond.conj()),
         qtotal=bond.group.trivial_sector,
         codomain=1)
     count = len(t.legs)
