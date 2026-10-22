@@ -1324,15 +1324,29 @@ Tensor Tensor::absorb(const at::Tensor& values) const {
         "absorb: the tensor needs exactly one codomain leg, the bond a split made");
   }
   const Leg& bond = out.space.codomain.front();
-  if (values.numel() != bond.multiplets()) {
+  std::vector<int64_t> offsets(static_cast<std::size_t>(bond.nblocks()) + 1, 0);
+  for (int64_t qi = 0; qi < bond.nblocks(); ++qi) {
+    offsets.at(qi + 1) = offsets.at(qi) + bond.multiplicity(qi);
+  }
+  if (values.numel() != offsets.back()) {
     throw std::invalid_argument("absorb: the values hold " + std::to_string(values.numel()) +
                                 " entries, not one per copy of the bond leg (" +
-                                std::to_string(bond.multiplets()) + ")");
+                                std::to_string(offsets.back()) + ")");
   }
-  // The rows of a block run over the copies of the bond leg in its own order, so the row that
-  // names a copy takes the value of that copy.
+  // A block is keyed by the charge of the bond leg it came from, so its rows are the copies of
+  // that block of the leg and take that block's values.
+  const FusionCategory& group = *out.space.group;
   for (auto& [charge, block] : out.blocks) {
-    block = block * values.to(block.scalar_type()).view({-1, 1});
+    int64_t qi = 0;
+    while (qi < bond.nblocks() &&
+           !((bond.qconj() < 0 ? group.dual_sector(bond.sector(qi)) : bond.sector(qi)) == charge)) {
+      ++qi;
+    }
+    if (qi == bond.nblocks()) {
+      throw std::invalid_argument("absorb: a block carries a charge the bond leg does not");
+    }
+    const at::Tensor weights = values.narrow(0, offsets.at(qi), block.size(0));
+    block = block * weights.to(block.scalar_type()).view({-1, 1});
   }
   return Tensor(std::move(out));
 }
