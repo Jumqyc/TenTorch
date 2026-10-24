@@ -1,28 +1,27 @@
 # TenTorch
 
-A Python library for one-dimensional tensor networks whose tensors are block-sparse in a
-fusion category, built on PyTorch.
+A Python library for one-dimensional tensor networks whose tensors are block-sparse in a fusion category, built on PyTorch.
 
-The two closest neighbours leave a gap this library fills. TeNPy is a mature DMRG package built
-on numpy: it runs on the CPU, and the symmetry classes it releases are groups realised through
-Clebsch-Gordan coefficients, so its reach stops where a Clebsch-Gordan tensor stops (a newer
-fusion-category framework does exist on its development branch, with the same
-`FusionStyle`/`BraidingStyle` vocabulary this library uses). TensorKit.jl has the categorical
-formalism in full, but it is Julia, and although it can hold its dense blocks in CUDA arrays,
-GPU support for its truncation routines was still being stabilised in 2026. TenTorch keeps the
-categorical data — a sector, an associator and a braiding per block — and runs the dense blocks
-on the GPU as ordinary `torch` operations.
+There are several existing mature dmrg libraries. 
+
+- TeNPy is a mature DMRG package built
+on numpy and is generally easy to use, but: 
+  - it runs on the CPU,
+  - the symmetry classes it releases are groups realised through Clebsch-Gordan coefficients, so its reach stops where a Clebsch-Gordan tensor stops (a fusion-category framework does exist on its development branch). 
+
+- TensorKit.jl is another library, with the categorical approach in full, but:
+  - it is in Julia, whose ecosystem is not comparable with Python, 
+  - It is CPU native, although it can hold its dense blocks in CUDA arrays, GPU support for its truncation routines was still being stabilised in 2026. 
+  
+This library, TenTorch keeps the categorical data, the $F$ and $R$ symbol, and store the symmetry-adapted tensor on the GPU and the matrix computation through ordinary `torch` operations.
 
 
 ## What it does
 
-Density matrix renormalisation group (DMRG) ground states of one-dimensional Hamiltonians, with
-the symmetry of the model carried exactly by the tensors: U(1), Z_n, SU(2), Fibonacci,
-fermion parity, or no symmetry at all. A block is keyed by a fusion tree of sectors, so the
-block structure follows the category's fusion rules rather than a crystallographic group. The
-Fibonacci category has no Clebsch-Gordan tensor, so it is reachable exactly where the
-categorical route applies and nowhere else; the groups fall back to a dense contraction when the
-categorical route declines a layout.
+- Symmetry adapted tensor: currently the symmetry of the model carried exactly by the tensors: `U(1)`, `Z_n`, `SU(2)`, `SU(3)`, `Fibonacci`, `fermion parity`, or `no symmetry`. A block is keyed by a fusion tree of sectors, so the block structure follows the category's fusion rules rather than a crystallographic group. 
+- A standard 2-site DMRG algorithm. Perform DMRG sweep on a 1d quantum chain. 
+- An automated MPO construction: plug in the terms,  construct the MPO automatically. 
+- To be added. 
 
 
 ## Install
@@ -104,28 +103,7 @@ symmetry/cat   ->   symmetry/tree   ->   tensors   ->   linalg
 
 ## Status and limits
 
-Every contraction is block-sparse: a block is a dense array keyed by a fusion tree, and a
-contraction multiplies the matching blocks and weighs each output tree by the recoupling factors
-of the category. There is no dense fallback — a layout the engine cannot express raises rather
-than silently materialising a dense tensor.
-
-`tests/` checks the sweep against exact diagonalisation, which is the reference: the Heisenberg
-chain at L=4 and L=6, with and without SU(2); the transverse-field Ising chain at L=6; and the
-AKLT chain at L=6 against its analytic energy. Every one of them agrees to better than 1e-10.
-
-Known limits:
-
-- The adapted MPO places an operator multiplet of rank two or more with the wrong weight, so a
-  chain with a spin greater than one half misses the exact energy (`heisenberg(4, S=1.0)` returns
-  -0.6458 against -4.6458) while every spin-one-half chain is exact.
-- A chain whose boundary carries a non-trivial charge does not canonicalise: a block is keyed by
-  the root of its codomain, and a total charge other than the trivial one has more than one domain
-  root that fuses to it.
-- `aklt()` builds without a multiplet-carrying category: its biquadratic term is a product of two
-  site operators, which the adapted MPO route cannot place on invariant channels yet, so it
-  raises instead of returning a wrong energy.
-- A symmetry-free chain is the slow path, because its bond cap grows like $2^i$ while SU(2) caps
-  the number of multiplets.
+Currently the whole symmetry tensor layer is being rewritten thoroughly. If you wish to use this library, use the historical version on Github. 
 
 ## Documentation and tests
 

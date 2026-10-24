@@ -1,140 +1,91 @@
-// The Fibonacci fusion category: the fusion rules, the quantum dimensions, and the F and R symbols
-// that recouple it.  Every multiplicity is one, so an amplitude is a single number.
+// The Fibonacci category: one nontrivial sector of quantum dimension the golden ratio.
 #include "fibonacci.h"
 
 #include <cmath>
 #include <complex>
-#include <memory>
-#include <string>
+#include <cstdint>
+#include <numbers>
 #include <vector>
 
 namespace sym {
 
 namespace {
 
-// The label of the trivial object 1, and the label of tau.
-constexpr int64_t TRIVIAL = 0;
-constexpr int64_t TAU = 1;
+constexpr int64_t kTrivial = 0;
+constexpr int64_t kTau = 1;
 
-// The golden ratio, the quantum dimension of tau.
-double golden_ratio() {
-  return (1.0 + std::sqrt(5.0)) / 2.0;
-}
-
-at::TensorOptions options(const c10::Device& device) {
-  return at::TensorOptions().dtype(at::kComplexDouble).device(device);
-}
+double golden_ratio() { return (1.0 + std::sqrt(5.0)) / 2.0; }
 
 }  // namespace
 
-FibonacciCategory::FibonacciCategory()
-    : FusionCategory("FibonacciCategory", FusionStyle::general, BraidingStyle::anyonic,
-                     Sector{TRIVIAL}, "Fibonacci") {}
+FibonacciCategory::FibonacciCategory(c10::Device device)
+    : FusionCategory("FibonacciCategory", device) {}
 
-bool FibonacciCategory::is_valid_sector(const Sector& a) const {
-  return a.size() == 1 && (a[0] == TRIVIAL || a[0] == TAU);
+std::vector<Outcome> FibonacciCategory::compute_outcomes(const Sector& a, const Sector& b) const {
+  if (a.at(0) == kTrivial) return {{b, 1}};
+  if (b.at(0) == kTrivial) return {{a, 1}};
+  return {{{kTrivial}, 1}, {{kTau}, 1}};
 }
 
-// Both simple objects are self-dual.
-Sector FibonacciCategory::dual_sector(const Sector& a) const {
-  if (!is_valid_sector(a)) {
-    throw value_error("The Fibonacci category has no sector " + std::to_string(a.at(0)) + ".");
+at::Tensor FibonacciCategory::F_symbol(const Sector& a, const Sector& b, const Sector& c,
+                                       const Sector& d) const {
+  std::vector<int64_t> rows;
+  for (const Outcome& e : outcomes(a, b)) {
+    if (n_symbol(e.sector, c, d) > 0) rows.push_back(e.sector.at(0));
   }
-  return a;
-}
-
-std::vector<Sector> FibonacciCategory::fusion_outcomes(const Sector& a, const Sector& b) const {
-  if (!is_valid_sector(a) || !is_valid_sector(b)) {
-    throw value_error("The Fibonacci category fuses only the sectors 0 and 1.");
+  std::vector<int64_t> columns;
+  for (const Outcome& f : outcomes(b, c)) {
+    if (n_symbol(a, f.sector, d) > 0) columns.push_back(f.sector.at(0));
   }
-  if (a[0] == TRIVIAL) {
-    return {b};
-  }
-  if (b[0] == TRIVIAL) {
-    return {a};
-  }
-  return {Sector{TRIVIAL}, Sector{TAU}};
-}
-
-// One index per simple object: this is the state count the dense code needs, while the dimension
-// that weighs a recoupling is `quantum_dim`, which is irrational here.
-int64_t FibonacciCategory::sector_dim(const Sector& a) const {
-  if (!is_valid_sector(a)) {
-    throw value_error("The Fibonacci category has no sector " + std::to_string(a.at(0)) + ".");
-  }
-  return 1;
-}
-
-double FibonacciCategory::quantum_dim(const Sector& a) const {
-  if (!is_valid_sector(a)) {
-    throw value_error("The Fibonacci category has no sector " + std::to_string(a.at(0)) + ".");
-  }
-  return a[0] == TAU ? golden_ratio() : 1.0;
-}
-
-// There is no Clebsch-Gordan calculus behind this category: it has fusion and F/R symbols only.
-at::Tensor FibonacciCategory::fusion_tensor(const Sector&, const Sector&, const Sector&,
-                                            const c10::Device&, int64_t) const {
-  throw not_implemented_error("The Fibonacci category has no Clebsch-Gordan tensor.");
-}
-
-// F^(a b c)_d over the channels e of (a b) and f of (b c): 1 unless all four are tau, where it is
-// the golden-ratio matrix [[1/phi, 1/sqrt(phi)], [1/sqrt(phi), -1/phi]].
-at::Tensor FibonacciCategory::associator(const Sector& a, const Sector& b, const Sector& c,
-                                         const Sector& d, const Sector& e, const Sector& f,
-                                         const c10::Device& device) const {
-  if (!can_fuse_to(a, b, e) || !can_fuse_to(b, c, f) || !can_fuse_to(e, c, d) ||
-      !can_fuse_to(a, f, d)) {
-    return at::empty({0, 0, 0, 0}, options(device));
-  }
-  double value = 1.0;
-  if (a[0] == TAU && b[0] == TAU && c[0] == TAU && d[0] == TAU) {
+  const int64_t side = static_cast<int64_t>(rows.size());
+  const int64_t other = static_cast<int64_t>(columns.size());
+  at::Tensor value = at::zeros({side, other}, at::TensorOptions().dtype(dtype()));
+  if (side == 0 || other == 0) return value.to(device());
+  if (a.at(0) == kTau && b.at(0) == kTau && c.at(0) == kTau && d.at(0) == kTau) {
+    // The golden matrix, the only recoupling of this category that is not the identity.
     const double phi = golden_ratio();
-    if (e[0] == TRIVIAL) {
-      value = f[0] == TRIVIAL ? 1.0 / phi : 1.0 / std::sqrt(phi);
-    } else {
-      value = f[0] == TRIVIAL ? 1.0 / std::sqrt(phi) : -1.0 / phi;
+    const double golden[2][2] = {{1.0 / phi, 1.0 / std::sqrt(phi)},
+                                 {1.0 / std::sqrt(phi), -1.0 / phi}};
+    for (int64_t i = 0; i < side; ++i) {
+      for (int64_t j = 0; j < other; ++j) {
+        value[i][j] = golden[rows[i]][columns[j]];
+      }
     }
+    return value.to(device());
   }
-  return at::full({1, 1, 1, 1}, c10::complex<double>(value, 0.0), options(device));
+  // Every other matrix has one entry per coupling, and each of those is the identity.
+  return value.fill_(1.0).to(device());
 }
 
-// R^(a b)_c: 1 unless both are tau, where the phases are exp(-4 pi i / 5) to the trivial channel
-// and exp(3 pi i / 5) to tau.
-at::Tensor FibonacciCategory::braiding(const Sector& a, const Sector& b, const Sector& c,
-                                       const c10::Device& device) const {
-  if (!can_fuse_to(a, b, c) || !can_fuse_to(b, a, c)) {
-    return at::empty({0, 0}, options(device));
+at::Tensor FibonacciCategory::R_symbol(const Sector& b, const Sector& c) const {
+  std::vector<c10::complex<double>> phases;
+  for (const Outcome& e : outcomes(b, c)) {
+    c10::complex<double> phase(1.0, 0.0);
+    if (b.at(0) == kTau && c.at(0) == kTau) {
+      phase = e.sector.at(0) == kTrivial ? std::polar(1.0, -4.0 * std::numbers::pi / 5.0)
+                                         : std::polar(1.0, 3.0 * std::numbers::pi / 5.0);
+    }
+    phases.push_back(phase);
   }
-  std::complex<double> value(1.0, 0.0);
-  if (a[0] == TAU && b[0] == TAU) {
-    value = std::polar(1.0, c[0] == TRIVIAL ? -4.0 * M_PI / 5.0 : 3.0 * M_PI / 5.0);
+  const int64_t size = static_cast<int64_t>(phases.size());
+  at::Tensor value = at::zeros({size, size}, at::TensorOptions().dtype(dtype()));
+  for (int64_t i = 0; i < size; ++i) {
+    value[i][i] = phases[i];
   }
-  return at::full({1, 1}, c10::complex<double>(value), options(device));
+  return value.to(device());
 }
 
-// The reduced index of a simple object is one-dimensional, so its conjugate basis is the identity.
-at::Tensor FibonacciCategory::duality_matrix(const Sector& a, const c10::Device& device) const {
-  if (!is_valid_sector(a)) {
-    throw value_error("The Fibonacci category has no sector " + std::to_string(a.at(0)) + ".");
-  }
-  return at::ones({1, 1}, options(device));
+double FibonacciCategory::q_dim(Sector a) const {
+  return a.at(0) == kTau ? golden_ratio() : 1.0;
 }
 
-int64_t FibonacciCategory::reference_index(const Sector& a) const {
-  if (!is_valid_sector(a)) {
-    throw value_error("The Fibonacci category has no sector " + std::to_string(a.at(0)) + ".");
-  }
-  return 0;
-}
+int FibonacciCategory::dim(Sector) const { return 1; }
 
-c10::ScalarType FibonacciCategory::fusion_dtype() const {
-  return at::kComplexDouble;
-}
+Sector FibonacciCategory::dual(Sector a) const { return a; }
 
-bool FibonacciCategory::is_same_symmetry(const FusionCategory& other) const {
-  return other.type_name() == type_name();
-}
+Sector FibonacciCategory::trivial() const { return {kTrivial}; }
+
+c10::ScalarType FibonacciCategory::dtype() const { return at::kComplexDouble; }
 
 const std::shared_ptr<FusionCategory>& fibonacci_category() {
   static const std::shared_ptr<FusionCategory> instance = std::make_shared<FibonacciCategory>();
@@ -142,10 +93,10 @@ const std::shared_ptr<FusionCategory>& fibonacci_category() {
 }
 
 void bind_fibonacci(py::module_& m) {
-  py::class_<sym::FibonacciCategory, sym::FusionCategory, std::shared_ptr<sym::FibonacciCategory>>(
+  py::class_<FibonacciCategory, FusionCategory, std::shared_ptr<FibonacciCategory>>(
       m, "FibonacciCategory")
       .def(py::init<>());
-  m.attr("fibonacci") = py::cast(sym::fibonacci_category());
+  m.attr("fibonacci_category") = py::cast(fibonacci_category());
 }
 
 }  // namespace sym

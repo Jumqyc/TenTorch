@@ -889,7 +889,7 @@ The second loop braids. Fuse $a$ and $b$ to $u$ and then fuse $u$ with $c$, so t
 \end{tikzpicture}
 \end{center}
 Both compositions act on the same tree and must agree: that is the \emph{hexagon}:\begin{align}
-    \sum_{v} (F^{d}_{abc})_{uv}\,(R_{ac}^{v})\,(F^{d}_{cab})_{vw} = (R_{ab}^{u})\,(F^{d}_{bac})_{uw}\,(R_{bc}^{w}).
+    \sum_{v} (F^{d}_{abc})_{uv}\,(R_{bc}^v)\,(F^{d}_{acb})_{vw} = (R_{uc}^d)\,(F^{d}_{cab})_{uw}\,(R_{ac}^w).
 \end{align}
 
 For a representation neither identity is an extra assumption. $F$ is an overlap of CG tensors, and both sides of the pentagon are the same overlap computed in two ways, so the identity follows for free --- for $\mathsf{SU}(2)$ it is the Biedenharn--Elliott relation among the $6j$ symbols, and the hexagon is the corresponding relation between the $6j$ and the $R$ phases. 
@@ -900,9 +900,162 @@ As we will see later, the only information we need to compute any tensor is the 
 Group representations are a special case of fusion categories, but the definition is far more general. 
 
 There is also a freedom in the symbols. Multiplying every vector of a copy by a phase (by a unitary matrix when the copy space is more than one-dimensional) changes both $F$ and $R$ while leaving every invariant unchanged, so the pair is defined only up to that gauge. For $\mathsf{SU}(2)$ this is the arbitrariness of the CG phase convention, and it is why different tables differ by signs and phases while agreeing on observables.
+\subsection{The Fibonacci category}
+\label{sec:fibonacci}
 
-\subsection{One shape is enough}
-Any two trees over the same ordered legs differ by a sequence of re-bracketings and exchanges: an $F$ moves an inner charge from one edge to the next, an $R$ exchanges two neighbouring legs, and a leg glued to the trivial charge --- a bend --- is a single $F$ entry contracted with the trivial charge, which comes out with weight $\sqrt{d_a d_b/d_c}$ and, for a bent leg that is a dual, a Frobenius--Schur phase. Since a sequence of these moves reaches any labelling, it is enough to store one shape. The engine keeps the left-nested chain, $(((l_1l_2)l_3)\cdots)l_r$, so that the only freedom left in a block is which leg sits at which position.
+Every example so far came from a group, and every symbol in it was computed from Clebsch--Gordan tensors. The axioms of Section~\ref{sec:frandr} never mention a group, and the smallest solution that is not a representation category has two sectors, one non-trivial fusion rule, and no Clebsch--Gordan tensor at all. It is called the \emph{Fibonacci category}, and it is the standard test of whether an engine really works from the fusion rules alone.
 
-\subsection{Nothing else is needed}
-Every coefficient of every block is, after the last two sections, a product of entries of $F$ and $R$; the CG coefficients never appear individually again. A tensor engine can therefore be handed the fusion rules, the duals, $F$ and $R$, and nothing else. That is exactly the interface of the library, and it is why the same code runs for $\mathbb Z_n$, $\mathsf{SU}(2)$, $\mathsf{SU}(3)$ and for a category with no CG coefficients at all, such as the Fibonacci category, whose only objects are $\mathbf{1}$ and $\tau$ with $\tau\otimes\tau=\mathbf{1}\oplus\tau$, quantum dimension $\phi$, and $F$ and $R$ given directly.
+\paragraph{Fusion rules.} The sectors are the trivial one $\mathbf 1$ and one more,
+$\tau$, with
+\begin{align}
+\mathbf 1\otimes a=a\otimes\mathbf 1=a,\qquad \tau\otimes\tau=\mathbf 1\oplus\tau .
+\end{align}
+Since $\tau$ appears on the right hand side of its own fusion rule, no other sector can
+be its dual: $\bar{\mathbf 1}=\mathbf 1$ and $\bar\tau=\tau$. There is no multiplicity
+anywhere, $N^{\tau}_{\tau\tau}=1$, so every tree in this category is labelled by charges
+alone, and the copy index of Section~\ref{sec:cg} never appears.
+
+\paragraph{The quantum dimension} Apply the dimension count
+$\sum_c d_c=d_ad_b$ to the fusion rule of $\tau$ with itself:
+\begin{align}
+d_{\mathbf 1}+d_\tau=d_\tau^2,\qquad d_{\mathbf 1}=1,
+\end{align}
+so $d_\tau$ is the positive root of $x^2-x-1=0$,
+\begin{align}
+d_\tau=\varphi=\frac{1+\sqrt5}{2}.
+\end{align}
+The sector space $\mathscr V^\tau$ is one-dimensional, so a leg that carries one copy of $\tau$ has $\dim=1$ and the block of a rank-2 tensor is a single number; but the weight that
+enters the fusion rules, and every recoupling weight with it, is $\varphi$. For a group
+the two numbers agree, because a sector of dimension $d$ is a $d$-dimensional space.
+Here they cannot: the fusion rule itself fixes $\varphi$, and no finite-dimensional
+irrep of a group has this fusion rule with $d_\tau=\varphi$.
+
+\paragraph{The $F$ symbol.} Three $\tau$ legs coupled to the root $\tau$ have two
+admissible inner charges, $\mathbf 1$ and $\tau$, so $F^{\tau}_{\tau\tau\tau}$ is a
+$2\times2$ matrix; for the root $\mathbf 1$ only the inner charge $\mathbf 1$ is allowed
+and $F^{\mathbf 1}_{\tau\tau\tau}$ is the $1\times1$ matrix $(1)$. The pentagon of
+Section~\ref{sec:frandr}, written for four $\tau$ legs, fixes the $2\times2$ matrix up to
+a phase on each of its two basis vectors, and with both phases set to one it is
+\begin{align}
+F^{\tau}_{\tau\tau\tau}
+=\begin{pmatrix}
+1/\varphi & 1/\sqrt{\varphi}\\
+1/\sqrt{\varphi} & -1/\varphi
+\end{pmatrix}
+=\begin{pmatrix}
+0.618034 & 0.786151\\
+0.786151 & -0.618034
+\end{pmatrix},
+\end{align}
+which is exactly the matrix the engine's \texttt{associator} returns. It is real and
+symmetric, and
+\begin{align}
+\bigl(F^{\tau}_{\tau\tau\tau}\bigr)^2=\mathbf 1,\qquad
+\det F^{\tau}_{\tau\tau\tau}=-1,\qquad
+\operatorname{tr}F^{\tau}_{\tau\tau\tau}=0 ,
+\end{align}
+so $F$ is its own inverse, its own transpose and its own adjoint, and its eigenvalues
+are $+1$ and $-1$. The two tree bases are related by a reflection, not a rotation, and
+the two entries $1/\varphi$ and $1/\sqrt{\varphi}$ are the only numbers in the category
+besides $\varphi$ itself.
+
+\paragraph{The $R$ symbol and the topological spin.} Exchanging the two legs of a node
+with charges $(\tau,\tau)$ exchanges two copies of a self-dual sector, so the $R$ symbol
+is a phase, one for each allowed root:
+\begin{align}
+R^{\mathbf 1}_{\tau\tau},\qquad R^{\tau}_{\tau\tau},\qquad |R^{\mathbf 1}_{\tau\tau}|=|R^{\tau}_{\tau\tau}|=1 ,
+\end{align}
+while braiding with the vacuum is the identity, $R^{\tau}_{\mathbf 1\tau}=R^{\tau}_{\tau\mathbf 1}=1$.
+The topological spin of the sector, $\theta_\tau=e^{4\pi i/5}$, fixes one of the two: for
+a self-dual sector the hexagon together with the duality relation gives
+\begin{align}
+R^{\mathbf 1}_{\tau\tau}=\theta_\tau^{-1}=e^{-4\pi i/5}=-0.809017-0.587785\,i ,
+\end{align}
+and the other is a sign away from the square root of the same phase,
+\begin{align}
+R^{\tau}_{\tau\tau}=e^{3\pi i/5}=-0.309017+0.951057\,i ,
+\end{align}
+where the sign is not fixed by the axioms and is a gauge choice in the sense of
+Section~\ref{sec:frandr}. These are the two phases the engine stores: its
+\texttt{braiding}$(\tau,\tau,\mathbf 1)$ and \texttt{braiding}$(\tau,\tau,\tau)$ return
+the two numbers above.
+
+Their squares carry the physical content,
+\begin{align}
+\bigl(R^{\mathbf 1}_{\tau\tau}\bigr)^2=e^{-8\pi i/5},\qquad
+\bigl(R^{\tau}_{\tau\tau}\bigr)^2=e^{6\pi i/5},
+\end{align}
+and neither is one. Two exchanges do not return the state, so the braiding is neither
+bosonic nor fermionic but anyonic: the swapping of two sectors has a phase that is not
+an eigenvalue of $\pm1$. Every group example in this document has $R=\pm1$ and is
+therefore blind to this; the Fibonacci category is the smallest case where the braiding
+is genuinely complex.
+
+\paragraph{What a single exchange does to the fusion channel.} The braid acts on the
+two-dimensional space spanned by the two inner charges, and it does not preserve them:
+in the tree basis $F\,R\,F$ (with $F^2=\mathbf 1$, so this is the conjugate of $R$) is
+\begin{align}
+F^{\tau}_{\tau\tau\tau}\,
+\begin{pmatrix}R^{\mathbf 1}_{\tau\tau}&0\\ 0&R^{\tau}_{\tau\tau}\end{pmatrix}
+F^{\tau}_{\tau\tau\tau}
+=
+\begin{pmatrix}
+-0.500000+0.363271\,i & -0.242934-0.747674\,i\\
+-0.242934-0.747674\,i & -0.618034
+\end{pmatrix},
+\end{align}
+whose entries have moduli $1/\varphi=0.618034$ on the diagonal and
+$1/\sqrt{\varphi}=0.786151$ off it, and whose eigenvalues are again
+$R^{\mathbf 1}_{\tau\tau}$ and $R^{\tau}_{\tau\tau}$. The off-diagonal entries are the
+amplitudes for one exchange to change the inner charge: a pair that fuses to $\mathbf 1$
+comes out as a superposition of $\mathbf 1$ and $\tau$. No group can do this, and this
+is the property that makes the category useful for topological quantum computation.
+
+\paragraph{Gauge freedom.} The two phases of the basis vectors of $\mathscr V^\tau$ at
+each node change $F$ and $R$ without changing any invariant. In this category that is
+the whole freedom: the fusion rules, $\varphi$, the eigenvalues of $F\,R\,F$ and the
+squares of the two $R$ symbols are fixed, and the signs of $F$ and of $R^{\tau}_{\tau\tau}$
+are not. A calculation that depends on the sign of a single $R$ entry has a gauge
+dependence; a calculation that depends only on products around a closed diagram does not.
+
+\paragraph{What the engine does with it.} The category is available as
+\texttt{tentorch.fibonacci}. It reports \texttt{sector\_dim}$(\tau)=1$ and
+\texttt{quantum\_dim}$(\tau)=1.618034$, the two numbers that already differ above, and a
+leg carrying $\tau$ has $\dim=1$. A rank-2 tensor with two $\tau$ legs and total charge
+$\tau$ has a single block, of shape $(1,1)$: one tree on each side, and the stored
+number is the coefficient of the fused state. A rank-3 tensor with three $\tau$ legs and
+total charge $\tau$ has a single block of shape $(1,2)$: one tree on the codomain side
+(the empty tree, the total charge itself) and two on the domain side, because the first
+two legs may fuse to $\mathbf 1$ or to $\tau$. Contraction and the three factorizations
+of Section~\ref{sec:linalg} run exactly as before, per block, with the bond
+leg carrying $(\text{charge},\text{kept count})$; the only thing that changes is where
+the numbers come from. Every move of a tree asks the category for an $F$ entry or an $R$
+entry and receives the values written above, and every bend receives the weight
+$\sqrt{d_c/d_a}=\sqrt{\varphi^{\pm1}}$, which is irrational.
+
+The one thing the engine cannot do here is rebuild a dense component array, because
+there is no Clebsch--Gordan tensor to rebuild it from:
+\texttt{fusion\_tensor} raises
+\begin{quote}\small\ttfamily\raggedright
+NotImplementedError: The Fibonacci category has no Clebsch-Gordan tensor
+\end{quote}
+and with it the flat-basis readout of Section~\ref{sec:tree} is unavailable. That is precisely the point of the example.
+Contraction and factorization never ask for a component array: they act on the
+coefficients in the orthonormal tree basis, so a category without any notion of
+``components'' is a perfectly ordinary input for them, and the arithmetic is the same as
+for $\mathsf{SU}(2)$ with different numbers.
+
+One caveat is worth stating. When a fusion rule has a multiplicity, the total charge of
+a tensor does not always pin down the charge on the other side of a block, and the
+engine refuses rather than guessing. Contracting two Fibonacci tensors can raise
+\begin{quote}\small\ttfamily\raggedright
+ValueError: a block is fixed by the root of its codomain, and more than one domain root
+fuses with it to the total charge of this tensor
+\end{quote}
+which is the multiplicity of the fusion rule reappearing as an ambiguity the total
+charge alone cannot resolve. A group example never shows this, because for a group the
+total charge fixes the partner charge uniquely.
+
+\section{Linear Algebra of tensors}
+\label{sec:linalg}
+In this section we will see how to use the fusion category to compute any tensor. In particular, we will first discuss the contraction of two tensors, then discuss the singular value decomposition of a tensor. 

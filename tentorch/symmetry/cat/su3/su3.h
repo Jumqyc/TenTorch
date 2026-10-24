@@ -46,27 +46,24 @@ void clear_caches();
 
 namespace sym {
 
+/**
+ * @brief SU(3) in the basis of the Dynkin labels $(p, q)$.
+ * @details The octet fuses with itself to two independent octets, so a vertex carries a copy index
+ * and a recoupling move is a matrix over those copies rather than a phase.
+ */
 class SU3Symmetry : public Group {
  public:
-  SU3Symmetry();
-  bool is_valid_sector(const Sector& a) const override;
-  Sector dual_sector(const Sector& a) const override;
-  std::vector<Sector> fusion_outcomes(const Sector& a, const Sector& b) const override;
-  int64_t sector_dim(const Sector& a) const override;
-  // SU(3) pairs the associators of a vertex with multiplicity into matrices over its copy spaces,
-  // which the diagram weight contracts copy by copy.
-  at::Tensor fusion_tensor(const Sector& a, const Sector& b, const Sector& c,
-                           const c10::Device& device, int64_t copy = 0) const override;
-  int64_t n_symbol(const Sector& a, const Sector& b, const Sector& c) const override;
-  at::Tensor duality_matrix(const Sector& a, const c10::Device& device) const override;
-  at::Tensor invariant_form(const Sector& a, const c10::Device& device) const override;
-  int64_t reference_index(const Sector& a) const override;
-  c10::ScalarType fusion_dtype() const override;
-  double dual_sign(const Sector& sector) const override;
-  double dual_phase(const Sector& sector) const override;
-  double conjugation_phase(const Sector& sector) const override;
-  bool is_same_symmetry(const FusionCategory& other) const override;
-  void clear_caches() const override;
+  explicit SU3Symmetry(c10::Device device = default_device());
+
+  Sector dual(Sector a) const override;
+  Sector trivial() const override;
+  int dim(Sector a) const override;
+  c10::ScalarType dtype() const override;
+
+ protected:
+  std::vector<Outcome> compute_outcomes(const Sector& a, const Sector& b) const override;
+  at::Tensor compute_clebsch_gordan(const Sector& a, const Sector& b, const Sector& c,
+                                    int64_t copy) const override;
 };
 
 // The SU(3) group the engine runs on.

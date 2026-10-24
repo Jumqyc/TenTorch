@@ -1,136 +1,108 @@
 // The abelian groups: no symmetry, U(1), Z_N and fermion parity.
 #include "abelian.h"
 
+#include <pybind11/stl.h>
+
+#include <cstdint>
 #include <map>
+#include <memory>
+#include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace sym {
 
 namespace {
 
-std::string z_n_name(int64_t modulus) {
-  if (modulus <= 0) {
-    throw value_error("The modulus of a Z_N group must be positive, not " +
-                      std::to_string(modulus) + ".");
-  }
-  return "Z" + std::to_string(modulus);
+// The residue of `charge` in [0, modulus), so that every sector is the one the group names.
+int64_t residue(int64_t charge, int64_t modulus) {
+  const int64_t reduced = charge % modulus;
+  return reduced < 0 ? reduced + modulus : reduced;
 }
 
-// The non-negative residue of `charge` modulo `modulus`.
-int64_t residue(int64_t charge, int64_t modulus) {
-  const int64_t rest = charge % modulus;
-  return rest < 0 ? rest + modulus : rest;
+// The name of the group, and the one place a non-positive modulus is rejected.
+std::string z_n_name(int64_t modulus) {
+  if (modulus <= 0) {
+    throw std::invalid_argument("The modulus of Z_N must be positive, not " +
+                                std::to_string(modulus) + ".");
+  }
+  return "Z_" + std::to_string(modulus);
 }
 
 }  // namespace
 
-AbelianGroup::AbelianGroup(std::string type_name, Sector trivial_sector, std::string group_name,
-                           BraidingStyle braiding_style)
-    : Group(std::move(type_name), FusionStyle::single, braiding_style, std::move(trivial_sector),
-            std::move(group_name)) {}
-
-int64_t AbelianGroup::sector_dim(const Sector&) const {
-  return 1;
+std::vector<Outcome> AbelianGroup::compute_outcomes(const Sector& a, const Sector& b) const {
+  return {{combine(a, b), 1}};
 }
 
-at::Tensor AbelianGroup::fusion_tensor(const Sector& a, const Sector& b, const Sector& c,
-                                       const c10::Device& device, int64_t copy) const {
-  if (!can_fuse_to(a, b, c)) {
-    throw value_error("The sectors do not fuse to the requested one.");
-  }
-  return at::ones({1, 1, 1}, at::TensorOptions().dtype(fusion_dtype()).device(device));
+Sector AbelianGroup::dual(Sector a) const { return inverse(a); }
+
+Sector AbelianGroup::trivial() const { return {0}; }
+
+int AbelianGroup::dim(Sector) const { return 1; }
+
+c10::ScalarType AbelianGroup::dtype() const { return at::kDouble; }
+
+at::Tensor AbelianGroup::compute_clebsch_gordan(const Sector& a, const Sector& b, const Sector& c,
+                                        int64_t copy) const {
+  TORCH_CHECK(copy == 0, "An abelian fusion couples at most once, not ", copy + 1, " times.");
+  TORCH_CHECK(combine(a, b) == c, "The sectors do not fuse to the requested one.");
+  return at::ones({1, 1, 1}, at::TensorOptions().dtype(dtype()).device(device()));
 }
 
-at::Tensor AbelianGroup::duality_matrix(const Sector&, const c10::Device& device) const {
-  return at::ones({1, 1}, at::TensorOptions().dtype(fusion_dtype()).device(device));
+NoSymmetry::NoSymmetry(c10::Device device) : AbelianGroup("NoSymmetry", device) {}
+
+Sector NoSymmetry::combine(const Sector&, const Sector&) const { return {0}; }
+
+Sector NoSymmetry::inverse(const Sector&) const { return {0}; }
+
+U1Symmetry::U1Symmetry(c10::Device device) : AbelianGroup("U(1)", device) {}
+
+Sector U1Symmetry::combine(const Sector& a, const Sector& b) const {
+  return {a.at(0) + b.at(0)};
 }
 
-at::Tensor AbelianGroup::invariant_form(const Sector&, const c10::Device& device) const {
-  return at::ones({1, 1}, at::TensorOptions().dtype(fusion_dtype()).device(device));
+Sector U1Symmetry::inverse(const Sector& a) const { return {-a.at(0)}; }
+
+ZNSymmetry::ZNSymmetry(int64_t modulus, c10::Device device)
+    : AbelianGroup(z_n_name(modulus), device), modulus_(modulus) {}
+
+Sector ZNSymmetry::combine(const Sector& a, const Sector& b) const {
+  return {residue(a.at(0) + b.at(0), modulus_)};
 }
 
-c10::ScalarType AbelianGroup::fusion_dtype() const {
-  return at::kDouble;
+Sector ZNSymmetry::inverse(const Sector& a) const { return {residue(-a.at(0), modulus_)}; }
+
+FermionParity::FermionParity(c10::Device device) : FusionCategory("FermionParity", device) {}
+
+std::vector<Outcome> FermionParity::compute_outcomes(const Sector& a, const Sector& b) const {
+  return {{{residue(a.at(0) + b.at(0), 2)}, 1}};
 }
 
-NoSymmetry::NoSymmetry() : AbelianGroup("NoSymmetry", {0}, "NoSymmetry") {}
-
-bool NoSymmetry::is_valid_sector(const Sector& a) const {
-  return a == Sector{0};
+at::Tensor FermionParity::F_symbol(const Sector& a, const Sector& b, const Sector& c,
+                                   const Sector& d) const {
+  // One vertex per triple, so the associator is the single entry 1 exactly when the outer sector is
+  // the one the three legs fuse to, and an empty matrix otherwise.
+  const int64_t side = residue(a.at(0) + b.at(0) + c.at(0), 2) == d.at(0) ? 1 : 0;
+  return at::ones({side, side}, at::TensorOptions().dtype(dtype()).device(device()));
 }
 
-Sector NoSymmetry::dual_sector(const Sector& a) const {
-  return a;
+at::Tensor FermionParity::R_symbol(const Sector& b, const Sector& c) const {
+  // The braiding is the Koszul sign: a fermion passes another fermion with -1, and nothing else
+  // picks up a sign.
+  const double sign = b.at(0) == 1 && c.at(0) == 1 ? -1.0 : 1.0;
+  return at::full({1, 1}, sign, at::TensorOptions().dtype(dtype()).device(device()));
 }
 
-std::vector<Sector> NoSymmetry::fusion_outcomes(const Sector& a, const Sector&) const {
-  return {a};
-}
+double FermionParity::q_dim(Sector) const { return 1.0; }
 
-bool NoSymmetry::is_same_symmetry(const FusionCategory& other) const {
-  return other.type_name() == "NoSymmetry";
-}
+int FermionParity::dim(Sector) const { return 1; }
 
-bool NoSymmetry::is_trivial() const {
-  return true;
-}
+Sector FermionParity::dual(Sector a) const { return a; }
 
-U1Symmetry::U1Symmetry() : AbelianGroup("U1Symmetry", {0}, "U(1)") {}
+Sector FermionParity::trivial() const { return {0}; }
 
-bool U1Symmetry::is_valid_sector(const Sector& a) const {
-  return a.size() == 1;
-}
-
-Sector U1Symmetry::dual_sector(const Sector& a) const {
-  return {-a.at(0)};
-}
-
-std::vector<Sector> U1Symmetry::fusion_outcomes(const Sector& a, const Sector& b) const {
-  return {{a.at(0) + b.at(0)}};
-}
-
-bool U1Symmetry::is_same_symmetry(const FusionCategory& other) const {
-  return other.type_name() == "U1Symmetry";
-}
-
-ZNSymmetry::ZNSymmetry(int64_t modulus)
-    : AbelianGroup("ZNSymmetry", {0}, z_n_name(modulus)), modulus_(modulus) {}
-
-bool ZNSymmetry::is_valid_sector(const Sector& a) const {
-  return a.size() == 1 && 0 <= a[0] && a[0] < modulus_;
-}
-
-Sector ZNSymmetry::dual_sector(const Sector& a) const {
-  return {residue(-a.at(0), modulus_)};
-}
-
-std::vector<Sector> ZNSymmetry::fusion_outcomes(const Sector& a, const Sector& b) const {
-  return {{residue(a.at(0) + b.at(0), modulus_)}};
-}
-
-bool ZNSymmetry::is_same_symmetry(const FusionCategory& other) const {
-  return other.type_name() == "ZNSymmetry" &&
-         static_cast<const ZNSymmetry&>(other).modulus_ == modulus_;
-}
-
-FermionParity::FermionParity()
-    : AbelianGroup("FermionParity", {0}, "FermionParity", BraidingStyle::fermionic) {}
-
-bool FermionParity::is_valid_sector(const Sector& a) const {
-  return a == Sector{0} || a == Sector{1};
-}
-
-Sector FermionParity::dual_sector(const Sector& a) const {
-  return a;
-}
-
-std::vector<Sector> FermionParity::fusion_outcomes(const Sector& a, const Sector& b) const {
-  return {{residue(a.at(0) + b.at(0), 2)}};
-}
-
-bool FermionParity::is_same_symmetry(const FusionCategory& other) const {
-  return other.type_name() == "FermionParity";
-}
+c10::ScalarType FermionParity::dtype() const { return at::kDouble; }
 
 const std::shared_ptr<FusionCategory>& no_symmetry() {
   static const std::shared_ptr<FusionCategory> instance = std::make_shared<NoSymmetry>();
@@ -144,41 +116,39 @@ const std::shared_ptr<Group>& u1_symmetry() {
 
 const std::shared_ptr<Group>& z_n_symmetry(int64_t modulus) {
   static std::map<int64_t, std::shared_ptr<Group>> instances;
-  std::shared_ptr<Group>& instance = instances[modulus];
-  if (instance == nullptr) {
-    instance = std::make_shared<ZNSymmetry>(modulus);
+  std::shared_ptr<Group>& kept = instances[modulus];
+  if (!kept) {
+    kept = std::make_shared<ZNSymmetry>(modulus);
   }
-  return instance;
-}
-const std::shared_ptr<Group>& fermion_parity() {
-  static const std::shared_ptr<Group> instance = std::make_shared<FermionParity>();
-  return instance;
+  return kept;
 }
 
-
-}  // namespace sym
-
-namespace sym {
+const std::shared_ptr<FusionCategory>& fermion_parity() {
+  static const std::shared_ptr<FusionCategory> instance = std::make_shared<FermionParity>();
+  return instance;
+}
 
 void bind_abelian(py::module_& m) {
-  py::class_<sym::AbelianGroup, sym::Group, std::shared_ptr<sym::AbelianGroup>>(
-      m, "AbelianGroup");
-  py::class_<sym::NoSymmetry, sym::AbelianGroup, std::shared_ptr<sym::NoSymmetry>>(
-      m, "NoSymmetry")
+  py::class_<AbelianGroup, Group, std::shared_ptr<AbelianGroup>>(m, "AbelianGroup");
+
+  py::class_<NoSymmetry, AbelianGroup, std::shared_ptr<NoSymmetry>>(m, "NoSymmetry")
       .def(py::init<>());
-  py::class_<sym::U1Symmetry, sym::AbelianGroup, std::shared_ptr<sym::U1Symmetry>>(
-      m, "U1Symmetry")
+
+  py::class_<U1Symmetry, AbelianGroup, std::shared_ptr<U1Symmetry>>(m, "U1Symmetry")
       .def(py::init<>());
-  py::class_<sym::FermionParity, sym::AbelianGroup,
-             std::shared_ptr<sym::FermionParity>>(m, "FermionParity")
+
+  py::class_<ZNSymmetry, AbelianGroup, std::shared_ptr<ZNSymmetry>>(m, "ZNSymmetry")
+      .def(py::init<int64_t>(), py::arg("modulus"))
+      .def_property_readonly("modulus", &ZNSymmetry::modulus);
+
+  py::class_<FermionParity, FusionCategory, std::shared_ptr<FermionParity>>(m, "FermionParity")
       .def(py::init<>());
-  py::class_<sym::ZNSymmetry, sym::AbelianGroup, std::shared_ptr<sym::ZNSymmetry>>(
-      m, "ZNSymmetry")
-      .def(py::init<int64_t>(), py::arg("N"));
-  m.attr("no_symmetry") = py::cast(sym::no_symmetry());
-  m.attr("u1_symmetry") = py::cast(sym::u1_symmetry());
-  m.attr("z2_symmetry") = py::cast(sym::z_n_symmetry(2));
-  m.attr("fermion_parity") = py::cast(sym::fermion_parity());
+
+  m.attr("no_symmetry") = py::cast(no_symmetry());
+  m.attr("u1_symmetry") = py::cast(u1_symmetry());
+  m.attr("fermion_parity") = py::cast(fermion_parity());
+  m.def("z_n_symmetry", &z_n_symmetry, py::arg("modulus"),
+        "the Z_N group of the given modulus, the same object every call");
 }
 
 }  // namespace sym

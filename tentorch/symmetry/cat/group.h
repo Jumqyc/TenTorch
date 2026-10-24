@@ -1,71 +1,108 @@
-// The groups of the engine: a fusion category whose associator and braiding come from its
-// Clebsch-Gordan calculus.  The tensor engine sees the category interface only; this header is
-// for the group implementations and for the bindings.
+// The groups of the engine: a fusion category whose F and R symbols are the overlaps of its
+// Clebsch-Gordan tensors.  The tensor engine sees the category interface only; this header is for
+// the group implementations and for the bindings.
 #pragma once
 
-#include <array>
+#include <cstdint>
 #include <map>
-#include <memory>
-#include <string>
 #include <tuple>
-#include <vector>
 
 #include "cat.h"
 
-namespace sym {
+namespace sym
+{
 
-class Group : public FusionCategory {
- public:
-  Group(std::string type_name, FusionStyle fusion_style, BraidingStyle braiding_style,
-        Sector trivial_sector, std::string name);
+  /**
+   * @brief A fusion category realized by the representations of a group.
+   * @details The category supplies the Clebsch-Gordan tensor of one vertex, and this class derives
+   * the associator and the braiding from it: $F$ is the overlap of the two bracketings of three
+   * legs and $R$ the overlap of the two orders of two legs, both divided by the quantum dimension
+   * of the coupled sector.  The pentagon and the hexagon then hold because each side of the
+   * identity is the same overlap computed in two ways, so a group cannot state an $F$ or an $R$
+   * that disagrees with its own vertices.
+   *
+   * A category without a Clebsch-Gordan tensor, such as the Fibonacci category, is not a group of
+   * this kind and implements `F_symbol` and `R_symbol` itself.
+   */
+  class Group : public FusionCategory
+  {
+  public:
+    using FusionCategory::FusionCategory;
 
-  // The associator of a group is the overlap of the two fusion trees ((a b) c) -> d and
-  // (a (b c)) -> d in its Clebsch-Gordan basis: the 6j symbol of the three sectors.
-  at::Tensor associator(const Sector& a, const Sector& b, const Sector& c, const Sector& d,
-                        const Sector& e, const Sector& f,
-                        const c10::Device& device) const override;
-  // The braiding of a group is what exchanging the two legs of one vertex costs.
-  at::Tensor braiding(const Sector& a, const Sector& b, const Sector& c,
-                      const c10::Device& device) const override;
+    /**
+     * @brief The Clebsch-Gordan tensor $C^{c}_{ab}$ of one copy, memoised.
+     * @param a The sector of the first leg.
+     * @param b The sector of the second leg.
+     * @param c The coupled sector, one outcome of `outcomes(a, b)`.
+     * @param copy The copy index in $[0, N^c_{ab})$, the second index of the rows and columns that
+     * `F_symbol` and `R_symbol` address.
+     * @return A tensor of shape (dim a, dim b, dim c), one entry per component of the three legs.
+     * @details It is the embedding of Eq. (eq:cg-orth) of the notes: each copy is a unit vector of
+     * the component space, so the whole tensor has squared norm $q_{\dim}(c)$.  The tensor of one
+     * sector triple is computed once per object and then held, because the associator and the
+     * braiding ask for the same vertices many times.
+     */
+    at::Tensor clebsch_gordan(const Sector &a, const Sector &b, const Sector &c,
+                              int64_t copy) const;
 
-  // Both tables are pure functions of their sectors, and one contraction asks for the same
-  // entry many times over, so the last answers are kept per device.
-  void clear_caches() const override;
+    /** @brief Drop every Clebsch-Gordan tensor and every fusion table this object holds. */
+    void clear_cache() const override;
 
- private:
-  // The number of entries one table may hold before it is dropped.
-  static constexpr std::size_t kCacheLimit = 1U << 16U;
+    /**
+     * @brief The associator $F^{d}_{abc}$, the overlap of the two bracketings of three legs.
+     * @param a The first sector, the leftmost of the left tree.
+     * @param b The second sector.
+     * @param c The third sector.
+     * @param d The outer sector both trees fuse to.
+     * @return The matrix `FusionCategory::F_symbol` describes, with entry $\langle ((a \otimes b)
+     * \otimes c) \to d \mid (a \otimes (b \otimes c)) \to d \rangle / q_{\dim}(d)$; empty when $d$
+     * is not an outcome of $a \otimes b \otimes c$.
+     */
+    at::Tensor F_symbol(const Sector &a, const Sector &b, const Sector &c,
+                        const Sector &d) const override;
 
-  mutable std::map<std::tuple<std::array<Sector, 6>, int64_t>, at::Tensor> associator_cache_;
-  mutable std::map<std::tuple<std::array<Sector, 3>, int64_t>, at::Tensor> braiding_cache_;
-};
+    /**
+     * @brief The braiding $R_{bc}$, the overlap of the two orders of two legs.
+     * @param b The left sector before the exchange.
+     * @param c The right sector before the exchange.
+     * @return A square matrix, one block per outcome $e$ of `outcomes(b, c)` with $N^e_{bc}$ rows
+     * and $N^e_{cb}$ columns, entry $\langle (b \otimes c) \to e \mid (c \otimes b) \to e \rangle /
+     * q_{\dim}(e)$.
+     * @raises RuntimeError If $b$ and $c$ fuse to some $e$ with $N^e_{bc} \neq N^e_{cb}$, which no
+     * braiding can relate.
+     */
+    at::Tensor R_symbol(const Sector &b, const Sector &c) const override;
 
-class AbelianGroup : public Group {
- public:
-  AbelianGroup(std::string type_name, Sector trivial_sector, std::string name,
-               BraidingStyle braiding_style = BraidingStyle::bosonic);
+    /**
+     * @brief The quantum dimension, which for a representation is the dimension of its space.
+     * @param a The sector.
+     * @return `dim(a)` as a real number.
+     */
+    double q_dim(Sector a) const override;
 
-  // Every sector of an abelian group has quantum dimension one.
-  int64_t sector_dim(const Sector& a) const override;
+   protected:
+    /**
+     * @brief Compute the Clebsch-Gordan tensor $C^{c}_{ab}$ of one copy.
+     * @param a The sector of the first leg.
+     * @param b The sector of the second leg.
+     * @param c The coupled sector, one outcome of `outcomes(a, b)`.
+     * @param copy The copy index in $[0, N^c_{ab})$.
+     * @return A tensor of shape (dim a, dim b, dim c).
+     * @details The one method a concrete group implements; `clebsch_gordan` wraps it with the
+     * cache, so every reader of the vertex goes through the same table.
+     */
+    virtual at::Tensor compute_clebsch_gordan(const Sector &a, const Sector &b, const Sector &c,
+                                              int64_t copy) const = 0;
 
-  // The fusion of an abelian group has one outcome, so its Clebsch-Gordan vertex is one
-  // whenever the sectors fuse and does not exist otherwise.
-  at::Tensor fusion_tensor(const Sector& a, const Sector& b, const Sector& c,
-                           const c10::Device& device, int64_t copy = 0) const override;
-  c10::ScalarType fusion_dtype() const override;
+   private:
+    // One vertex per (a, b, c, copy); the device is the object's, so it is not part of the key.
+    mutable std::map<std::tuple<Sector, Sector, Sector, int64_t>, at::Tensor> cg_cache_;
+  };
 
-  // A one-dimensional sector needs no basis conversion, and its invariant form is the
-  // one-by-one identity: the abelian vertex already carries the pairing.
-  at::Tensor duality_matrix(const Sector& a, const c10::Device& device) const override;
-  at::Tensor invariant_form(const Sector& a, const c10::Device& device) const override;
-};
+  /**
+   * @brief Bind the group layer of the category interface.
+   * @param m The module to bind into.
+   */
+  void bind_group(py::module_ &m);
 
-const std::shared_ptr<Group>& u1_symmetry();
-const std::shared_ptr<Group>& z_n_symmetry(int64_t modulus);
-const std::shared_ptr<Group>& su2_symmetry();
-const std::shared_ptr<Group>& fermion_parity();
-
-// Register the group subclass under the category interface.
-void bind_group(py::module_& m);
-
-}  // namespace sym
+} // namespace sym

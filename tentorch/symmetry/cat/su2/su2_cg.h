@@ -34,10 +34,10 @@ std::map<int64_t, at::Tensor> table(int64_t j1, int64_t j2);
 // Args:
 //   j1, j2, j3: twice the fused spins, j3 an outcome of fusing j1 and j2.
 //   device: device of the returned tensor.
-at::Tensor fusion_tensor(int64_t j1, int64_t j2, int64_t j3, const torch::Device& device);
+at::Tensor fusion_tensor(int64_t j1, int64_t j2, int64_t j3, const c10::Device& device);
 
 // {j3: X} of one pair, moved to the device and kept with it; read-only.
-std::map<int64_t, at::Tensor> fusion_table(int64_t j1, int64_t j2, const torch::Device& device);
+std::map<int64_t, at::Tensor> fusion_table(int64_t j1, int64_t j2, const c10::Device& device);
 
 // Drop every kept table.
 void clear_tables();

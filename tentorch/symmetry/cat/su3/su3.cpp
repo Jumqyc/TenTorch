@@ -245,10 +245,8 @@ std::map<Sector, int64_t> fusion(const Sector& first, const Sector& second) {
 
 at::Tensor clebsch_copies(const Sector& first, const Sector& second, const Sector& third,
                           const c10::Device& device) {
-  const auto outcome = fusion(first, second).find(third);
-  if (outcome == fusion(first, second).end()) {
-    throw value_error("The sectors do not fuse to the requested one.");
-  }
+  const std::map<Sector, int64_t> fused = fusion(first, second);
+  TORCH_CHECK(fused.count(third) > 0, "The sectors do not fuse to the requested one.");
   const Irrep& left = irrep(first);
   const Irrep& right = irrep(second);
   const Irrep& conjugate = irrep(Sector{third.at(1), third.at(0)});
@@ -285,7 +283,7 @@ at::Tensor clebsch_copies(const Sector& first, const Sector& second, const Secto
   const at::Tensor restricted = casimir.index_select(0, index).index_select(1, index);
   auto [values, vectors] = at::linalg_eigh(restricted);
   const at::Tensor kernel = (values.abs() < 1e-6).nonzero().squeeze(-1);
-  if (kernel.numel() == 0) throw value_error("The coupling has no invariant vertex.");
+  TORCH_CHECK(kernel.numel() > 0, "The coupling has no invariant vertex.");
   std::vector<at::Tensor> copies;
   for (int64_t copy = 0; copy < kernel.numel(); ++copy) {
     at::Tensor vector = at::zeros({size}, at::kComplexDouble);
@@ -307,15 +305,14 @@ at::Tensor clebsch(const Sector& first, const Sector& second, const Sector& thir
                    const c10::Device& device) {
   // a coupling the engine carries as a single vertex appears exactly once
   const at::Tensor copies = clebsch_copies(first, second, third, device);
-  if (copies.size(0) != 1) {
-    throw not_implemented_error("The coupling of these sectors couples more than once.");
-  }
+  TORCH_CHECK(copies.size(0) == 1, "The coupling of these sectors couples ",
+              copies.size(0), " times, not once.");
   return copies.select(0, 0);
 }
 
 at::Tensor metric(const Sector& sector, const c10::Device& device) {
   const at::Tensor form = clebsch(sector, Sector{sector.at(1), sector.at(0)}, Sector{0, 0}, device);
-  if (!form.defined()) throw not_implemented_error("The sector has no invariant form.");
+  TORCH_CHECK(form.defined(), "The sector has no invariant form.");
   const double scale = std::sqrt(static_cast<double>(dimension(sector)));
   return form.reshape({form.size(0), form.size(1)}) * scale;
 }
@@ -330,99 +327,31 @@ void clear_caches() {
 
 namespace sym {
 
-namespace {
+SU3Symmetry::SU3Symmetry(c10::Device device) : Group("SU(3)", device) {}
 
-// The Dynkin labels of a sector, the way an error message prints them.
-std::string labels(const Sector& a) {
-  return "(" + std::to_string(a.at(0)) + ", " + std::to_string(a.at(1)) + ")";
-}
-
-}  // namespace
-
-SU3Symmetry::SU3Symmetry()
-    : Group("SU3Symmetry", FusionStyle::general, BraidingStyle::bosonic, {0, 0}, "SU(3)") {}
-
-bool SU3Symmetry::is_valid_sector(const Sector& a) const {
-  return a.size() == 2 && a[0] >= 0 && a[1] >= 0;
-}
-
-Sector SU3Symmetry::dual_sector(const Sector& a) const { return {a.at(1), a.at(0)}; }
-
-std::vector<Sector> SU3Symmetry::fusion_outcomes(const Sector& a, const Sector& b) const {
-  std::vector<Sector> outcomes;
+std::vector<Outcome> SU3Symmetry::compute_outcomes(const Sector& a, const Sector& b) const {
+  std::vector<Outcome> fused;
   for (const auto& [sector, multiplicity] : su3::fusion(a, b)) {
-    outcomes.push_back(sector);
+    fused.push_back({sector, static_cast<int>(multiplicity)});
   }
-  return outcomes;
+  return fused;
 }
 
-int64_t SU3Symmetry::sector_dim(const Sector& a) const { return su3::dimension(a); }
+Sector SU3Symmetry::dual(Sector a) const { return {a.at(1), a.at(0)}; }
 
-at::Tensor SU3Symmetry::fusion_tensor(const Sector& a, const Sector& b, const Sector& c,
-                                      const c10::Device& device, int64_t copy) const {
-  const std::map<Sector, int64_t> outcomes = su3::fusion(a, b);
-  const auto found = outcomes.find(c);
-  if (found == outcomes.end()) {
-    throw value_error("Sectors " + labels(a) + " and " + labels(b) + " do not fuse to " + labels(c) + ".");
-  }
-  if (copy < 0 || copy >= found->second) {
-    throw value_error("The fusion of " + labels(a) + " and " + labels(b) + " to " + labels(c) +
-                      " couples " + std::to_string(found->second) + " times, not " +
-                      std::to_string(copy + 1) + ".");
-  }
-  // the third factor of the invariant is the conjugate irrep in its own basis, so the metric of
-  // the fused sector converts that axis into the basis of the leg it is contracted with
-  return at::einsum("pq,abq->abp",
-                    {su3::metric(c, device), su3::clebsch_copies(a, b, c, device).select(0, copy)});
-}
+Sector SU3Symmetry::trivial() const { return {0, 0}; }
 
-int64_t SU3Symmetry::reference_index(const Sector&) const {
-  return 0;
-}
+int SU3Symmetry::dim(Sector a) const { return static_cast<int>(su3::dimension(a)); }
 
-c10::ScalarType SU3Symmetry::fusion_dtype() const {
-  return at::kComplexDouble;
-}
+c10::ScalarType SU3Symmetry::dtype() const { return at::kComplexDouble; }
 
-void SU3Symmetry::clear_caches() const {
-  su3::clear_caches();
-}
-
-int64_t SU3Symmetry::n_symbol(const Sector& a, const Sector& b, const Sector& c) const {
-  const std::map<Sector, int64_t> outcomes = su3::fusion(a, b);
-  const auto found = outcomes.find(c);
-  return found == outcomes.end() ? 0 : found->second;
-}
-
-at::Tensor SU3Symmetry::duality_matrix(const Sector& a, const c10::Device& device) const {
-  // the weight basis of an SU(3) irrep runs from the highest weight, so the basis of the dual
-  // leg is the reversed one, and the invariant form of an irrep with an odd label sum is the
-  // negative of the element-wise conjugate: one matrix carries both
-  const double sign = (a.at(0) + a.at(1)) % 2 == 0 ? 1.0 : -1.0;
-  return su3::metric(a, device) * sign;
-}
-
-at::Tensor SU3Symmetry::invariant_form(const Sector& a, const c10::Device& device) const {
-  return su3::metric(a, device);
-}
-
-double SU3Symmetry::dual_sign(const Sector&) const {
-  // the sign of the conjugation lives in duality_matrix, so no extra factor enters here
-  return 1.0;
-}
-
-double SU3Symmetry::conjugation_phase(const Sector& sector) const {
-  // the sign of the conjugation metric of SU(3), which its duality matrix carries
-  return dual_phase(sector);
-}
-
-double SU3Symmetry::dual_phase(const Sector& sector) const {
-  // the phase the conjugate component carries: (-1)^(p + q)
-  return (sector.at(0) + sector.at(1)) % 2 == 0 ? 1.0 : -1.0;
-}
-
-bool SU3Symmetry::is_same_symmetry(const FusionCategory& other) const {
-  return other.type_name() == "SU3Symmetry";
+at::Tensor SU3Symmetry::compute_clebsch_gordan(const Sector& a, const Sector& b, const Sector& c,
+                                       int64_t copy) const {
+  // The third factor of the invariant is the conjugate irrep in its own basis, so the metric of the
+  // fused sector converts that axis into the basis of the leg it is contracted with.
+  return at::einsum(
+      "pq,abq->abp",
+      {su3::metric(c, device()), su3::clebsch_copies(a, b, c, device()).select(0, copy)});
 }
 
 const std::shared_ptr<Group>& su3_symmetry() {

@@ -1,34 +1,35 @@
-// The Fibonacci fusion category: two simple objects, 1 and tau, with tau (x) tau = 1 + tau.
-// It is the smallest category that is not a group, so it is what a categorical interface has to
-// support beyond a Clebsch-Gordan calculus.
+// The Fibonacci category: one nontrivial sector of quantum dimension the golden ratio.
 #pragma once
 
 #include "../cat.h"
 
 namespace sym {
 
+/**
+ * @brief The Fibonacci category, $\tau \otimes \tau = 1 \oplus \tau$.
+ * @details It is not the category of representations of a group, so it has no Clebsch-Gordan
+ * tensor: the dimension equation $\sum_c N^c_{ab} \dim c = \dim a \dim b$ reads $1 + x = x^2$ on
+ * $\tau \otimes \tau$ and has no positive integer solution.  Its symbols are therefore given
+ * directly, and the pentagon and hexagon equations fix them up to gauge.
+ */
 class FibonacciCategory : public FusionCategory {
  public:
-  FibonacciCategory();
-  bool is_valid_sector(const Sector& a) const override;
-  Sector dual_sector(const Sector& a) const override;
-  std::vector<Sector> fusion_outcomes(const Sector& a, const Sector& b) const override;
-  int64_t sector_dim(const Sector& a) const override;
-  double quantum_dim(const Sector& a) const override;
-  at::Tensor fusion_tensor(const Sector& a, const Sector& b, const Sector& c,
-                           const c10::Device& device, int64_t copy = 0) const override;
-  at::Tensor associator(const Sector& a, const Sector& b, const Sector& c, const Sector& d,
-                        const Sector& e, const Sector& f,
-                        const c10::Device& device) const override;
-  at::Tensor braiding(const Sector& a, const Sector& b, const Sector& c,
-                      const c10::Device& device) const override;
-  at::Tensor duality_matrix(const Sector& a, const c10::Device& device) const override;
-  int64_t reference_index(const Sector& a) const override;
-  c10::ScalarType fusion_dtype() const override;
-  bool is_same_symmetry(const FusionCategory& other) const override;
+  explicit FibonacciCategory(c10::Device device = default_device());
+
+  at::Tensor F_symbol(const Sector& a, const Sector& b, const Sector& c,
+                      const Sector& d) const override;
+  at::Tensor R_symbol(const Sector& b, const Sector& c) const override;
+  double q_dim(Sector a) const override;
+  int dim(Sector a) const override;
+  Sector dual(Sector a) const override;
+  Sector trivial() const override;
+  c10::ScalarType dtype() const override;
+
+ protected:
+  std::vector<Outcome> compute_outcomes(const Sector& a, const Sector& b) const override;
 };
 
-// The Fibonacci category, one singleton of the engine.
+// The Fibonacci category the engine runs on.
 const std::shared_ptr<FusionCategory>& fibonacci_category();
 
 // Bind the Fibonacci category.

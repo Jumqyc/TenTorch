@@ -15,87 +15,34 @@ std::string half_label(int64_t jj) {
 
 }  // namespace
 
-SU2Symmetry::SU2Symmetry()
-    : Group("SU2Symmetry", FusionStyle::multiple_unique, BraidingStyle::bosonic, {0}, "SU(2)") {}
+SU2Symmetry::SU2Symmetry(c10::Device device) : Group("SU(2)", device) {}
 
-bool SU2Symmetry::is_valid_sector(const Sector& a) const {
-  return a.size() == 1 && a[0] >= 0;
-}
-
-Sector SU2Symmetry::dual_sector(const Sector& a) const {
-  return a;
-}
-
-std::vector<Sector> SU2Symmetry::fusion_outcomes(const Sector& a, const Sector& b) const {
-  std::vector<Sector> outcomes;
+std::vector<Outcome> SU2Symmetry::compute_outcomes(const Sector& a, const Sector& b) const {
+  std::vector<Outcome> fused;
   for (int64_t jj = std::abs(a.at(0) - b.at(0)); jj <= a.at(0) + b.at(0); jj += 2) {
-    outcomes.push_back({jj});
+    fused.push_back({{jj}, 1});
   }
-  return outcomes;
+  return fused;
 }
 
-int64_t SU2Symmetry::sector_dim(const Sector& a) const {
-  return a.at(0) + 1;
-}
+Sector SU2Symmetry::dual(Sector a) const { return a; }
 
-at::Tensor SU2Symmetry::fusion_tensor(const Sector& a, const Sector& b, const Sector& c,
-                                      const c10::Device& device, int64_t) const {
-  const std::vector<Sector> outcomes = fusion_outcomes(a, b);
-  if (std::find(outcomes.begin(), outcomes.end(), c) == outcomes.end()) {
-    throw value_error("Spins " + half_label(a.at(0)) + " and " + half_label(b.at(0)) +
-                      " do not fuse to " + half_label(c.at(0)) + ".");
-  }
-  return su2::fusion_tensor(a.at(0), b.at(0), c.at(0), device);
-}
+Sector SU2Symmetry::trivial() const { return {0}; }
 
-bool SU2Symmetry::is_same_symmetry(const FusionCategory& other) const {
-  return other.type_name() == "SU2Symmetry";
-}
+int SU2Symmetry::dim(Sector a) const { return static_cast<int>(a.at(0) + 1); }
 
-double SU2Symmetry::dual_sign(const Sector& sector) const {
-  return dual_sector(sector) == sector && (sector_dim(sector) - 1) % 2 != 0 ? -1.0 : 1.0;
-}
+c10::ScalarType SU2Symmetry::dtype() const { return at::kDouble; }
 
-double SU2Symmetry::dual_phase(const Sector& sector) const {
-  // the phase the conjugate component carries: (-1)^spin
-  return (sector.at(0) / 2) % 2 == 0 ? 1.0 : -1.0;
+at::Tensor SU2Symmetry::compute_clebsch_gordan(const Sector& a, const Sector& b, const Sector& c,
+                                       int64_t copy) const {
+  TORCH_CHECK(copy == 0, "The coupling of ", half_label(a.at(0)), " and ", half_label(b.at(0)),
+              " to ", half_label(c.at(0)), " is unique, so copy ", copy, " does not exist.");
+  return su2::fusion_tensor(a.at(0), b.at(0), c.at(0), device());
 }
 
 const std::shared_ptr<Group>& su2_symmetry() {
   static const std::shared_ptr<Group> instance = std::make_shared<SU2Symmetry>();
   return instance;
-}
-
-
-}  // namespace sym
-
-namespace sym {
-
-int64_t SU2Symmetry::reference_index(const Sector& a) const {
-  return a.at(0) / 2;
-}
-
-c10::ScalarType SU2Symmetry::fusion_dtype() const {
-  return at::kDouble;
-}
-
-void SU2Symmetry::clear_caches() const {
-  su2::clear_tables();
-}
-
-at::Tensor SU2Symmetry::invariant_form(const Sector& a, const c10::Device& device) const {
-  // the invariant pairing of two multiplets is the same flip and phase as the dual leg
-  return duality_matrix(a, device);
-}
-
-at::Tensor SU2Symmetry::duality_matrix(const Sector& a, const c10::Device& device) const {
-  const int64_t spin = a.at(0);
-  const int64_t dim = spin + 1;
-  const auto options = at::TensorOptions().dtype(at::kDouble).device(device);
-  at::Tensor phase = at::ones({dim}, options);
-  phase.slice(0, 1, dim, 2).fill_(-1.0);
-  const double sign = spin % 2 == 0 ? 1.0 : -1.0;
-  return (phase * sign).unsqueeze(1) * at::flip(at::eye(dim, options), {0});
 }
 
 void bind_su2(py::module_& m) {
@@ -204,7 +151,7 @@ std::map<int64_t, std::vector<double>> coefficients(int64_t j1, int64_t j2) {
 std::map<int64_t, at::Tensor> table(int64_t j1, int64_t j2) {
   std::map<int64_t, at::Tensor> out;
   for (const auto& [j3, values] : coefficients(j1, j2)) {
-    at::Tensor tensor = torch::empty({j1 + 1, j2 + 1, j3 + 1}, torch::kFloat64);
+    at::Tensor tensor = at::empty({j1 + 1, j2 + 1, j3 + 1}, at::kDouble);
     std::memcpy(tensor.data_ptr<double>(), values.data(), values.size() * sizeof(double));
     out[j3] = tensor;
   }
@@ -218,7 +165,7 @@ std::map<std::tuple<int64_t, int64_t, std::string>, std::map<int64_t, at::Tensor
 
 }  // namespace
 
-std::map<int64_t, at::Tensor> fusion_table(int64_t j1, int64_t j2, const torch::Device& device) {
+std::map<int64_t, at::Tensor> fusion_table(int64_t j1, int64_t j2, const c10::Device& device) {
   const auto key = std::make_tuple(j1, j2, device.str());
   auto kept = tables.find(key);
   if (kept == tables.end()) {
@@ -229,7 +176,7 @@ std::map<int64_t, at::Tensor> fusion_table(int64_t j1, int64_t j2, const torch::
   return kept->second;
 }
 
-at::Tensor fusion_tensor(int64_t j1, int64_t j2, int64_t j3, const torch::Device& device) {
+at::Tensor fusion_tensor(int64_t j1, int64_t j2, int64_t j3, const c10::Device& device) {
   const std::map<int64_t, at::Tensor>& kept = fusion_table(j1, j2, device);
   const auto found = kept.find(j3);
   TORCH_CHECK(found != kept.end(), "Spins ", j1, " and ", j2, " do not fuse to ", j3, ".");
