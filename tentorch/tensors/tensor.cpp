@@ -340,7 +340,7 @@ TensorMap repartition_tensor(const TensorMap& tensor, int64_t keep, const c10::D
     std::vector<Sector> sectors;
     sectors.reserve(leg.sectors().size());
     for (const Sector& sector : leg.sectors()) sectors.push_back(group.dual_sector(sector));
-    return Leg(leg.group(), sectors, leg.slices(), -leg.qconj());
+    return Leg(leg.cat(), sectors, leg.slices(), -leg.qconj());
   };
   while (static_cast<int64_t>(out.space.codomain.size()) > keep) {
     const Leg moved = crossed(out.space.codomain.back());
@@ -680,7 +680,7 @@ std::string leg_name(const Leg& leg) {
   std::vector<std::string> entries;
   for (int64_t at = 0; at < leg.nblocks(); ++at) {
     const Sector sector =
-        leg.qconj() < 0 ? leg.group()->dual_sector(leg.sector(at)) : leg.sector(at);
+        leg.qconj() < 0 ? leg.cat()->dual_sector(leg.sector(at)) : leg.sector(at);
     std::string entry;
     for (const int64_t component : sector) entry += std::to_string(component) + ",";
     entry += "x" + std::to_string(leg.multiplicity(at)) + ";";
@@ -701,7 +701,7 @@ std::string dual_name(const Leg& leg) {
   std::vector<std::string> entries;
   for (int64_t at = 0; at < leg.nblocks(); ++at) {
     const Sector sector =
-        leg.qconj() > 0 ? leg.group()->dual_sector(leg.sector(at)) : leg.sector(at);
+        leg.qconj() > 0 ? leg.cat()->dual_sector(leg.sector(at)) : leg.sector(at);
     std::string entry;
     for (const int64_t component : sector) entry += std::to_string(component) + ",";
     entry += "x" + std::to_string(leg.multiplicity(at)) + ";";
@@ -1044,8 +1044,8 @@ Sector partner_root(const FusionCategory& group, const Sector& codomain_root, co
 namespace {
 
 std::shared_ptr<FusionCategory> group_of(const std::vector<Leg>& codomain, const std::vector<Leg>& domain) {
-  if (!codomain.empty()) return codomain.front().group();
-  if (!domain.empty()) return domain.front().group();
+  if (!codomain.empty()) return codomain.front().cat();
+  if (!domain.empty()) return domain.front().cat();
   throw std::invalid_argument("a tensor needs at least one leg to fix its category");
 }
 
@@ -1057,15 +1057,9 @@ std::vector<std::vector<LegCharge>> charges_of(const std::vector<Leg>& legs) {
 
 }  // namespace
 
-const TensorMap& Tensor::map() const {
-  if (!map_) throw std::logic_error("this tensor is a bare matrix without graded legs");
-  return *map_;
-}
+const TensorMap& Tensor::map() const { return map_; }
 
-TensorMap& Tensor::map() {
-  if (!map_) throw std::logic_error("this tensor is a bare matrix without graded legs");
-  return *map_;
-}
+TensorMap& Tensor::map() { return map_; }
 
 Tensor Tensor::filled(const std::vector<Leg>& codomain, const std::vector<Leg>& domain,
                       const Sector& qtotal, int kind, at::ScalarType dtype,
@@ -1167,10 +1161,8 @@ std::pair<int64_t, int64_t> Tensor::slot(const Sector& charge, const std::vector
           side_row(in_legs, static_cast<int64_t>(out_legs.size()), partner, blocks, members)};
 }
 
-Tensor Tensor::from_dense(const at::Tensor& data, std::optional<std::vector<Leg>> legs,
+Tensor Tensor::from_dense(const at::Tensor& data, const std::vector<Leg>& given,
                           std::optional<Sector> qtotal) {
-  if (!legs) return Tensor(data);
-  const std::vector<Leg>& given = *legs;
   const std::shared_ptr<FusionCategory> group = group_of(given, {});
   for (const Leg& leg : given) {
     for (int64_t at = 0; at < leg.nblocks(); ++at) {
@@ -1196,35 +1188,18 @@ Tensor Tensor::from_dense(const at::Tensor& data, std::optional<std::vector<Leg>
   return Tensor(std::move(out));
 }
 
-std::shared_ptr<FusionCategory> Tensor::group() const {
-  // A bare matrix belongs to the category with no symmetry.
-  if (!map_) return no_symmetry();
-  return map().space.group;
-}
+std::shared_ptr<FusionCategory> Tensor::cat() const { return map().space.group; }
 
 std::vector<Leg> Tensor::legs() const {
-  // A bare matrix carries no symmetry, so every axis is a leg of that dimension alone.
-  if (!map_) {
-    std::vector<Leg> plain;
-    for (int64_t axis = 0; axis < plain_.dim(); ++axis) {
-      plain.push_back(Leg::trivial(plain_.size(axis)));
-    }
-    return plain;
-  }
   const TensorMap& tensor = map();
   std::vector<Leg> out = tensor.space.codomain;
   out.insert(out.end(), tensor.space.domain.begin(), tensor.space.domain.end());
   return out;
 }
 
-Sector Tensor::qtotal() const {
-  // A bare matrix carries no category, so its total charge is the empty one.
-  if (!map_) return Sector{};
-  return map().qtotal;
-}
+Sector Tensor::qtotal() const { return map().qtotal; }
 
 std::vector<at::Tensor> Tensor::blocks() const {
-  if (!map_) return {plain_};
   std::vector<at::Tensor> out;
   for (const auto& [charge, block] : map().blocks) out.push_back(block);
   return out;
@@ -1232,13 +1207,11 @@ std::vector<at::Tensor> Tensor::blocks() const {
 
 std::vector<Sector> Tensor::charges() const {
   std::vector<Sector> out;
-  if (!map_) return out;
   for (const auto& [charge, block] : map().blocks) out.push_back(charge);
   return out;
 }
 
 std::vector<int64_t> Tensor::shape() const {
-  if (!map_) return plain_.sizes().vec();
   std::vector<int64_t> out;
   for (const Leg& leg : map().space.codomain) out.push_back(leg.dim());
   for (const Leg& leg : map().space.domain) out.push_back(leg.dim());
@@ -1246,32 +1219,16 @@ std::vector<int64_t> Tensor::shape() const {
 }
 
 at::ScalarType Tensor::dtype() const {
-  if (!map_) return plain_.scalar_type();
   for (const auto& [charge, block] : map().blocks) return block.scalar_type();
   return at::kComplexDouble;
 }
 
 c10::Device Tensor::device() const {
-  if (!map_) return plain_.device();
   for (const auto& [charge, block] : map().blocks) return block.device();
   return at::TensorOptions().device();
 }
 
-bool Tensor::is_dense() const {
-  if (!map_) return true;
-  for (const Leg& leg : legs()) {
-    for (int64_t at = 0; at < leg.nblocks(); ++at) {
-      if (leg.group()->sector_dim(leg.sector(at)) != 1) return false;
-    }
-  }
-  return true;
-}
-
 std::complex<double> Tensor::item() const {
-  if (!map_) {
-    if (plain_.numel() != 1) throw std::invalid_argument("item needs a tensor of one entry");
-    return std::complex<double>(plain_.item<double>(), 0.0);
-  }
   if (!map().space.codomain.empty() || !map().space.domain.empty()) {
     throw std::invalid_argument("item needs a tensor without legs");
   }
@@ -1284,29 +1241,23 @@ std::complex<double> Tensor::item() const {
 }
 
 Tensor Tensor::clone() const {
-  if (!map_) return Tensor(plain_.clone());
   TensorMap out = map();
   for (auto& [charge, block] : out.blocks) block = block.clone();
   return Tensor(std::move(out));
 }
 
 Tensor Tensor::detach() const {
-  if (!map_) return Tensor(plain_.detach());
   TensorMap out = map();
   for (auto& [charge, block] : out.blocks) block = block.detach();
   return Tensor(std::move(out));
 }
 
-Tensor Tensor::conj() const {
-  if (!map_) return Tensor(at::conj(plain_).transpose(-1, -2));
-  return Tensor(engine::adjoint(map()));
-}
+Tensor Tensor::conj() const { return Tensor(engine::adjoint(map())); }
 
 Tensor Tensor::to(const py::kwargs& options) const {
   at::TensorOptions wanted;
   if (options.contains("dtype")) wanted = wanted.dtype(options["dtype"].cast<at::ScalarType>());
   if (options.contains("device")) wanted = wanted.device(options["device"].cast<c10::Device>());
-  if (!map_) return Tensor(plain_.to(wanted));
   TensorMap out = map();
   for (auto& [charge, block] : out.blocks) block = block.to(wanted);
   return Tensor(std::move(out));
@@ -1317,7 +1268,6 @@ Tensor Tensor::combine_legs(const std::vector<std::vector<int64_t>>& groups) con
 }
 
 Tensor Tensor::absorb(const at::Tensor& values) const {
-  if (!map_) throw std::logic_error("absorb: a plain tensor carries no bond leg to scale");
   TensorMap out = map();
   if (out.space.codomain.size() != 1) {
     throw std::invalid_argument(
@@ -1352,49 +1302,38 @@ Tensor Tensor::absorb(const at::Tensor& values) const {
 }
 
 Tensor& Tensor::operator+=(const Tensor& other) {
-  if (!map_ || !other.map_) throw std::logic_error("a bare matrix does not add to a graded tensor");
-  for (const auto& [charge, block] : aligned(other.map(), *map_, other.device()).blocks) {
-    const auto found = map_->blocks.find(charge);
-    if (found == map_->blocks.end()) map_->blocks.emplace(charge, block.clone());
+  for (const auto& [charge, block] : aligned(other.map(), map_, other.device()).blocks) {
+    const auto found = map_.blocks.find(charge);
+    if (found == map_.blocks.end()) map_.blocks.emplace(charge, block.clone());
     else found->second = found->second + block;
   }
   return *this;
 }
 
 Tensor& Tensor::operator-=(const Tensor& other) {
-  if (!map_ || !other.map_) throw std::logic_error("a bare matrix does not subtract a graded tensor");
-  for (const auto& [charge, block] : aligned(other.map(), *map_, other.device()).blocks) {
-    const auto found = map_->blocks.find(charge);
-    if (found == map_->blocks.end()) map_->blocks.emplace(charge, -block);
+  for (const auto& [charge, block] : aligned(other.map(), map_, other.device()).blocks) {
+    const auto found = map_.blocks.find(charge);
+    if (found == map_.blocks.end()) map_.blocks.emplace(charge, -block);
     else found->second = found->second - block;
   }
   return *this;
 }
 
 Tensor& Tensor::operator*=(const std::complex<double>& scalar) {
-  if (!map_) {
-    plain_ = plain_ * at::scalar_to_tensor(c10::complex<double>(scalar.real(), scalar.imag()));
-    return *this;
-  }
-  for (auto& [charge, block] : map_->blocks) {
+  for (auto& [charge, block] : map_.blocks) {
     block = block * at::scalar_to_tensor(c10::complex<double>(scalar.real(), scalar.imag()));
   }
   return *this;
 }
 
 Tensor& Tensor::operator/=(const std::complex<double>& scalar) {
-  if (!map_) {
-    plain_ = plain_ / at::scalar_to_tensor(c10::complex<double>(scalar.real(), scalar.imag()));
-    return *this;
-  }
-  for (auto& [charge, block] : map_->blocks) {
+  for (auto& [charge, block] : map_.blocks) {
     block = block / at::scalar_to_tensor(c10::complex<double>(scalar.real(), scalar.imag()));
   }
   return *this;
 }
 
 Tensor Tensor::operator-() const {
-  if (!map_) return Tensor(-plain_);
   TensorMap out = map();
   for (auto& [charge, block] : out.blocks) block = -block;
   return Tensor(std::move(out));
@@ -1509,7 +1448,6 @@ Tensor einsum(const std::string& spec, const std::vector<Tensor>& operands) {
                                 " operands, " + std::to_string(operands.size()) + " were given");
   }
   for (const Tensor& operand : operands) {
-    if (!operand.graded()) throw std::invalid_argument("einsum: a bare matrix carries no legs to contract");
   }
   // A kept label comes out on the side it went in on: a leg of a codomain stays in the codomain, so
   // that a contraction of maps is again a map.
@@ -1603,7 +1541,7 @@ Tensor einsum(const std::string& spec, const std::vector<Tensor>& operands) {
 
 namespace {
 
-// The legs of a constructor call: either the plain shape of a bare matrix or the graded legs.
+// The legs of a constructor call, split into the two sides of the tensor.
 struct Constructor {
   std::vector<Leg> codomain;
   std::vector<Leg> domain;
@@ -1619,11 +1557,13 @@ Constructor graded(const py::object& legs, const py::object& qtotal, int64_t cod
   Constructor out;
   out.codomain.assign(all.begin(), all.begin() + codomain);
   out.domain.assign(all.begin() + codomain, all.end());
-  out.qtotal = qtotal.is_none() ? all.front().group()->trivial_sector() : qtotal.cast<Sector>();
+  out.qtotal = qtotal.is_none() ? all.front().cat()->trivial_sector() : qtotal.cast<Sector>();
   return out;
 }
 
-Tensor filled_of(const py::args& shape, const py::kwargs& options, int kind) {
+// The legs carry the dimension of every axis, so a shape argument only repeats them and is
+// accepted and ignored.
+Tensor filled_of(const py::args&, const py::kwargs& options, int kind) {
   py::object legs = py::none();
   py::object qtotal = py::none();
   if (options.contains("legs")) legs = py::reinterpret_borrow<py::object>(options["legs"]);
@@ -1632,18 +1572,8 @@ Tensor filled_of(const py::args& shape, const py::kwargs& options, int kind) {
       options.contains("dtype") ? options["dtype"].cast<at::ScalarType>() : at::kComplexDouble;
   const c10::Device device =
       options.contains("device") ? options["device"].cast<c10::Device>() : at::TensorOptions().device();
-  // An empty list of legs is a tensor without a symmetry, the same as naming no legs at all.
-  if (!legs.is_none() && py::len(legs) == 0) legs = py::none();
-  if (legs.is_none()) {
-    std::vector<int64_t> dims;
-    for (const py::handle& entry : shape) dims.push_back(entry.cast<int64_t>());
-    const auto options_of = at::TensorOptions().dtype(dtype).device(device);
-    at::Tensor plain;
-    if (kind == 0) plain = at::zeros(dims, options_of);
-    else if (kind == 1) plain = at::ones(dims, options_of);
-    else if (device.is_cpu()) plain = at::rand(dims, options_of);
-    else plain = at::rand(dims, options_of.device(at::kCPU)).to(device);
-    return Tensor(plain);
+  if (legs.is_none() || py::len(legs) == 0) {
+    throw std::invalid_argument("a tensor needs the legs of its axes");
   }
   // A caller may name the number of codomain legs; otherwise every leg points in, the way a state or
   // an operator is written as a list of legs, and the einsum driver moves the glued ones where they
@@ -1662,7 +1592,7 @@ void bind_tensor(py::module_& m) {
                        const std::vector<Leg>& legs, const py::object& qtotal, int64_t codomain) {
         if (legs.empty()) throw std::invalid_argument("a tensor of charges needs legs");
         TensorMap map;
-        map.space.group = legs.front().group();
+        map.space.group = legs.front().cat();
         map.space.codomain.assign(legs.begin(), legs.begin() + codomain);
         map.space.domain.assign(legs.begin() + codomain, legs.end());
         map.qtotal = qtotal.is_none() ? map.space.group->trivial_sector() : qtotal.cast<Sector>();
@@ -1675,13 +1605,9 @@ void bind_tensor(py::module_& m) {
                        const py::object& qtotal, int64_t codomain) {
         const std::vector<Leg> legs =
             named.is_none() ? std::vector<Leg>{} : named.cast<std::vector<Leg>>();
-        if (legs.empty()) {
-          // with no legs the one block of the trivial charge is the whole tensor, a bare matrix
-          if (blocks.size() != 1) throw std::invalid_argument("a tensor without legs holds one block");
-          return Tensor(blocks.begin()->second.cast<at::Tensor>());
-        }
+        if (legs.empty()) throw std::invalid_argument("a tensor needs the legs of its axes");
         TensorMap map;
-        map.space.group = legs.front().group();
+        map.space.group = legs.front().cat();
         if (codomain < 0) codomain = static_cast<int64_t>(legs.size());
         map.space.codomain.assign(legs.begin(), legs.begin() + codomain);
         map.space.domain.assign(legs.begin() + codomain, legs.end());
@@ -1697,21 +1623,16 @@ void bind_tensor(py::module_& m) {
       .def_static("ones", [](const py::args& shape, const py::kwargs& options) { return filled_of(shape, options, 1); })
       .def_static("rand", [](const py::args& shape, const py::kwargs& options) { return filled_of(shape, options, 2); })
       .def_static("from_torch",
-                  [](const at::Tensor& data, const py::object& legs, const py::object& qtotal) {
-                    if (legs.is_none()) return Tensor(data);
-                    return Tensor::from_dense(data, legs.cast<std::vector<Leg>>(),
+                  [](const at::Tensor& data, const std::vector<Leg>& legs, const py::object& qtotal) {
+                    return Tensor::from_dense(data, legs,
                                               qtotal.is_none() ? std::optional<Sector>{}
                                                                : std::optional<Sector>{qtotal.cast<Sector>()});
                   },
-                  py::arg("data"), py::arg("legs") = py::none(), py::arg("qtotal") = py::none())
+                  py::arg("data"), py::arg("legs"), py::arg("qtotal") = py::none())
       .def_property_readonly("blocks", [](const Tensor& tensor) {
         // The blocks as a mapping from the charge they couple to.  The torch tensors are the ones
         // the engine holds, so writing an entry writes into the tensor.
         py::dict out;
-        if (!tensor.graded()) {
-          out[py::tuple()] = tensor.plain();
-          return out;
-        }
         for (const auto& [charge, block] : tensor.map().blocks) {
           out[py::tuple(py::cast(charge))] = block;
         }
@@ -1721,15 +1642,6 @@ void bind_tensor(py::module_& m) {
         // The whole tensor as plain Python: its legs, the total charge, where the codomain ends and
         // one torch tensor per coupled charge.
         py::dict out;
-        if (!tensor.graded()) {
-          out["legs"] = py::list();
-          out["qtotal"] = py::tuple();
-          out["codomain"] = 0;
-          py::dict plain;
-          plain[py::tuple()] = tensor.plain();
-          out["blocks"] = plain;
-          return out;
-        }
         out["legs"] = py::cast(tensor.legs());
         out["qtotal"] = py::tuple(py::cast(tensor.qtotal()));
         out["codomain"] = static_cast<int64_t>(tensor.map().space.codomain.size());
@@ -1774,13 +1686,12 @@ void bind_tensor(py::module_& m) {
       .def_property_readonly("qtotal", [](const Tensor& tensor) {
         return py::tuple(py::cast(tensor.qtotal()));
       })
-      .def_property_readonly("group", &Tensor::group)
+      .def_property_readonly("cat", &Tensor::cat)
       .def_property_readonly("shape", [](const Tensor& tensor) {
         return py::tuple(py::cast(tensor.shape()));
       })
       .def_property_readonly("dtype", &Tensor::dtype)
       .def_property_readonly("device", &Tensor::device)
-      .def_property_readonly("is_dense", &Tensor::is_dense)
       .def("numel", [](const Tensor& tensor) {
         int64_t total = 0;
         for (const at::Tensor& block : tensor.blocks()) total += block.numel();
@@ -1798,12 +1709,6 @@ void bind_tensor(py::module_& m) {
       .def("to", [](const Tensor& tensor, const py::kwargs& options) { return tensor.to(options); })
       .def("combine_legs", &Tensor::combine_legs)
       .def("__len__", [](const Tensor& tensor) { return static_cast<int64_t>(tensor.blocks().size()); })
-      .def("__getitem__", [](const Tensor& tensor, int64_t index) {
-        if (tensor.graded()) {
-          throw std::invalid_argument("indexing a graded tensor is not supported");
-        }
-        return Tensor(tensor.plain().select(0, index));
-      })
       .def("abs", [](const Tensor& tensor) { return std::abs(tensor.item()); })
       .def("__abs__", [](const Tensor& tensor) { return std::abs(tensor.item()); })
       .def("__neg__", [](const Tensor& tensor) { return -tensor; })

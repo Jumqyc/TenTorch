@@ -201,7 +201,7 @@ class Leg {
   // The same leg with the direction of its charges reversed.
   Leg conj() const;
 
-  const std::shared_ptr<FusionCategory>& group() const { return group_; }
+  const std::shared_ptr<FusionCategory>& cat() const { return group_; }
   const std::vector<Sector>& sectors() const { return sectors_; }
   const std::vector<int64_t>& slices() const { return slices_; }
   int64_t qconj() const { return qconj_; }

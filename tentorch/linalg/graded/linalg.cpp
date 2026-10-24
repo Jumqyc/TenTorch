@@ -126,7 +126,7 @@ Split svd(const TensorMap& tensor, const std::vector<int64_t>& left,
           const std::vector<int64_t>& right, std::optional<int64_t> max_bond, double tol,
           int64_t absorb) {
   const auto [source, device] = prepare(tensor, left, right);
-  const std::shared_ptr<FusionCategory> group = source.space.codomain.front().group();
+  const std::shared_ptr<FusionCategory> group = source.space.codomain.front().cat();
   std::vector<Part> parts;
   for (const auto& [charge, block] : source.blocks) {
     auto [u, values, vh] = at::linalg_svd(block, /*full_matrices=*/false);
@@ -188,7 +188,7 @@ Split svd(const TensorMap& tensor, const std::vector<int64_t>& left,
 std::pair<TensorMap, TensorMap> qr(const TensorMap& tensor, const std::vector<int64_t>& left,
                                    const std::vector<int64_t>& right) {
   const auto [source, device] = prepare(tensor, left, right);
-  const std::shared_ptr<FusionCategory> group = source.space.codomain.front().group();
+  const std::shared_ptr<FusionCategory> group = source.space.codomain.front().cat();
   std::vector<std::pair<Sector, at::Tensor>> reduced;
   std::vector<std::pair<Sector, int64_t>> bond;
   std::vector<at::Tensor> second_blocks;

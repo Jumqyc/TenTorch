@@ -63,35 +63,30 @@ def capped_leg(leg: Any, max_multiplets: int) -> Any: ...
 class Tensor:
     """A block-sparse tensor: one dense block per charge key, all legs carrying a group."""
     def __init__(self, blocks: Sequence[torch.Tensor], qdata: Sequence[Sequence[int | Sector]],
-                 legs: Sequence[Any], qtotal: Sector | None = None,
-                 group: Group | None = None) -> None: ...
+                 legs: Sequence[Any], qtotal: Sector | None = None) -> None: ...
     @staticmethod
-    def from_torch(data: torch.Tensor, legs: Sequence[Any] | None = None,
+    def from_torch(data: torch.Tensor, legs: Sequence[Any],
                    qtotal: Sector | None = None) -> Tensor: ...
     @staticmethod
-    def rand(*shape: int | Sequence[int], dtype: torch.dtype | None = None,
-             device: torch.device | None = None,
-             legs: Sequence[Any] | None = None, group: Group | None = None,
+    def rand(*shape: int | Sequence[int], legs: Sequence[Any],
+             dtype: torch.dtype | None = None, device: torch.device | None = None,
              qtotal: Sector | None = None) -> Tensor: ...
     @staticmethod
-    def ones(*shape: int | Sequence[int], dtype: torch.dtype | None = None,
-             device: torch.device | None = None,
-             legs: Sequence[Any] | None = None, group: Group | None = None,
+    def ones(*shape: int | Sequence[int], legs: Sequence[Any],
+             dtype: torch.dtype | None = None, device: torch.device | None = None,
              qtotal: Sector | None = None) -> Tensor: ...
     @staticmethod
-    def zeros(*shape: int | Sequence[int], dtype: torch.dtype | None = None,
-              device: torch.device | None = None,
-              legs: Sequence[Any] | None = None, group: Group | None = None,
+    def zeros(*shape: int | Sequence[int], legs: Sequence[Any],
+              dtype: torch.dtype | None = None, device: torch.device | None = None,
               qtotal: Sector | None = None) -> Tensor: ...
     blocks: list[torch.Tensor]
     qdata: tuple[tuple[int | Sector, ...], ...]
     legs: tuple[Any, ...]
     qtotal: Sector
-    group: Group
+    cat: Group
     shape: tuple[int, ...]
     dtype: torch.dtype
     device: torch.device
-    is_dense: bool
     real: Tensor
     def numel(self) -> int: ...
     def element_size(self) -> int: ...

@@ -1,11 +1,11 @@
-\chapter{Tensors and symmetries}
+\chapter{Tensors and Symmetries}
 We will discuss the notions of tensors and symmetries in this chapter. We will mostly follow the conventions of \cite{tensorkit,tenpy2024}. 
 \section{Linear Representations of Groups}
 \begin{definition}
-Let $G$ be a finite group or a compact Lie group. A \emph{linear representation} of $G$ on a vector space $V$ is a homomorphism $\rho:G\mapsto\mathsf{GL}(V)$. We will assume the representation is \emph{unitary}, i.e. $\rho(g)^\dagger=\rho(g^{-1})$ for all $g\in G$. We will also assume that the representation is \emph{finite-dimensional}, i.e. $\dim V<\infty$.
+Let $G$ be a compact group. A \emph{linear representation} of $G$ on a finite dimensional vector space $\mathscr{V}$ is a homomorphism $\rho:G\mapsto\mathsf{GL}(\mathscr{V})$. We will assume the representation is \emph{unitary}, i.e. $\rho(g)^\dagger=\rho(g^{-1})$ for all $g\in G$. 
 \end{definition}
 
-It can be shown that any representation of a finite group or a compact Lie group can be decomposed into a direct sum of irreducible representations, $\rho_a$. We will use latin letters $a,b,c,\ldots$ to denote irreducible representations. We will use the notation $V^a$ \footnote{The index for different spaces are the subscripts, as we will encountered in tensor notation, whereas the irrps are the superscripts} to denote the vector space on which $\rho_a$ acts. The dimension of $V_a$ is denoted by $d_a$. The index $a$ are called sectors/charges/irreps. We will use these notations interchangeably.
+It can be shown that any linear representation of a compact group decomposes into a direct sum of irreducible representations, $\rho_a$. We use latin letters $a,b,c,\ldots$ for the irreps, and call them sectors, charges or irreps interchangeably. The space on which $\rho_a$ acts is $\mathscr{V}^a$, of dimension $d_a$. A space carrying an arbitrary representation is written with a subscript, $\mathscr{V}_i$; its $a$-isotypic part is the subspace $\mathscr{V}_i^a\subset\mathscr{V}_i$, and $\mathscr{V}_i=\bigoplus_a m_i^a\mathscr{V}^a$, where the integer $m_i^a$ is the multiplicity, the number of copies of sector $a$ in $\mathscr{V}_i$. When only the sector matters we write $(a)$ for the space $\mathscr{V}^a$, and $m\cdot(a)$ for $m$ copies of it.
 
 \begin{example}
 Let \(G=\mathbb Z_n=\mathbb Z/n\mathbb Z\) be the cyclic group written additively.
@@ -30,7 +30,7 @@ For each \(a\in\mathbb Z_n\), define
 \[
 v_a:=\sum_{m\in\mathbb Z_n}\zeta_n^{-am}e_m,
 \qquad
-V_a:=\operatorname{span}_{\mathbb C}\{v_a\}=\mathbb C v_a.
+\mathscr{V}^a:=\operatorname{span}_{\mathbb C}\{v_a\}=\mathbb C v_a.
 \]
 Then for every \(p\in\mathbb Z_n\),
 \[
@@ -43,14 +43,14 @@ Then for every \(p\in\mathbb Z_n\),
 =\zeta_n^{ap}v_a.
 \end{aligned}
 \]
-Thus \(V^a\) is invariant under \(\rho\), and \(\rho|_{V^a}\) is the one-dimensional representation
+Thus \(\mathscr{V}^a\) is invariant under \(\rho\), and \(\rho|_{\mathscr{V}^a}\) is the one-dimensional representation
 \[
 \rho_a(p)=\zeta_n^{ap}=e^{2\pi i ap/n}
 \qquad (p\in\mathbb Z_n).
 \]
 The vectors \(\{v_a\}_{a\in\mathbb Z_n}\) form the Fourier basis of \(\mathbb C^n\), so
 \[
-\mathbb C^n=\bigoplus_{a\in\mathbb Z_n}V^a,
+\mathbb C^n=\bigoplus_{a\in\mathbb Z_n}\mathscr{V}^a,
 \qquad
 \rho\cong\bigoplus_{a\in\mathbb Z_n}\rho_a.
 \]
@@ -67,36 +67,64 @@ Physically, this is the Fourier transform, which diagonalizes the action of $\ma
 \end{example}
 
 \begin{example}
-Let $G = \mathsf{SU}(2)$. Its Lie algebra is given by tha angular momentum operator $\{J_x,J_y,J_z\}$ with commutation relation $[J_i,J_j]=i\varepsilon_{ijk}J_k$. Its irreducible representations $(j)$ are labeled by a non-negative half-integer $j\in\{0,1/2,1,3/2,\ldots\}$. The representation $\rho_j$ acts on a $(2j+1)$-dimensional vector space $V_j$. The representation $\rho_{1/2}$ is the fundamental representation of $\mathsf{SU}(2)$, and $\rho_1$ is the adjoint representation.
+Let $G = \mathsf{SU}(2)$. Its Lie algebra is spanned by the angular momentum operators $\{J_x,J_y,J_z\}$, with $[J_i,J_j]=i\varepsilon_{ijk}J_k$. Its irreducible representations are labeled by a non-negative half-integer $a\in\{0,\tfrac12,1,\tfrac32,\ldots\}$, and $d_a=2a+1$. The representation $\rho_{1/2}$ is the fundamental representation of $\mathsf{SU}(2)$, and $\rho_1$ is the adjoint representation. 
 \end{example}
 
 \begin{definition}
-A tensor of rank $r$ is a multilinear map \[
-    T: V_{1}\times V_{2}\times\cdots\times V_{r}\to \mathbb C,
+    Let $f:\mathscr{V}\to\mathscr{W}$ be a linear map between two vector spaces carrying representations $\rho_\mathscr{V}$ and $\rho_\mathscr{W}$ of a group $G$. We say that $f$ is an \emph{intertwiner} if it commutes with the action of $G$, i.e. $f\circ \rho_\mathscr{V}(g) = \rho_\mathscr{W}(g)\circ f$ for all $g\in G$.
+\end{definition}
+We will write $f\in\hom_G(\mathscr{V},\mathscr{W})$ if $f$ is an intertwiner between $\mathscr{V}$ and $\mathscr{W}$. 
+
+From a categorical perspective, the vector spaces carrying representations of a group $G$ form a category $\mathsf{Rep}(G)$, whose objects are the vector spaces carrying representations and whose morphisms are the intertwiners. 
+
+Finally, let us mention the following important result, which will be used in the following discussion.
+\begin{theorem}[Schur's Lemma]
+    Let $\mathscr{V}$ and $\mathscr{W}$ be two irreducible representations of a group $G$. If $f\in\hom_G(\mathscr{V},\mathscr{W})$, then either $f=0$ or $f$ is an isomorphism. In particular, if $\mathscr{V}=\mathscr{W}$, then $f = \lambda \mathrm{id}_\mathscr{V}$ for some $\lambda\in \mathbb{C}$.
+\end{theorem}
+
+In general we extend the notion of intertwiner. A linear map acts on $\hom(\mathscr{V},\mathscr{W})\simeq \mathscr{V}^*\otimes \mathscr{W}$ as\begin{align*}
+    \rho(g)f = \rho_\mathscr{W}(g)\,f\,\rho_\mathscr{V}(g)^{-1},\quad \forall g\in G,
+\end{align*}
+using unitarity, $\rho_\mathscr{V}(g)^\dagger=\rho_\mathscr{V}(g)^{-1}$. Then $f$ is an intertwiner if and only if it is invariant under $G$, $\rho(g)f = f$ for all $g\in G$. Since $\mathscr{V}^*\otimes \mathscr{W}$ decomposes into irreps, a map can also transform in a nontrivial sector: we call $f$ an \emph{$a$-intertwiner} if it lies in the $a$-isotypic part,\begin{align*}
+    \hom_a(\mathscr V,\mathscr W):=\Bigl\{f:\mathscr V\to\mathscr W\  \Bigm|\ \rho_{\mathscr
+W}(g)\,f\,\rho_{\mathscr V}(g)^{-1}=\rho_a(g)\,f\ \ \forall g\in G\Bigr\},
+\end{align*}
+where $\rho_a$ is the representation of the irrep $a$.\footnote{The right hand side is shorthand: $\rho_a$ acts on the $a$-isotypic component of $\mathrm{Hom}(\mathscr V,\mathscr W)$, not on the target of $f$. The precise statement is $f\in(\mathscr V^*\otimes\mathscr W)_a$.} We have $\hom_G = \hom_0$, the trivial sector. The decomposition then implies\begin{align*}
+    \hom(\mathscr V,\mathscr W) = \bigoplus_a \hom_a(\mathscr V,\mathscr W).
+\end{align*}
+
+The last ingredient is the tensor product, on which $G$ acts diagonally:\begin{align}
+    \rho_{\mathscr{V}_1\otimes\mathscr{V}_2}(g) = \rho_{\mathscr{V}_1}(g)\otimes \rho_{\mathscr{V}_2}(g),\quad \forall g\in G,
+\end{align}
+and this extends to any number of factors. 
+
+\begin{definition}
+A tensor of rank $(r,s)$ is a multilinear map \[
+    T:\underbrace{\mathscr{V}_1\times\cdots\times \mathscr{V}_r}_{= \mathscr{V}_{\mathrm{in}}}\to \mathscr{V}_{\mathrm{out}},\qquad \mathscr{V}_{\mathrm{out}}=\mathscr{V}_{r+1}\otimes\cdots\otimes\mathscr{V}_{r+s},
 \]
-where each $V_i$ is a vector space carrying a representation $\rho_i$ of a group $G$. (Not always irreducible.) By multilinear we mean that $T$ is linear in each of its arguments. Physically, these space are local Hilbert spaces or their duals.
+where each $\mathscr{V}_i$ carries a representation $\rho_i$ of a group $G$ (not necessarily irreducible), and $\mathscr{V}_{\mathrm{in}}=\mathscr{V}_1\otimes\cdots\otimes\mathscr{V}_r$. Multilinear means linear in each argument. Physically the $\mathscr{V}_i$ are local (physical or virtual) Hilbert spaces. 
+
+We say a tensor $T$ carries charge $a$ if\begin{align}
+    T\in\hom_a(\mathscr{V}_{\mathrm{in}},\mathscr{V}_{\mathrm{out}}).
+\end{align}
+If $T$ carries the trivial charge we say that $T$ is invariant under the action of $G$.
 \end{definition}
 
-The fundamental question of our question is: if given that each vector space can be decomposed into irreducible representations $V_i = \bigoplus_{a}V_i^a$, (this part of information is given by Leg) how can we decompose the tensor $T$ into irreducible representations? To see this, first we note that $T$ it self admits a representation of $G$ given by\[
-    \rho(g)T(v_1,\ldots,v_r) = T(\rho_1(g)v_1,\ldots,\rho_r(g)v_r),\quad \forall g\in G, v_i\in V_i.
-\]
-Or, in other words\begin{align}
-    \rho(g)T = T\circ (\rho_1(g)\otimes\cdots\otimes \rho_r(g)),\quad \forall g\in G.
-\end{align}
-This means that $T\in (V_1\otimes \dots \otimes V_n)^*$ admits a (dual) representation of $G$ given by $\rho^*(g) = \rho_1^*(g)\otimes\cdots\otimes \rho_r^*(g)$. In general, this is still an representation of $G$, and can be decomposed into irreducible representations. In general, we may argue that the tensor $T$ it self lies in (or at least, can be decomposed into) the irreducible representation of $G$ with sector $a$, and call it $T$ have charge $a$ for short. Usually we also require $a=0$ the trivial representation. In this case, we say that $T$ is a \emph{invariant tensor}. 
-
-This brings several important benefits. If $T$ is an invariant tensor\footnote{or in general, a tensor with charge $a$, as we will see the following arguments will spiritually the same}, then the tensor $T$ can be reduced in a block diagonal form, as certain subspace may not fuse to the trivial sector.  
-
 \begin{example}
-Let $G=\mathbb{Z}_2$, the irrps are labeled by $a\in\{0,1\}$, and the representation $\rho_a$ acts on a one-dimensional vector space $V^a$. The tensor product of two irreps is given by $\rho_a\otimes \rho_b = \rho_{(a+b)\mod 2}$. Thus, for a rank-2 tensor $T\in (V_1\otimes V_2)^*$ to be invariant, we must have $V_1^a\otimes V_2^b$ such that $(a+b)\mod 2=0$, i.e. $b=a$. This means that the invariant tensor can only connect sectors with the same charge. To be more concrete, let $v_1\in V_1^{a}$ and $v_2\in V_2^{b}$, then the invariant tensor $T$ satisfies
+Let $G=\mathbb{Z}_2$. The irreps are labeled by $a\in\{0,1\}$, and $\rho_a$ acts on a one-dimensional space $\mathscr{V}^a$, with $\rho_a\otimes \rho_b = \rho_{(a+b)\mod 2}$. An invariant rank-2 tensor $T\in \hom_G(\mathscr{V}_1\otimes \mathscr{V}_2,\mathbb{C})$ can then be nonzero only on $\mathscr{V}_1^a\otimes \mathscr{V}_2^b$ with $(a+b)\mod 2=0$, i.e. $b=a$: it connects only sectors of the same charge. Concretely, for $v_1\in \mathscr{V}_1^{a}$ and $v_2\in \mathscr{V}_2^{b}$, invariance requires
 \begin{align}
     T(v_1,v_2) = T(\rho_a(g)v_1,\rho_b(g)v_2) = T((-1)^{ag}v_1,(-1)^{bg}v_2) = (-1)^{(a+b)g}T(v_1,v_2),\quad \forall g\in \mathbb{Z}_2.
 \end{align}
 This implies that $T(v_1,v_2)=0$ unless $(a+b)\mod 2=0$.
+
+On the other hand, if $T$ carries charge $c$, that is, it transforms as \begin{align}
+    T(\rho_a(g)v_1,\rho_b(g)v_2) = \rho_c(g)T(v_1,v_2),\quad \forall g\in \mathbb{Z}_2,
+\end{align}
+then we must have $(a+b)\mod 2 = c$. This means that the invariant tensor can only connect sectors with charges that sum to $c$ modulo $2$.
 \end{example}
 
 \begin{example}
-Let $G=\mathsf{U}(1)$, the irrps are labeled by integers $a\in\mathbb{Z}$, and the representation $\rho_a$ acts on a one-dimensional vector space $V^a$. The tensor product of two irreps is given by $\rho_a\otimes \rho_b = \rho_{a+b}$. Thus, for a rank-2 tensor $T\in (V_1\otimes V_2)^*$ to be invariant, we must have $V_1^a\otimes V_2^b$ such that $a+b=0$, i.e. $b=-a$. This means that the invariant tensor can only connect sectors with opposite charges. This is simply the charge conservation law. To be more concrete, let $v_1\in V_1^{a}$ and $v_2\in V_2^{b}$, then the invariant tensor $T$ satisfies
+Let $G=\mathsf{U}(1)$. The irreps are labeled by integers $a\in\mathbb{Z}$, and $\rho_a$ acts on a one-dimensional space $\mathscr{V}^a$, with $\rho_a\otimes \rho_b = \rho_{a+b}$. An invariant rank-2 tensor $T\in \hom_G(\mathscr{V}_1\otimes \mathscr{V}_2,\mathbb{C})$ can then be nonzero only on $\mathscr{V}_1^a\otimes \mathscr{V}_2^b$ with $a+b=0$, i.e. $b=-a$: it connects only sectors of opposite charge, which is charge conservation. Concretely, for $v_1\in \mathscr{V}_1^{a}$ and $v_2\in \mathscr{V}_2^{b}$, invariance requires
 \begin{align}
     T(v_1,v_2) = T(\rho_a(g)v_1,\rho_b(g)v_2) = T(e^{iag}v_1,e^{ibg}v_2) = e^{i(a+b)g}T(v_1,v_2),\quad \forall g\in \mathsf{U}(1).
 \end{align}
@@ -104,119 +132,777 @@ This implies that $T(v_1,v_2)=0$ unless $a+b=0$.
 \end{example}
 
 
-The previous two examples are simple as the group $G$ is abelian, whose irreps must be one-dimensional. For non-abelian groups, the irrps can be higher-dimensional, and the tensor product of two irrps can decompose into a direct sum of multiple irrps. 
+The two examples above are simple because $G$ is abelian and its irreps are one-dimensional. A non-abelian group has higher-dimensional irreps, and the tensor product of two irreps decomposes into a direct sum of several irreps. 
 
 \begin{example}
-Let $G=\mathsf{SU}(2)$ and $T\in (V_1\otimes V_2)^*$ be a rank-2 invariant tensor, where\begin{align}
-    V_1 = (0)\oplus(1)\oplus(2)\oplus(3),\quad V_2 = (0)\oplus(1)\oplus(2).
-\end{align}Tensor product of them distributes to\begin{table}[ht]
+Let $G=\mathsf{SU}(2)$ and let $T\in\hom_G(\mathscr{V}_1\otimes\mathscr{V}_2,\mathbb{C})$ be a $(2,0)$ invariant tensor, where\begin{align}
+    \mathscr{V}_1 = \mathscr{V}^{0}\oplus\mathscr{V}^{1}\oplus\mathscr{V}^{2}\oplus\mathscr{V}^{3},\quad \mathscr{V}_2 = \mathscr{V}^{0}\oplus\mathscr{V}^{1}\oplus\mathscr{V}^{2}.
+\end{align}Their tensor product distributes as
+
+\begin{table}[ht]
     \centering
     \begin{tabular}{c|cccc}
-        $V_2 \backslash V_1$& $V_1^{(0)}$ & $V_1^{(1)}$ & $V_1^{(2)}$ & $V_1^{(3)}$ \\
+        $\mathscr{V}_2 \backslash \mathscr{V}_1$& $\mathscr{V}_1^{0}$ & $\mathscr{V}_1^{1}$ & $\mathscr{V}_1^{2}$ & $\mathscr{V}_1^{3}$ \\
         \hline
-        $V_2^{(0)}$ & $(0)$ & $(1)$ & $(2)$ & $(3)$ \\
-        $V_2^{(1)}$ & $(1)$ & $(0)\oplus(1)\oplus(2)$ & $(1)\oplus(2)\oplus(3)$ & $(2)\oplus(3)$ \\
-        $V_2^{(2)}$ & $(2)$ & $(1)\oplus(2)\oplus(3)$ & $(0)\oplus(1)\oplus(2)\oplus(3)\oplus(4)$ & $(1)\oplus(2)\oplus(3)$ 
+        $\mathscr{V}_2^{0}$ & $(0)$ & $(1)$ & $(2)$ & $(3)$ \\
+        $\mathscr{V}_2^{1}$ & $(1)$ & $(0)\oplus(1)\oplus(2)$ & $(1)\oplus(2)\oplus(3)$ & $(2)\oplus(3)$ \\
+        $\mathscr{V}_2^{2}$ & $(2)$ & $(1)\oplus(2)\oplus(3)$ & $(0)\oplus(1)\oplus(2)\oplus(3)\oplus(4)$ & $(1)\oplus(2)\oplus(3)$ 
     \end{tabular}
 \end{table}
-We see that, for the tensor $T$ to be invariant, we only need to consider tensor on these subspaces: $V_1^{(0)}\otimes V_2^{(0)}$, $V_1^{(1)}\otimes V_2^{(1)}$, $V_1^{(2)}\otimes V_2^{(2)}$. The other subspaces do not contain the trivial representation, and thus cannot contribute to the invariant tensor. (in a matrix language, it only carries the map $V_1^{(0)}\to V_2^{(0)}$, $V_1^{(1)}\to V_2^{(1)}$, $V_1^{(2)}\to V_2^{(2)}$ and the whole tensor as a direct sum of these).
+For $T$ to be invariant only the blocks $\mathscr{V}_1^{0}\otimes \mathscr{V}_2^{0}$, $\mathscr{V}_1^{1}\otimes \mathscr{V}_2^{1}$ and $\mathscr{V}_1^{2}\otimes \mathscr{V}_2^{2}$ can contribute; every other summand of the tensor product contains no copy of the trivial representation. In matrix language $T$ is the direct sum of maps $\mathscr{V}_1^{a}\to(\mathscr{V}_2^{a})^*$ for $a=0,1,2$.
+
+The array is therefore block diagonal, one block per sector. (Every $\mathsf{SU}(2)$ irrep is self-dual, $\mathscr{V}_1^*\simeq\mathscr{V}_1$ and $\mathscr{V}_2^*\simeq\mathscr{V}_2$, which is why the block of sector $a$ sits on the diagonal.)
+
+
+By Schur's lemma a map between equivalent irreps is a multiple of the identity, so each block is one number times the identity: a single scalar per sector.
 \end{example}
-Note that the matrix is now block diagonal, which is essentially the Schur's lemma. 
 \section{Fusion trees}
-\label{sec:tree}In general, for a tensor with rank $r>2$ we therefore have to say in which order the irreps are fused. 
-A \emph{fusion tree} records the order in which the legs are fused. It is a full binary tree whose $r$ leaves are the legs, whose $r-1$ inner vertices each carry a charge $b_v$, and whose root carries the charge $a$ of the tensor. Every inner vertex is the constraint
-\begin{align}
-    b_v \in b_{v_L}\otimes b_{v_R},
-\end{align}
-where $b_{v_L},b_{v_R}$ are the charges of its two children and a leaf carries the charge of its leg. The tree therefore attaches $r-1$ intermediate charges to the tensor, on top of the $r$ leg charges. The number of shapes with $r$ leaves is the Catalan number $C_{r-1}$: two for $r=3$, five for $r=4$.
+\label{sec:tree}
+The last section left us with a block-diagonal tensor: a sequence of sectors $(a_1,\dots,a_n)$ fuses to the charge $c$ of the tensor. For two legs each block is a single number, by Schur's lemma. For three legs and higher the decomposition is finer: the blocks are no longer numbers, and describing them is the subject of this section.
+\subsection{Clebsch--Gordan Tensor}
+\label{sec:cg}
 
-\begin{example}
-The leaves alone do not fix the tree. Let $G=\mathsf{SU}(2)$ and let all four legs be spin-$\tfrac12$,
+\begin{definition}
+Let $a,b,c$ be sectors. $\mathscr{V}^{a}$ carries the irreducible representation $a$, of dimension $d_a$, with an orthonormal basis $\{\ket{\alpha}_a\}_{\alpha=1}^{d_a}$. The group $G$ acts on the tensor space $\mathscr{V}^{a}\otimes\mathscr{V}^{b}$ through $\rho_a(g)\otimes\rho_b(g)$. This is in general reducible:\footnote{The label $c$ also marks the copy: for $\mathsf{SU}(3)$, $8\otimes8$ contains $8$ twice, and its two copies are written $8$ and $8'$ and treated as different charges $c$.}
 \begin{align}
-    T\in (\tfrac12)\otimes(\tfrac12)\otimes(\tfrac12)\otimes(\tfrac12),
+    \mathscr{V}^{a}\otimes\mathscr{V}^{b}\cong\bigoplus_{c}\mathscr{V}^{c},
 \end{align}
-with $T$ invariant. The leaves, the leg charges and the total charge are the same in every tree, and so is the number of blocks: four spin-$\tfrac12$ couple to $0$ in two ways, so the invariant space is two-dimensional and $T$ has two blocks in any shape. What the tree changes is the pair of inner charges that labels those two blocks.
-\begin{center}
-    \fusiontreeivladder{$\tfrac12$}{$\tfrac12$}{$\tfrac12$}{$\tfrac12$}{$b_1$}{$b_2$}
-    \qquad
-    \fusiontreeivbalanced{$\tfrac12$}{$\tfrac12$}{$\tfrac12$}{$\tfrac12$}{$c_1$}{$c_2$}
-\end{center}
-In the left-nested tree the first vertex couples the first two legs, $b_1\in\tfrac12\otimes\tfrac12=0\oplus 1$, and whatever $b_1$ is, the coupling with the third leg must leave $b_2=\tfrac12$ for the last fusion to reach $0$: the two blocks are $(b_1,b_2)=(0,\tfrac12)$ and $(1,\tfrac12)$. In the balanced tree the two pairs couple separately, $c_1,c_2\in 0\oplus 1$, and the root reaches $0$ only when $c_1=c_2$: the two blocks are $(c_1,c_2)=(0,0)$ and $(1,1)$. Same leaves, same number of blocks, different labels --- a block is an inner charge as much as it is a set of leg charges.
+over the labelled copies $c$. The \emph{Clebsch--Gordan tensor} is the embedding \begin{align}
+    C^c_{ab}:\mathscr{V}^c\hookrightarrow \mathscr{V}^a\otimes\mathscr{V}^b.
+\end{align}
+In components it is the inner product
+\begin{align}
+    (C^{c}_{ab})^{\mu}_{\alpha\beta} = \langle a\alpha ; b\beta\mid  c\mu\rangle,\label{eq:cg}
+\end{align}
+one entry for each triple of component labels that meet at a node.
+\end{definition}
+\begin{example}
+For an abelian group every $d_a=1$, every product contains each charge at most once, and the overlap is $1$ up to a phase of the convention. Recoupling is then trivial, and the whole content of this section reduces to the sparsity of the fusion rules that the previous section already used.
 \end{example}
 
+\paragraph{Rank 2} A rank-2 tensor fuses its two incoming legs into the charge it carries, and Eq.(\ref{eq:cg}) gives that fused state:\begin{align}
+    \ket{c\mu} = \sum_{\alpha,\beta}(C^{c}_{ab})^{\mu}_{\alpha\beta}\,\ket{\alpha}_a\otimes\ket{\beta}_b,
+\end{align}
+with the Clebsch--Gordan tensors orthonormal,
+\begin{align}
+    \sum_{\alpha,\beta}(C^{c}_{ab})^{\mu}_{\alpha\beta}\,
+    \overline{(C^{c'}_{ab})^{\mu'}_{\alpha\beta}}=\delta_{cc'}\delta_{\mu\mu'},
+    \qquad
+    \sum_{c,\mu}(C^{c}_{ab})^{\mu}_{\alpha\beta}\,
+    \overline{(C^{c}_{ab})^{\mu}_{\alpha'\beta'}}=\delta_{\alpha\alpha'}\delta_{\beta\beta'} . \label{eq:cg-orth}
+\end{align}
+where the former uses the resolution of identity on $\mathscr{V}^{a}\otimes\mathscr{V}^{b}$ and the latter on $\mathscr{V}^{c}$. The first line says that the map is an isometry, the second that it is a complete embedding. The two together say that the blocks tile a unitary matrix. 
+
+These identities are the algebra of a node. Draw the CG tensor as a node with two legs in and one leg out:
+\begin{center}
+    \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
+    \node (a) at (0,0) {$a$};
+    \node (b) at (1.2,0) {$b$};
+    \node (c) at (0.6,1.2) {$c$};
+    \node[circle, fill, inner sep=1.5pt] (v) at (0.6,0.6) {};
+    \draw (a) -- (v); \draw (b) -- (v); \draw (v) -- (c);
+    \node[anchor=north] at (2.0,0.6) {$=C^{c}_{ab}$};
+  \end{tikzpicture}
+\end{center}
+The indices are the lines of the node: $a,b$ name the charges on the two incoming legs, $c$ the charge on the outgoing one, and $\alpha,\beta,\mu$ the components carried along each line. Contracting a diagram means summing over the components of every internal line, so the orthogonality relations Eq.(\ref{eq:cg-orth}) read
+\begin{center}
+    \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
+    \node[anchor=center] at (-3,1) {
+        $\sum_{\alpha,\beta}(C^{c}_{ab})^{\mu}_{\alpha\beta}\,
+    \overline{(C^{c'}_{ab})^{\mu'}_{\alpha\beta}} = $
+    }; 
+    \node (a) at (-0.5,1) {$a$};
+    \node (b) at (0.5,1) {$b$};
+    \node (c) at (0,2) {$c$};
+    \node (c') at (0,0) {$c'$};
+    \node[circle,fill] (v) at (0,0.5) {};
+    \node[circle,fill] (v') at (0,1.5) {};
+    \draw (a) -- (v); \draw (b) -- (v);
+    \draw (a) -- (v'); \draw (b) -- (v');
+    \draw (v) -- (c'); \draw (v') -- (c);
+    \node[anchor = center] at (1.2,1) {$=$};
+    \node (c'') at (2,2) {$c$};
+    \node (c''') at (2,0) {$c'$};
+    \draw (c'') -- (c''');
+    \node[anchor=center] at (3.5,1) {$=\delta_{cc'}\delta_{\mu\mu'}$};
+    \end{tikzpicture}
+\end{center}
+The second relation glues the two nodes along the charge instead, so the two legs pass through:
+
+\begin{center}
+    \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
+    \node[anchor=center] at (-3,1) {
+        $\sum_{c,\mu}(C^{c}_{ab})^{\mu}_{\alpha\beta}\,
+    \overline{(C^{c}_{ab})^{\mu}_{\alpha'\beta'}} = $
+    };
+    \node (a') at (-0.5,2) {$a$};
+    \node (b') at (0.5,2) {$b$};
+    \node (a) at (-0.5,0) {$a$};
+    \node (b) at (0.5,0) {$b$};
+    \node[circle,fill] (v') at (0,1.5) {};
+    \node[circle,fill] (v) at (0,0.5) {};
+    \draw (a') -- (v'); \draw (b') -- (v');
+    \draw (a) -- (v); \draw (b) -- (v);
+    \draw (v') -- (v);
+    \node[anchor = center] at (1.2,1) {$=$};
+    \node (x) at (1.95,2) {$a$};
+    \node (y) at (2.6,2) {$b$};
+    \node (x') at (1.95,0) {$a$};
+    \node (y') at (2.6,0) {$b$};
+    \draw (x) -- (x'); \draw (y) -- (y');
+    \node[anchor=center] at (3.85,1) {$=\delta_{\alpha\alpha'}\delta_{\beta\beta'}$};
+    \end{tikzpicture}
+\end{center}
+Tracing these diagrams over the component indices counts dimensions, and in a diagram the trace is a closed loop. With this in mind, we have
+\begin{center}
+    \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
+    \node[anchor=center] at (-5.6,1.4) {$d_a\,d_b = $};
+    \draw (-3.9,1.4) circle (0.5);
+    \draw (-2.7,1.4) circle (0.5);
+    \node[fill=white, inner sep=1.5pt] at (-3.9,1.9) {$a$};
+    \node[fill=white, inner sep=1.5pt] at (-2.7,1.9) {$b$};
+    \node[anchor=center] at (-1.9,1.4) {$=$};
+    \node[anchor=center] at (-1.35,1.4) {$\mathrm{tr}_{a,b}$};
+    \draw (-0.6,0.8) -- (-0.6,2.0);
+    \draw (0,0.8) -- (0,2.0);
+    \node[anchor=south, inner sep=1pt] at (-0.6,2.0) {$a$};
+    \node[anchor=north, inner sep=1pt] at (-0.6,0.8) {$a$};
+    \node[anchor=south, inner sep=1pt] at (0,2.0) {$b$};
+    \node[anchor=north, inner sep=1pt] at (0,0.8) {$b$};
+    \node[anchor=center] at (0.7,1.4) {$=$};
+    \node[anchor=center] at (1.3,1.4) {$\mathrm{tr}_{a,b}$};
+    \node[circle,fill,inner sep=1.5pt] (t1) at (2.45,1.7) {};
+    \node[circle,fill,inner sep=1.5pt] (t2) at (2.45,1.1) {};
+    \draw (1.95,2.3) -- (t1); \draw (2.95,2.3) -- (t1);
+    \draw (1.95,0.5) -- (t2); \draw (2.95,0.5) -- (t2);
+    \draw (t1) -- (t2);
+    \node[fill=white, inner sep=1.5pt] at (2.45,1.4) {$c$};
+    \node[anchor=south, inner sep=1pt] at (1.95,2.3) {$a$};
+    \node[anchor=south, inner sep=1pt] at (2.95,2.3) {$b$};
+    \node[anchor=north, inner sep=1pt] at (1.95,0.5) {$a$};
+    \node[anchor=north, inner sep=1pt] at (2.95,0.5) {$b$};
+    \node[anchor=center] at (-6.0,-0.95) {$=$};
+    \draw (-4.6,-0.45) arc (90:270:0.5);
+    \draw (-4.6,-0.45) arc (90:-90:0.5);
+    \node[fill=white, inner sep=1.5pt] at (-5.1,-0.95) {$a$};
+    \node[fill=white, inner sep=1.5pt] at (-4.1,-0.95) {$b$};
+    \draw (-4.6,-0.45) -- (-4.6,-1.45);
+    \node[fill=white, inner sep=1.5pt] at (-4.6,-0.95) {$c$};
+    \fill (-4.6,-0.45) circle (1.5pt);
+    \fill (-4.6,-1.45) circle (1.5pt);
+    \node[anchor=center] at (-3.55,-0.95) {$=$};
+    \draw (-3.3,-0.3) -- (-3.3,-1.6);
+    \node[anchor=south, inner sep=1pt] at (-3.3,-0.3) {$c$};
+    \node[anchor=north, inner sep=1pt] at (-3.3,-1.6) {$c'$};
+    \node[anchor=center] at (-2.4,-0.95) {$\delta_{cc'}\delta_{\mu\mu'}$};
+    \node[anchor=center] at (-1.5,-0.95) {$=$};
+    \node[anchor=center] at (-0.85,-0.95) {$\sum_{c}$};
+    \draw (0.05,-0.95) circle (0.5);
+    \node[fill=white, inner sep=1.5pt] at (0.05,-0.45) {$c$};
+    \node[anchor=center] at (0.95,-0.95) {$=$};
+    \node[anchor=center] at (1.95,-0.95) {$\sum_{c}d_c$};
+    \end{tikzpicture}
+\end{center}
+which nothing but the dimension count of the fusion rule \[\mathscr{V}^{a}\otimes\mathscr{V}^{b}\cong\bigoplus_c\mathscr{V}^{c}.\]
+The same number follows from playing with Eq.(\ref{eq:cg-orth}). 
+
+\paragraph{Rank 3} A rank-3 tensor needs the fusion twice, and there are two ways to stack the two nodes. Fuse legs $a_1,a_2$ first to a label $b$, then $b$ with $a_3$ to the root $c$:
+\begin{center}
+    \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
+        \node[anchor=north] (a1) at (0,0) {$a_1$};
+        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
+        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
+        \node (b) at (0.6,0.9) {$b$};
+        \node (c) at (1.2,2.0) {$c$};
+        \node[circle, fill, inner sep=1.5pt] (v1) at (0.6,0.6) {};
+        \node[circle, fill, inner sep=1.5pt] (v2) at (1.2,1.2) {};
+        \draw (a1) -- (v1); \draw (a2) -- (v1);
+        \draw (v1) -- (v2); \draw (a3) -- (v2); \draw (v2) -- (c);
+        \node[anchor=north] at (5.0,1.2) {$=C^{c}_{ba_3}C^{b}_{a_1a_2}$};
+
+    \end{tikzpicture}
+\end{center}
+A state $\ket{c\mu}$ of the product space is then built by inserting the CG tensors inductively. The ket carries its tree, and the component $\mu$ of the root is written outside:
+\begin{align*}
+    \sum_b\left|\,\begin{tikzpicture}[thick, scale=0.5, every node/.style={font=\scriptsize, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
+        \node[anchor=north] (a1) at (0,0) {$a_1$};
+        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
+        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
+        \node (b) at (0.6,0.9) {$b$};
+        \node (c) at (1.2,2.0) {$c$};
+        \node[circle, fill, inner sep=1.5pt] (v1) at (0.6,0.6) {};
+        \node[circle, fill, inner sep=1.5pt] (v2) at (1.2,1.2) {};
+        \draw (a1) -- (v1); \draw (a2) -- (v1);
+        \draw (v1) -- (v2); \draw (a3) -- (v2); \draw (v2) -- (c);
+    \end{tikzpicture}\,\,;c\mu\right\rangle
+    &= \sum_b\sum_{\beta\alpha_3} (C^c_{ba_3})^{\mu}_{\beta\alpha_3}\ket{b\beta}\otimes\ket{\alpha_3}_{a_3} \\
+    &= \sum_b\sum_{\beta\alpha_3}\sum_{\alpha_1\alpha_2} (C^c_{ba_3})^{\mu}_{\beta\alpha_3}(C^b_{a_1a_2})^{\beta}_{\alpha_1\alpha_2}\ket{\alpha_1}_{a_1}\otimes\ket{\alpha_2}_{a_2}\otimes\ket{\alpha_3}_{a_3}.
+\end{align*}
+
+On the other hand, we can also fuse $a_2$ and $a_3$ first to a label $b'$, then $a_1$ with $b'$ to the root $c$:
+\begin{center}
+    \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
+        \node[anchor=north] (a1) at (0,0) {$a_1$};
+        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
+        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
+        \node (b') at (1.8,0.9) {$b'$};
+        \node (c) at (1.2,2.0) {$c$};
+        \node[circle, fill, inner sep=1.5pt] (v1) at (1.8,0.6) {};
+        \node[circle, fill, inner sep=1.5pt] (v2) at (1.2,1.2) {};
+        \draw (a2) -- (v1); \draw (a3) -- (v1);
+        \draw (v1) -- (v2); \draw (a1) -- (v2); \draw (v2) -- (c);
+        \node[anchor=north] at (5.0,1.2) {$=C^{c}_{a_1b'}C^{b'}_{a_2a_3}$};
+    \end{tikzpicture}
+\end{center}
+which means\begin{align}
+    \sum_{b'}\left|\,\begin{tikzpicture}[thick, scale=0.5, every node/.style={font=\scriptsize, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
+        \node[anchor=north] (a1) at (0,0) {$a_1$};
+        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
+        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
+        \node (b') at (1.8,0.9) {$b'$};
+        \node (c) at (1.2,2.0) {$c$};
+        \node[circle, fill, inner sep=1.5pt] (v1) at (1.8,0.6) {};
+        \node[circle, fill, inner sep=1.5pt] (v2) at (1.2,1.2) {};
+        \draw (a2) -- (v1); \draw (a3) -- (v1);
+        \draw (v1) -- (v2); \draw (a1) -- (v2); \draw (v2) -- (c);
+    \end{tikzpicture}\,;c\mu\right\rangle
+    &= \sum_{b'}\sum_{\beta'\alpha_1} (C^c_{a_1b'})^{\mu}_{\alpha_1\beta'}\ket{\alpha_1}_{a_1}\otimes\ket{b'\beta'} \\
+    &= \sum_{b'}\sum_{\beta'\alpha_1}\sum_{\alpha_2\alpha_3} (C^c_{a_1b'})^{\mu}_{\alpha_1\beta'}(C^{b'}_{a_2a_3})^{\beta'}_{\alpha_2\alpha_3}\ket{\alpha_1}_{a_1}\otimes\ket{\alpha_2}_{a_2}\otimes\ket{\alpha_3}_{a_3}.
+\end{align}
+In both cases the sum over the intermediate charge runs over every charge allowed by the fusion rules.
 
 
-A block is fixed by a charge on each leg. It is nonzero only when the tree can be labelled consistently with those leg charges and with $a$, so a block is labelled by the pair (leg charges, inner charges). Several inner labellings can share one set of leg charges, and the tensor then has several blocks there, one per labelling.
+Both fusions give the same state $\ket{c\mu}$, but its components in the two tree bases differ. Their overlap is
+\begin{align}
+    (F^{c}_{a_1a_2a_3})_{bb'}&=\left\langle \,\begin{tikzpicture}[thick, scale=0.5, every node/.style={font=\scriptsize, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
+        \node[anchor=north] (a1) at (0,0) {$a_1$};
+        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
+        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
+        \node (b) at (0.6,0.9) {$b$};
+        \node (c) at (1.2,2.0) {$c$};
+        \node[circle, fill, inner sep=1.5pt] (v1) at (0.6,0.6) {};
+        \node[circle, fill, inner sep=1.5pt] (v2) at (1.2,1.2) {};
+        \draw (a1) -- (v1); \draw (a2) -- (v1);
+        \draw (v1) -- (v2); \draw (a3) -- (v2); \draw (v2) -- (c);
+    \end{tikzpicture}\,\,;c\mu\right|\left.\,\begin{tikzpicture}[thick, scale=0.5, every node/.style={font=\scriptsize, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
+        \node[anchor=north] (a1) at (0,0) {$a_1$};
+        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
+        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
+        \node (b') at (1.8,0.9) {$b'$};
+        \node (c) at (1.2,2.0) {$c$};
+        \node[circle, fill, inner sep=1.5pt] (v1) at (1.8,0.6) {};
+        \node[circle, fill, inner sep=1.5pt] (v2) at (1.2,1.2) {};
+        \draw (a2) -- (v1); \draw (a3) -- (v1);
+        \draw (v1) -- (v2); \draw (a1) -- (v2); \draw (v2) -- (c);
+    \end{tikzpicture}\,;c\mu\right\rangle
+    \\
+    &= \sum_{\alpha_1\alpha_2\alpha_3}\sum_{\beta\beta'}
+    \overline{(C^{b}_{a_1a_2})^{\beta}_{\alpha_1\alpha_2}}\,
+    \overline{(C^{c}_{ba_3})^{\mu}_{\beta\alpha_3}}\,
+    (C^{b'}_{a_2a_3})^{\beta'}_{\alpha_2\alpha_3}\,
+    (C^{c}_{a_1b'})^{\mu}_{\alpha_1\beta'}.
+\end{align}
+
+To reduce it, note that both states lie in the same sector $c$. The overlap is an intertwiner of $\mathscr{V}^c$ with itself, so by Schur's lemma it is proportional to the identity: independent of $\mu$, a function of the inner charges $b,b'$ alone. The two kets are orthonormal bases of the same space, so the matrix is unitary. It is called the \emph{recoupling matrix}, or \emph{$F$ symbol}.
+
+Another way to interpret this overlap is to directly take the conjugate of the first tree (flip it over) and glue it to the second tree:
+\begin{center}
+\begin{tikzpicture}[thick, every node/.style={font=\small, inner sep=1pt, outer sep=1pt}]
+    \coordinate (L1) at (0,0);
+    \coordinate (L2) at (1.2,0);
+    \coordinate (L3) at (2.4,0);
+    \node[anchor=east, inner sep=2pt] at (0,0) {$a_1$};
+    \node[anchor=south east, inner sep=2pt] at (1.2,0) {$a_2$};
+    \node[anchor=west, inner sep=2pt] at (2.4,0) {$a_3$};
+    \node[circle, fill, inner sep=1.1pt] (v1) at (0.6,-0.7) {};
+    \node[circle, fill, inner sep=1.1pt] (v2) at (1.2,-1.45) {};
+    \node[circle, fill, inner sep=1.1pt] (w1) at (1.8,0.7) {};
+    \node[circle, fill, inner sep=1.1pt] (w2) at (1.2,1.45) {};
+    \foreach \p in {L1,L2,L3} { \node[circle, fill, inner sep=0.9pt] at (\p) {}; }
+    \draw (L1) -- (v1); \draw (L2) -- (v1);
+    \draw (v1) -- (v2); \draw (L3) -- (v2);
+    \draw (L2) -- (w1); \draw (L3) -- (w1);
+    \draw (w1) -- (w2); \draw (L1) -- (w2);
+    \draw (v2) .. controls (-1.15,-1.1) and (-1.15,1.1) .. (w2);
+    \node[anchor=east] at (0.72,-1.05) {$b$};
+    \node[anchor=west] at (1.68,1.05) {$b'$};
+    \node[anchor=east] at (-0.98,0) {$c$};
+    \node at (3.35,0) {$=$};
+    \begin{scope}[shift={(4.25,-1.2)}]
+        \node[circle, fill, inner sep=1.2pt] (Q) at (0,0) {};
+        \node[circle, fill, inner sep=1.2pt] (R) at (3.4,0) {};
+        \node[circle, fill, inner sep=1.2pt] (P) at (1.7,2.4) {};
+        \node[circle, fill, inner sep=1.2pt] (S) at (1.7,0.78) {};
+        \draw (P) -- (Q); \draw (Q) -- (R); \draw (R) -- (P);
+        \draw (S) -- (P); \draw (S) -- (Q); \draw (S) -- (R);
+        \node[fill=white] at (0.82,1.3) {$b$};
+        \node[fill=white] at (2.58,1.3) {$a_2$};
+        \node[fill=white] at (1.7,-0.12) {$a_3$};
+        \node[fill=white] at (1.54,1.55) {$a_1$};
+        \node[fill=white] at (0.75,0.34) {$c$};
+        \node[fill=white] at (2.65,0.34) {$b'$};
+    \end{scope}
+\end{tikzpicture}
+\end{center}
+In the left picture the second tree is the first one flipped over, so the two are glued along $a_1,a_2,a_3$ and along the root $c$, which is drawn as the single curve joining the two upper vertices. Every leg then meets a partner and what remains is the tetrahedron on the right: six edges $a_1,a_2,a_3,b,b',c$, every vertex trivalent, nothing external. Its value is one number per pair of inner labels, and it is the network the $6j$ symbol counts.
+
+Yet another way to see the $F$ symbol is to view it as basis changing matrix. Different fusion path are essentially different conventions in the fusion process: hence we have
+\begin{align*}
+    \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=1pt, outer sep=1pt}, baseline=(current bounding box.center)]
+        \node[anchor=north] (a1) at (0,0) {$a_1$};
+        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
+        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
+        \node[circle, fill, inner sep=1.1pt] (v1) at (0.6,0.6) {};
+        \node[circle, fill, inner sep=1.1pt] (v2) at (1.2,1.4) {};
+        \node (c) at (1.2,2.2) {$c$};
+        \draw (a1) -- (v1); \draw (a2) -- (v1);
+        \draw (v1) -- (v2); \draw (a3) -- (v2);
+        \draw (v2) -- (c);
+        \node[anchor=east] at (0.42,0.98) {$b$};
+    \end{tikzpicture}
+    \;=\sum_{b'}(F^c_{a_1a_2a_3})_{bb'}\;
+    \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=1pt, outer sep=1pt}, baseline=(current bounding box.center)]
+        \node[anchor=north] (a1) at (0,0) {$a_1$};
+        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
+        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
+        \node[circle, fill, inner sep=1.1pt] (w1) at (1.8,0.6) {};
+        \node[circle, fill, inner sep=1.1pt] (v2) at (1.2,1.4) {};
+        \node (c) at (1.2,2.2) {$c$};
+        \draw (a2) -- (w1); \draw (a3) -- (w1);
+        \draw (w1) -- (v2); \draw (a1) -- (v2);
+        \draw (v2) -- (c);
+        \node[anchor=west] at (1.98,0.98) {$b'$};
+    \end{tikzpicture}
+\end{align*}
+
+To conclude, thanks to Schur's lemma, we are able to view the fusion trees as vectors in a Hilbert space, for the same fusion process, the trees form a orthonormal (to see this, use the relation Eq.(\ref{eq:cg-orth})) basis labeled by the intermediate fusion step $b$. We can further define the inner product of two trees, and $F$-symbols are the overlaps of two different fusion ordering, and act as the change of basis between the two bases. 
+\begin{example}
+For $\mathsf{SU}(2)$, with $a_i=j_i$, $b=j_{12}$, $b'=j_{23}$ and $c=J$, the overlap is
+\begin{align}
+    (F^{J}_{j_1j_2j_3})_{j_{12}j_{23}}=(-1)^{j_1+j_2+j_3+J}\,\sqrt{d_{j_{12}}d_{j_{23}}}\;
+    \begin{Bmatrix}j_1&j_2&j_{12}\\ j_3&J&j_{23}\end{Bmatrix},\label{eq:6j}
+\end{align}
+independent of $M$, and zero unless each of the three nodes satisfies its triangle condition. The sign is a convention. It comes from the order in which the two legs are written inside a coupled state, and a different convention multiplies each vector of a basis by a sign or a phase; only the combination of the conventions appears in an observable, which is the content of the identities of Section~\ref{sec:frandr}. The $6j$ symbols are tabulated and have their own orthogonality, which is the statement that the two bases are orthonormal.
+\end{example}
+
+\begin{theorem}
+The matrix $(F^{c}_{a_1a_2a_3})$ is unitary,
+\begin{align}
+    \sum_{b'}(F^{c}_{a_1a_2a_3})_{bb'}\,\overline{(F^{c}_{a_1a_2a_3})_{b''b'}}=\delta_{bb''}.
+\end{align}
+\end{theorem}
+This says that the two tree bases are orthonormal: $F$ is the change of basis between them, so it is unitary.
 
 \begin{example}
-Let $G=\mathsf{SU}(2)$ and consider an invariant rank-3 tensor $T\in V_1\otimes V_2\otimes V_3$ with
+The smallest case with more than one inner label is three spin-$\tfrac12$ legs, where $b,b'\in\{0,1\}$. For $c=\tfrac12$, Eq.(\ref{eq:6j}) gives
 \begin{align}
-    V_1 = 7\cdot\secZ{(0)}\oplus 5\cdot\secH{(\tfrac12)}\oplus 3\cdot\secO{(1)}\oplus 1\cdot\secT{(\tfrac32)},\qquad
-    V_2 = \secH{(\tfrac12)},\qquad
-    V_3 = V_1^*.
+    F^{1/2}_{1/2,1/2,1/2}=\begin{pmatrix}
+    -\tfrac12 & \tfrac{\sqrt3}{2}\\[2pt]
+    \tfrac{\sqrt3}{2} & \tfrac12
+    \end{pmatrix},
 \end{align}
-Every charge carries the colour of its sector: \textcolor{secZero}{$j=0$}, \textcolor{secHalf}{$j=\tfrac12$}, \textcolor{secOne}{$j=1$}, \textcolor{secThreeHalf}{$j=\tfrac32$}. The bond spaces have dimension $7+5\cdot 2+3\cdot 3+1\cdot 4=30$, so a dense array for $T$ has
+with rows and columns ordered as $(b,b')=(0,1)$. The matrix is real, symmetric and of trace zero, so $F^2=\mathbf{1}$: its eigenvalues are $+1$ and $-1$, and $F=F^\dagger=F^{-1}$, which is unitarity in its cheapest form. For $c=\tfrac32$ only $b=b'=1$ is allowed and $F^{3/2}=(1)$. The two matrices together are the change of basis between the two bracketings of three spin-$\tfrac12$ states, and they are the smallest nontrivial example of the symbol.
+\end{example}
+
+\section{Blocks and their keys}
+As we saw earlier, a tensor is a linear map between vector spaces, and a vector space is a direct sum of irreps. A tensor with charge $c$ on the root therefore splits into blocks, one per fusion tree that fuses the leg charges to $c$; inside a block the entries are labelled by the trees on the two sides of the map. Two fusion sequences give the same block, related by the unitary $F$ symbol, so we may fix one deterministic sequence per tree and store the coefficients in that tree basis. 
+
+In our convention, we always store the tree as\begin{align}
+    (a_1,\dots,a_r|b_1,\dots,b_{r-2}|c),
+\end{align}
+where the fusion process is from left to right. 
+
+\begin{center}
+    \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=1pt, outer sep=1pt}, baseline=(current bounding box.center)]
+        \node[anchor=north] (a1) at (0,0) {$a_1$};
+        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
+        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
+        \node[anchor=north] (a4) at (3.6,0) {$a_4$};
+        \node[anchor=north] (a5) at (4.8,0) {$a_5$};
+        \node[circle, fill, inner sep=1.1pt] (v1) at (0.6,0.6) {};
+        \node[circle, fill, inner sep=1.1pt] (v2) at (1.2,1.2) {};
+        \node[circle, fill, inner sep=1.1pt] (v3) at (1.8,1.8) {};
+        \node[circle, fill, inner sep=1.1pt] (v4) at (2.4,2.4) {};
+        \node (b1) at (0.6,0.9) {$b_1$};
+        \node (b2) at (1.2,1.5) {$b_2$};
+        \node (b3) at (1.8,2.1) {$b_3$};
+        \node (c) at (2.4,3.2) {$c$};
+        \draw (a1) -- (v1); \draw (a2) -- (v1);
+        \draw (v1) -- (v2); \draw (a3) -- (v2);
+        \draw (v2) -- (v3); \draw (a4) -- (v3);
+        \draw (v3) -- (v4); \draw (a5) -- (v4);
+        \draw (v4) -- (c);
+        \node[anchor = center] at (8.4,0.5) {$=(a_1,a_2,a_3,a_4,a_5|b_1,b_2,b_3|c)$};
+    \end{tikzpicture}
+\end{center}
+
+\begin{example}
+Let $G=\mathsf{SU}(2)$ and consider an invariant rank-3 tensor $T\in \hom_G(\mathscr{V}_1\otimes\mathscr{V}_2\otimes\mathscr{V}_3,\mathbb{C})$ with
 \begin{align}
-    30\times 2\times 30 = 1800 \text{ entries},\qquad 1800\times 16\ \mathrm{B} = 28.8\ \mathrm{kB}
+    \mathscr{V}_1 = \secMb{secZero}{70}\cdot\secZ{(0)}\oplus \secMb{secHalf}{50}\cdot\secH{(\tfrac12)}\oplus \secMb{secOne}{30}\cdot\secO{(1)}\oplus \secMb{secThreeHalf}{10}\cdot\secT{(\tfrac32)},\qquad
+    \mathscr{V}_2 = \secH{(\tfrac12)},\qquad
+    \mathscr{V}_3 = \mathscr{V}_1^*.
 \end{align}
-in complex double precision. Of the $4\times 1\times 4=16$ combinations of leg charges only six can fuse to the trivial charge $a=0$; those six are
+Every charge carries the colour of its sector: \textcolor{secZero}{$j=0$}, \textcolor{secHalf}{$j=\tfrac12$}, \textcolor{secOne}{$j=1$}, \textcolor{secThreeHalf}{$j=\tfrac32$}. A multiplicity belongs to the sector it counts, so it is written bold in that sector's colour, and a dimension plain in the same colour: $\secMb{secZero}{70}\cdot\secZ{(0)}$ is seventy copies of the one-dimensional sector $j=0$, while the plain $\secH{2}$ beside $\secMb{secHalf}{50}$ is the dimension of $j=\tfrac12$. The multiplicities are large on purpose, so that a bold number and a dimension stay apart even in black and white. The bond spaces have dimension $70\cdot 1+50\cdot 2+30\cdot 3+10\cdot 4=300$, so a dense array for $T$ has
+\begin{align}
+    300\times 2\times 300 = 180000 \text{ entries},\qquad 180000\times 16\ \mathrm{B} = 2.88\ \mathrm{MB}
+\end{align}
+in complex double precision. Of the $4\times 1\times 4=16$ combinations of leg charges only six can fuse to the trivial charge $c=0$; those six are
 \begin{center}
     % Each tree is 32pt above and below its baseline, so a row carries 3.6em of extra
     % depth; the first row also takes a zero-width strut to clear the header rule.
     \begin{tabular}{ccc}
         tree & vector entries & stored numbers \\
         \hline
-        \fusiontreepic{\secZ{$0$}}{\secH{$\tfrac12$}}{\secH{$\tfrac12$}}{\secH{$\tfrac12$}}\rule{0pt}{3.6em} & $\secZ{7}\cdot\secH{2}\cdot\secH{10} = 140$ & $\secZ{7}\cdot\secH{1}\cdot\secH{5} = 35$ \\[3.6em]
-        \fusiontreepic{\secH{$\tfrac12$}}{\secH{$\tfrac12$}}{\secZ{$0$}}{\secZ{$0$}} & $\secH{10}\cdot\secH{2}\cdot\secZ{7} = 140$ & $\secH{5}\cdot\secH{1}\cdot\secZ{7} = 35$ \\[3.6em]
-        \fusiontreepic{\secH{$\tfrac12$}}{\secH{$\tfrac12$}}{\secO{$1$}}{\secO{$1$}} & $\secH{10}\cdot\secH{2}\cdot\secO{9} = 180$ & $\secH{5}\cdot\secH{1}\cdot\secO{3} = 15$ \\[3.6em]
-        \fusiontreepic{\secO{$1$}}{\secH{$\tfrac12$}}{\secH{$\tfrac12$}}{\secH{$\tfrac12$}} & $\secO{9}\cdot\secH{2}\cdot\secH{10} = 180$ & $\secO{3}\cdot\secH{1}\cdot\secH{5} = 15$ \\[3.6em]
-        \fusiontreepic{\secO{$1$}}{\secH{$\tfrac12$}}{\secT{$\tfrac32$}}{\secT{$\tfrac32$}} & $\secO{9}\cdot\secH{2}\cdot\secT{4} = 72$ & $\secO{3}\cdot\secH{1}\cdot\secT{1} = 3$ \\[3.6em]
-        \fusiontreepic{\secT{$\tfrac32$}}{\secH{$\tfrac12$}}{\secO{$1$}}{\secO{$1$}} & $\secT{4}\cdot\secH{2}\cdot\secO{9} = 72$ & $\secT{1}\cdot\secH{1}\cdot\secO{3} = 3$ \\
+        \fusiontreepic{\secZ{$0$}}{\secH{$\tfrac12$}}{\secH{$\tfrac12$}}{\secH{$\tfrac12$}}\rule{0pt}{3.6em} & $(\secMb{secZero}{70}\cdot \secZ{1})(\secMb{secHalf}{1}\cdot \secH{2})(\secMb{secHalf}{50}\cdot \secH{2}) = 14000$ & $\secMb{secZero}{70}\cdot\secMb{secHalf}{1}\cdot\secMb{secHalf}{50} = 3500$ \\[3.6em]
+        \fusiontreepic{\secH{$\tfrac12$}}{\secH{$\tfrac12$}}{\secZ{$0$}}{\secZ{$0$}} & $(\secMb{secHalf}{50}\cdot \secH{2})(\secMb{secHalf}{1}\cdot \secH{2})(\secMb{secZero}{70}\cdot \secZ{1}) = 14000$ & $\secMb{secHalf}{50}\cdot\secMb{secHalf}{1}\cdot\secMb{secZero}{70} = 3500$ \\[3.6em]
+        \fusiontreepic{\secH{$\tfrac12$}}{\secH{$\tfrac12$}}{\secO{$1$}}{\secO{$1$}} & $(\secMb{secHalf}{50}\cdot\secH{2})(\secMb{secHalf}{1}\cdot\secH{2})(\secMb{secOne}{30}\cdot\secO{3}) = 18000$ & $\secMb{secHalf}{50}\cdot\secMb{secHalf}{1}\cdot\secMb{secOne}{30} = 1500$ \\[3.6em]
+        \fusiontreepic{\secO{$1$}}{\secH{$\tfrac12$}}{\secH{$\tfrac12$}}{\secH{$\tfrac12$}} & $(\secMb{secOne}{30}\cdot\secO{3})(\secMb{secHalf}{1}\cdot\secH{2})(\secMb{secHalf}{50}\cdot\secH{2}) = 18000$ & $\secMb{secOne}{30}\cdot\secMb{secHalf}{1}\cdot\secMb{secHalf}{50} = 1500$ \\[3.6em]
+        \fusiontreepic{\secO{$1$}}{\secH{$\tfrac12$}}{\secT{$\tfrac32$}}{\secT{$\tfrac32$}} & $(\secMb{secOne}{30}\cdot\secO{3})(\secMb{secHalf}{1}\cdot\secH{2})(\secMb{secThreeHalf}{10}\cdot\secT{4}) = 7200$ & $\secMb{secOne}{30}\cdot\secMb{secHalf}{1}\cdot\secMb{secThreeHalf}{10} = 300$ \\[3.6em]
+        \fusiontreepic{\secT{$\tfrac32$}}{\secH{$\tfrac12$}}{\secO{$1$}}{\secO{$1$}} & $(\secMb{secThreeHalf}{10}\cdot\secT{4})(\secMb{secHalf}{1}\cdot\secH{2})(\secMb{secOne}{30}\cdot\secO{3}) = 7200$ & $\secMb{secThreeHalf}{10}\cdot\secMb{secHalf}{1}\cdot\secMb{secOne}{30} = 300$ \\
         \hline
-        total & $784$ & $106$
+        total & $78400$ & $10600$
     \end{tabular}
 \end{center}
-Each row of the table is one block, drawn in the first column as a fusion tree: it fuses $V_1$ with $V_2$ first, carries the inner charge $b$ on the edge between the two vertices, and fuses the result with $V_3$ to the trivial charge $0$ at the root, while its leaves are labelled by the leg charges $a_1,a_2,a_3$. The colours show why the products in a row look as they do: the three factors of a row are the block dimensions of the three legs, so they carry the colours of the three leaves, and the factors of the stored count are the multiplicities of the same three legs.
+Following this convention we fuse the leftmost legs first and then attach each further leg on the right. The middle column counts the entries of a block stored as a dense array, the right column the coefficients actually stored.
 
-The two number columns count different things. The second is the size of the block if it were stored densely, the product of its three leg blocks; the third is the number of numbers the engine actually stores, one per triple of multiplets. The factor between them is $d_{a_1}d_{a_2}d_{a_3}$, the number of components each multiplet carries, which the Clebsch--Gordan coefficients of $b=a_1\otimes a_2$ rebuild from that single number.
+The two number columns count different things. The middle one is the size of the block as a dense array, the product of the dimensions of its three leg spaces, each of them a multiplicity times an irrep dimension. The right one is the number of numbers stored, one per triple of multiplets. The factor between them is $d_{a_1}d_{a_2}d_{a_3}$, the number of components each multiplet carries, which the CG tensors of Section~\ref{sec:cg} rebuild from that single number.
 
-The symmetry thus compresses the tensor twice over. Sparsity removes the ten forbidden leg-charge combinations, $1800\to 784$; the multiplet structure then removes the Clebsch--Gordan degeneracy, $784\to 106$. The result is $106\times 16\ \mathrm{B}=1.7\ \mathrm{kB}$, a factor $17$ below the dense array. The factor does not improve as the tensor grows: multiplying every multiplicity by $k$ multiplies both counts by $k^2$ and leaves the ratio at $1/17$. The saving is a fixed overhead of the group, not an exponential one.
+The symmetry thus compresses the tensor twice over. Sparsity removes the ten forbidden leg-charge combinations, $180000\to 78400$. The multiplet structure then removes the CG degeneracy, $78400\to 10600$. The result is $10600\times 16\ \mathrm{B}=169.6\ \mathrm{kB}$, a factor $17$ below the dense array. The factor does not improve as the tensor grows: multiplying every multiplicity by $k$ multiplies both counts by $k^2$ and leaves the ratio at $1/17$. The multiplicities here are already ten times the smallest case $7,5,3,1$, and the ratio did not move. The saving is a fixed overhead of the group, not an exponential one.
 \end{example}
 
 \begin{example}
-Now add a second physical leg, $T\in V_1\otimes V_2\otimes V_2'\otimes V_3$ with the same $V_1,V_3$ and two spin-$\tfrac12$ legs. The dense array doubles to $30\cdot 2\cdot 2\cdot 30=3600$ entries, $57.6\ \mathrm{kB}$. Of the $4\cdot 1\cdot 1\cdot 4=16$ leg-charge combinations, eight admit a labelling, and three of those admit two, so there are $8+3=11$ blocks storing $171$ numbers, $2.74\ \mathrm{kB}$.
+Now add a second physical leg, $T\in \mathscr{V}_1\otimes\mathscr{V}_2\otimes\mathscr{V}_2'\otimes\mathscr{V}_3$ with the same $\mathscr{V}_1,\mathscr{V}_3$ and two spin-$\tfrac12$ legs. The dense array doubles to $300\cdot 2\cdot 2\cdot 300=360000$ entries, $5.76\ \mathrm{MB}$. Of the $4\cdot 1\cdot 1\cdot 4=16$ leg-charge combinations, eight admit a labelling, and three of those admit two, so there are $8+3=11$ blocks storing $17100$ numbers, $273.6\ \mathrm{kB}$.
 
-The doubling is where the tree enters the numbers. Take the leg charges $(\tfrac12,\tfrac12,\tfrac12,\tfrac12)$ and fuse left to right. The first vertex is $\tfrac12\otimes\tfrac12=0\oplus 1$, and both choices fuse with the second spin-$\tfrac12$ to $\tfrac12$, which fuses with the last leg to $0$. Two inner charges, $b_1=0$ and $b_1=1$, both consistent: two blocks, each weighted by one Clebsch--Gordan coefficient. Every block that doubles is a pair of this kind, and which leg-charge combinations double depends on the order: with the two physical legs adjacent the doubled triples are $(\tfrac12,\tfrac12,\tfrac12,\tfrac12)$, $(1,\tfrac12,\tfrac12,1)$, $(\tfrac32,\tfrac12,\tfrac12,\tfrac32)$; with them separated they are $(\tfrac12,\tfrac12,\tfrac12,\tfrac12)$, $(1,\tfrac12,1,\tfrac12)$, $(\tfrac32,\tfrac12,\tfrac32,\tfrac12)$.
-
-What the tree does not change is how much is stored. The engine keeps one shape, the left-nested chain, so the only freedom is which leg sits at which position, and permuting the legs permutes the labels: every order gives eleven blocks and $171$ numbers. The tree decides which intermediate charge a block carries, and that charge decides which Clebsch--Gordan coefficient weights it; the two blocks that share a set of leg charges are exactly the pair an associator mixes when the tree is changed, which is what makes that mixing well defined.
-
-Where the tree does change the cost is in a contraction, because the intermediate charge sets the dimension of the bond that is summed over. Fusing the bond leg with a spin-$\tfrac12$ leg gives a bond of dimension $60$, fusing the two spin-$\tfrac12$ legs gives $4$, and fusing the two bond legs gives $900$. The same contraction therefore costs very differently depending on where the tree puts its vertices, and choosing the tree is choosing the order of the sums.
+More legs make the fusion much more complex. Take the leg charges $(\tfrac12,\tfrac12,\tfrac12,\tfrac12)$ and fuse left to right. Only two values of the first inner charge, $b_1=0$ and $b_1=1$, are consistent: two blocks, one per inner charge, built from different products of CG tensors even though the leaves are the same. 
 \end{example}
 
+\section{$F$, $R$ and Fusion Category}
+\label{sec:frandr}
+The last section built the blocks out of CG tensors. Here we look at the structure behind the tree: the two moves that relabel it, and what they imply. 
+
+\subsection{The two moves on a tree}
+Two moves act on a tree. The first re-brackets it, which is the $F$ symbol of Section~\ref{sec:cg}: the left tree below couples $a_1,a_2$ first to the inner charge $b$, the right one couples $a_2,a_3$ first to $b'$, and the entries of $F^{c}_{a_1a_2a_3}$ are the amplitudes of that move,
+\begin{align*}
+    \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=1pt, outer sep=1pt}, baseline=(current bounding box.center)]
+        \node[anchor=north] (a1) at (0,0) {$a_1$};
+        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
+        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
+        \node[circle, fill, inner sep=1.1pt] (v1) at (0.6,0.6) {};
+        \node[circle, fill, inner sep=1.1pt] (v2) at (1.2,1.4) {};
+        \node (c) at (1.2,2.2) {$c$};
+        \draw (a1) -- (v1); \draw (a2) -- (v1);
+        \draw (v1) -- (v2); \draw (a3) -- (v2);
+        \draw (v2) -- (c);
+        \node[anchor=east] at (0.42,0.98) {$b$};
+    \end{tikzpicture}
+    \;\xrightarrow{\;F^{c}_{a_1a_2a_3}\;}\;
+    \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=1pt, outer sep=1pt}, baseline=(current bounding box.center)]
+        \node[anchor=north] (a1) at (0,0) {$a_1$};
+        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
+        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
+        \node[circle, fill, inner sep=1.1pt] (w1) at (1.8,0.6) {};
+        \node[circle, fill, inner sep=1.1pt] (v2) at (1.2,1.4) {};
+        \node (c) at (1.2,2.2) {$c$};
+        \draw (a2) -- (w1); \draw (a3) -- (w1);
+        \draw (w1) -- (v2); \draw (a1) -- (v2);
+        \draw (v2) -- (c);
+        \node[anchor=west] at (1.98,0.98) {$b'$};
+    \end{tikzpicture}
+\end{align*}
+one number per pair $(b,b')$. The move back is the inverse matrix, $F^{\dagger}$, which is the unitarity of Section~\ref{sec:cg}.
+
+The second move exchanges two neighbouring legs of a node, and its overlap is the $R$ symbol,
+\begin{align*}
+    \begin{tikzpicture}[thick, baseline=(current bounding box.center)]
+\begin{scope}[thick, scale=0.9, shift={(0.000,0.000)},
+                 every node/.style={inner sep=1pt, font=\small}]
+  \draw (0.000,0.000) -- (0.600,0.600);
+  \draw (1.200,0.000) -- (0.600,0.600);
+  \draw (0.600,0.600) -- (0.600,1.260);
+  \fill (0.600,0.600) circle (1.3pt);
+  \node[anchor=north] at (0.000,-0.10) {$a_1$};
+  \node[anchor=north] at (1.200,-0.10) {$a_2$};
+  \node[anchor=south, fill=white, inner sep=0.6pt] at (0.600,1.320) {$c$};
+\end{scope}
+    \end{tikzpicture}
+    \;=\;\,R_{a_1a_2}^{c}\,
+    \begin{tikzpicture}[thick, baseline=(current bounding box.center)]
+\begin{scope}[thick, scale=0.9, shift={(0.000,0.000)},
+                 every node/.style={inner sep=1pt, font=\small}]
+  \draw (0.000,0.000) -- (0.600,0.600);
+  \draw (1.200,0.000) -- (0.600,0.600);
+  \draw (0.600,0.600) -- (0.600,1.260);
+  \fill (0.600,0.600) circle (1.3pt);
+  \node[anchor=north] at (0.000,-0.10) {$a_2$};
+  \node[anchor=north] at (1.200,-0.10) {$a_1$};
+  \node[anchor=south, fill=white, inner sep=0.6pt] at (0.600,1.320) {$c$};
+\end{scope}
+    \end{tikzpicture}
+\end{align*}
+where the two trees differ only by the order in which the two legs enter the vertex. Since both states lie in the sector $c$, Schur's lemma makes the overlap proportional to the identity in the component index,
+\begin{align}
+    (R_{a_1a_2}^c)\,\delta_{\mu\mu'}=\sum_{\alpha_1\alpha_2}
+    \overline{(C^{c}_{a_1a_2})^{\mu}_{\alpha_1\alpha_2}}\;
+    (C^{c}_{a_2a_1})^{\mu'}_{\alpha_2\alpha_1}.
+\end{align}
+The two CG tensors are the same pair of sectors written in the two orders, so the result is one number per triple $(a_1,a_2,c)$ when $c$ occurs once in $a_1\otimes a_2$, and a matrix over the copies of $c$ when it occurs more than once. It follows from the symmetry of a CG coefficient under the exchange of its two legs, which is the same statement as the symmetry of the first two columns of the $6j$ symbol. 
+
 \begin{example}
-Every example so far was multiplicity-free. In $\mathsf{SU}(2)$ a product of two irreps contains each irrep at most once, so the inner charges fix the tree. $\mathsf{SU}(3)$ does not have that property, and the smallest tensor that shows the difference is three octets,
+For $\mathsf{SU}(2)$
 \begin{align}
-    T\in 8\otimes 8\otimes 8,\qquad T\ \text{invariant}.
+    (C^{c}_{a_2a_1})^{\mu}_{\alpha_2\alpha_1}=(-1)^{a_1+a_2-c}\,(C^{c}_{a_1a_2})^{\mu}_{\alpha_1\alpha_2},
 \end{align}
-The dense array has $8\cdot 8\cdot 8=512$ entries, $8.2\ \mathrm{kB}$ in complex double precision. There is one leg-charge combination, $(8,8,8)$, and one inner charge: of the terms of
+so the sum collapses to the sign times the normalisation $\sum|C|^2=1$,
 \begin{align}
-    8\otimes 8=1\oplus 8\oplus 8\oplus 10\oplus\overline{10}\oplus 27
+    (R_{a_1a_2}^c)=(-1)^{a_1+a_2-c}.
 \end{align}
-only $8$ fuses with the third octet to the trivial charge. The tensor still has two blocks, because the octet occurs twice on the right-hand side: the first vertex has two independent ways to couple the two octets to an octet, and the rest of the tree is common to both. The engine keeps them apart with a copy index $\kappa\in\{0,1\}$ at the vertex, which joins the leg charges and the inner charges in the block key,
-\begin{align}
-    (a_1,a_2,a_3\mid b\mid \kappa_1,\kappa_2)&=(8,8,8\mid 8\mid 0,0),\\
-    (a_1,a_2,a_3\mid b\mid \kappa_1,\kappa_2)&=(8,8,8\mid 8\mid 1,0),
+The exchange leaves the component alone and multiplies by a sign; for two spin-$\tfrac12$ legs coupled to $0$ it gives $-1$, which is the antisymmetry of $\varepsilon_{\alpha\beta}$ in another notation:\begin{align}
+    R^{1} = \begin{pmatrix}
+        0&-1\\
+        1&0
+    \end{pmatrix}
 \end{align}
-the second copy index being zero because $8\otimes 8$ reaches the trivial charge once. Drawn, the two trees are the same picture and differ only in the copy index at the first vertex:
+\end{example}
+
+In fact, it can be proven that any tree with any permuting 
+
+\subsection{The identities that define the symbols}
+The two symbols are not independent. Each is a change of basis, and changes of basis must compose consistently: two routes between the same pair of trees must give the same matrix. There are two minimal such squares of trees, one for each move, and they give the two identities that a pair $(F,R)$ has to satisfy.
+
+The first square re-brackets four legs. Four legs have five possible bracketings, and a single re-bracketing joins two of them, so the five trees close into a pentagon. Two routes lead from the first bracketing to the last, one re-bracketing the left pair step by step and one pairing $a$ with $b$ and $c$ with $d$ at once. Both are the same change of basis between the same two trees, so they agree:
 \begin{center}
-    \begin{tabular}{cc}
-        \fusiontreepic{$8$}{$8$}{$8$}{$8$} & \fusiontreepic{$8$}{$8$}{$8$}{$8$} \\
-        $\kappa_1=0$ & $\kappa_1=1$
-    \end{tabular}
+\begin{tikzpicture}[thick, >=stealth, scale=0.46]
+\begin{scope}[thick, scale=1.0, shift={(-1.260,6.756)},
+                 every node/.style={inner sep=1pt, font=\scriptsize}]
+  \draw (0.000,0.000) -- (0.420,0.420);
+  \draw (0.840,0.000) -- (0.420,0.420);
+  \draw (0.420,0.420) -- (1.050,1.050);
+  \draw (2.100,0.000) -- (1.050,1.050);
+  \draw (1.050,1.050) -- (1.785,1.785);
+  \draw (3.570,0.000) -- (1.785,1.785);
+  \draw (1.785,1.785) -- (1.785,2.247);
+  \fill (0.420,0.420) circle (1.3pt);
+  \fill (1.050,1.050) circle (1.3pt);
+  \fill (1.785,1.785) circle (1.3pt);
+  \node[anchor=north] at (0.000,-0.10) {$a$};
+  \node[anchor=north] at (0.840,-0.10) {$b$};
+  \node[anchor=north] at (2.100,-0.10) {$c$};
+  \node[anchor=north] at (3.570,-0.10) {$d$};
+  \node[anchor=south east, fill=white, inner sep=0.6pt] at (0.370,0.480) {$u$};
+  \node[anchor=south east, fill=white, inner sep=0.6pt] at (1.000,1.110) {$v$};
+  \node[anchor=south, fill=white, inner sep=0.6pt] at (1.785,2.307) {$e$};
+\end{scope}
+\begin{scope}[thick, scale=1.0, shift={(-8.590,2.034)},
+                 every node/.style={inner sep=1pt, font=\scriptsize}]
+  \draw (0.840,0.000) -- (1.260,0.420);
+  \draw (1.680,0.000) -- (1.260,0.420);
+  \draw (0.000,0.000) -- (0.840,0.840);
+  \draw (1.260,0.420) -- (0.840,0.840);
+  \draw (0.840,0.840) -- (1.680,1.680);
+  \draw (3.360,0.000) -- (1.680,1.680);
+  \draw (1.680,1.680) -- (1.680,2.142);
+  \fill (1.260,0.420) circle (1.3pt);
+  \fill (0.840,0.840) circle (1.3pt);
+  \fill (1.680,1.680) circle (1.3pt);
+  \node[anchor=north] at (0.000,-0.10) {$a$};
+  \node[anchor=north] at (0.840,-0.10) {$b$};
+  \node[anchor=north] at (1.680,-0.10) {$c$};
+  \node[anchor=north] at (3.360,-0.10) {$d$};
+  \node[anchor=south east, fill=white, inner sep=0.6pt] at (1.710,0.480) {$w$};
+  \node[anchor=south east, fill=white, inner sep=0.6pt] at (0.990,0.900) {$v'$};
+  \node[anchor=south, fill=white, inner sep=0.6pt] at (1.680,2.202) {$e$};
+\end{scope}
+\begin{scope}[thick, scale=1.0, shift={(-6.062,-6.075)},
+                 every node/.style={inner sep=1pt, font=\scriptsize}]
+  \draw (0.840,0.000) -- (1.260,0.420);
+  \draw (1.680,0.000) -- (1.260,0.420);
+  \draw (1.260,0.420) -- (1.890,1.050);
+  \draw (2.940,0.000) -- (1.890,1.050);
+  \draw (0.000,0.000) -- (1.470,1.470);
+  \draw (1.890,1.050) -- (1.470,1.470);
+  \draw (1.470,1.470) -- (1.470,1.932);
+  \fill (1.260,0.420) circle (1.3pt);
+  \fill (1.890,1.050) circle (1.3pt);
+  \fill (1.470,1.470) circle (1.3pt);
+  \node[anchor=north] at (0.000,-0.10) {$a$};
+  \node[anchor=north] at (0.840,-0.10) {$b$};
+  \node[anchor=north] at (1.680,-0.10) {$c$};
+  \node[anchor=north] at (2.940,-0.10) {$d$};
+  \node[anchor=south east, fill=white, inner sep=0.6pt] at (1.310,0.480) {$w$};
+  \node[anchor=south east, fill=white, inner sep=0.6pt] at (2.240,1.110) {$y$};
+  \node[anchor=south, fill=white, inner sep=0.6pt] at (1.470,1.992) {$e$};
+\end{scope}
+\begin{scope}[thick, scale=1.0, shift={(3.542,-6.075)},
+                 every node/.style={inner sep=1pt, font=\scriptsize}]
+  \draw (1.680,0.000) -- (2.100,0.420);
+  \draw (2.520,0.000) -- (2.100,0.420);
+  \draw (0.840,0.000) -- (1.680,0.840);
+  \draw (2.100,0.420) -- (1.680,0.840);
+  \draw (0.000,0.000) -- (1.260,1.260);
+  \draw (1.680,0.840) -- (1.260,1.260);
+  \draw (1.260,1.260) -- (1.260,1.722);
+  \fill (2.100,0.420) circle (1.3pt);
+  \fill (1.680,0.840) circle (1.3pt);
+  \fill (1.260,1.260) circle (1.3pt);
+  \node[anchor=north] at (0.000,-0.10) {$a$};
+  \node[anchor=north] at (0.840,-0.10) {$b$};
+  \node[anchor=north] at (1.680,-0.10) {$c$};
+  \node[anchor=north] at (2.520,-0.10) {$d$};
+  \node[anchor=south east, fill=white, inner sep=0.6pt] at (2.350,0.480) {$z$};
+  \node[anchor=south east, fill=white, inner sep=0.6pt] at (1.930,0.900) {$t$};
+  \node[anchor=south, fill=white, inner sep=0.6pt] at (1.260,1.782) {$e$};
+\end{scope}
+\begin{scope}[thick, scale=1.0, shift={(6.070,2.034)},
+                 every node/.style={inner sep=1pt, font=\scriptsize}]
+  \draw (0.000,0.000) -- (0.420,0.420);
+  \draw (0.840,0.000) -- (0.420,0.420);
+  \draw (2.100,0.000) -- (2.520,0.420);
+  \draw (2.940,0.000) -- (2.520,0.420);
+  \draw (0.420,0.420) -- (1.470,1.470);
+  \draw (2.520,0.420) -- (1.470,1.470);
+  \draw (1.470,1.470) -- (1.470,1.932);
+  \fill (0.420,0.420) circle (1.3pt);
+  \fill (2.520,0.420) circle (1.3pt);
+  \fill (1.470,1.470) circle (1.3pt);
+  \node[anchor=north] at (0.000,-0.10) {$a$};
+  \node[anchor=north] at (0.840,-0.10) {$b$};
+  \node[anchor=north] at (2.100,-0.10) {$c$};
+  \node[anchor=north] at (2.940,-0.10) {$d$};
+  \node[anchor=south east, fill=white, inner sep=0.6pt] at (0.370,0.480) {$u$};
+  \node[anchor=south east, fill=white, inner sep=0.6pt] at (2.470,0.480) {$z$};
+  \node[anchor=south, fill=white, inner sep=0.6pt] at (1.470,1.992) {$e$};
+\end{scope}
+  \draw[->, >=stealth] (-1.610,6.139) -- (-5.720,3.491) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$F^{v}_{abc}$};
+  \draw[->, >=stealth] (-6.996,1.384) -- (-5.406,-3.719) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$F^{e}_{awd}$};
+  \draw[->, >=stealth] (-3.192,-5.655) -- (3.192,-5.655) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$F^{y}_{bcd}$};
+  \draw[->, >=stealth] (1.610,6.139) -- (5.720,3.491) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$F^{e}_{ucd}$};
+  \draw[->, >=stealth] (6.996,1.384) -- (5.406,-3.719) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$F^{e}_{abz}$};
+\end{tikzpicture}
 \end{center}
-Each block is a single number, so $T$ stores two numbers, $32\ \mathrm{B}$, against $8.2\ \mathrm{kB}$ for the dense array: the symmetry removes a factor $256$.
 
-The copy index is the part of the label that storage would lose first. Without it the two blocks carry the same leg charges and the same inner charges, they are one block, and $T$ would be a single number, one of the two invariants. In general, for fixed leg charges and fixed inner charges the number of trees is the product of the multiplicities $n(b_L,b_R\to b_v)$ over the vertices, so a vertex that couples $k$ times multiplies the number of blocks by $k$.
+Each step is a matrix on the inner charges, so a route read as a product is summed over the labels it passes through, and the equality of the two products is the \emph{pentagon identity}. \begin{align}
+    \sum_{w} (F^{v}_{abc})_{uw}\,(F^{e}_{awd})_{vz}\,(F^{y}_{bcd})_{wx} = (F^{e}_{ucd})_{vy}\,(F^{e}_{abz})_{uy}.
+\end{align}
 
-For $\mathsf{SU}(2)$ every multiplicity is one, which is why none of the block keys above carried anything after the inner charges. In $\mathsf{SU}(3)$ the copy index is a genuine part of the label: two blocks that differ only in it are exactly the pair a recoupling mixes, so the associator acts on them as a matrix in the copy space rather than as a scalar.
-\end{example}
+
+
+The second loop braids. Fuse $a$ and $b$ to $u$ and then fuse $u$ with $c$, so that $d$ is the root. Two routes of three moves each carry the same tree to the same tree, exchanging $a$ and $c$: re-bracket, braid $b$ past $c$, re-bracket again (the upper route, $F\,R\,F$); or braid the pair $(ab)$ past $c$, re-bracket, and braid $a$ past $c$ (the lower route, $R\,F\,R$). The hexagon says that the two products agree:
+\begin{center}
+\begin{tikzpicture}[thick, >=stealth, scale=0.62]
+\begin{scope}[thick, scale=1.0, shift={(-8.770,-0.390)},
+                 every node/.style={inner sep=1pt, font=\scriptsize}]
+  \draw (0.000,0.000) -- (0.390,0.390);
+  \draw (0.780,0.000) -- (0.390,0.390);
+  \draw (0.390,0.390) -- (0.975,0.975);
+  \draw (1.950,0.000) -- (0.975,0.975);
+  \draw (0.975,0.975) -- (0.975,1.404);
+  \fill (0.390,0.390) circle (1.3pt);
+  \fill (0.975,0.975) circle (1.3pt);
+  \node[anchor=north] at (0.000,-0.10) {$a$};
+  \node[anchor=north] at (0.780,-0.10) {$b$};
+  \node[anchor=north] at (1.950,-0.10) {$c$};
+  \node[anchor=south east, fill=white, inner sep=0.6pt] at (0.340,0.450) {$u$};
+  \node[anchor=south, fill=white, inner sep=0.6pt] at (0.975,1.464) {$d$};
+\end{scope}
+\begin{scope}[thick, scale=1.0, shift={(-4.970,5.863)},
+                 every node/.style={inner sep=1pt, font=\scriptsize}]
+  \draw (0.780,0.000) -- (1.170,0.390);
+  \draw (1.560,0.000) -- (1.170,0.390);
+  \draw (0.000,0.000) -- (0.780,0.780);
+  \draw (1.170,0.390) -- (0.780,0.780);
+  \draw (0.780,0.780) -- (0.780,1.209);
+  \fill (1.170,0.390) circle (1.3pt);
+  \fill (0.780,0.780) circle (1.3pt);
+  \node[anchor=north] at (0.000,-0.10) {$a$};
+  \node[anchor=north] at (0.780,-0.10) {$b$};
+  \node[anchor=north] at (1.560,-0.10) {$c$};
+  \node[anchor=south east, fill=white, inner sep=0.6pt] at (1.120,0.450) {$v$};
+  \node[anchor=south, fill=white, inner sep=0.6pt] at (0.780,1.269) {$d$};
+\end{scope}
+\begin{scope}[thick, scale=1.0, shift={(2.630,5.863)},
+                 every node/.style={inner sep=1pt, font=\scriptsize}]
+  \draw (0.780,0.000) -- (1.170,0.390);
+  \draw (1.560,0.000) -- (1.170,0.390);
+  \draw (0.000,0.000) -- (0.780,0.780);
+  \draw (1.170,0.390) -- (0.780,0.780);
+  \draw (0.780,0.780) -- (0.780,1.209);
+  \fill (1.170,0.390) circle (1.3pt);
+  \fill (0.780,0.780) circle (1.3pt);
+  \node[anchor=north] at (0.000,-0.10) {$a$};
+  \node[anchor=north] at (0.780,-0.10) {$c$};
+  \node[anchor=north] at (1.560,-0.10) {$b$};
+  \node[anchor=south east, fill=white, inner sep=0.6pt] at (1.120,0.450) {$v$};
+  \node[anchor=south, fill=white, inner sep=0.6pt] at (0.780,1.269) {$d$};
+\end{scope}
+\begin{scope}[thick, scale=1.0, shift={(6.430,-0.390)},
+                 every node/.style={inner sep=1pt, font=\scriptsize}]
+  \draw (0.000,0.000) -- (0.390,0.390);
+  \draw (0.780,0.000) -- (0.390,0.390);
+  \draw (0.390,0.390) -- (0.975,0.975);
+  \draw (1.950,0.000) -- (0.975,0.975);
+  \draw (0.975,0.975) -- (0.975,1.404);
+  \fill (0.390,0.390) circle (1.3pt);
+  \fill (0.975,0.975) circle (1.3pt);
+  \node[anchor=north] at (0.000,-0.10) {$a$};
+  \node[anchor=north] at (0.780,-0.10) {$c$};
+  \node[anchor=north] at (1.950,-0.10) {$b$};
+  \node[anchor=south east, fill=white, inner sep=0.6pt] at (0.340,0.450) {$w$};
+  \node[anchor=south, fill=white, inner sep=0.6pt] at (0.975,1.464) {$d$};
+\end{scope}
+\begin{scope}[thick, scale=1.0, shift={(2.630,-6.643)},
+                 every node/.style={inner sep=1pt, font=\scriptsize}]
+  \draw (0.000,0.000) -- (0.390,0.390);
+  \draw (0.780,0.000) -- (0.390,0.390);
+  \draw (0.390,0.390) -- (0.975,0.975);
+  \draw (1.950,0.000) -- (0.975,0.975);
+  \draw (0.975,0.975) -- (0.975,1.404);
+  \fill (0.390,0.390) circle (1.3pt);
+  \fill (0.975,0.975) circle (1.3pt);
+  \node[anchor=north] at (0.000,-0.10) {$c$};
+  \node[anchor=north] at (0.780,-0.10) {$a$};
+  \node[anchor=north] at (1.950,-0.10) {$b$};
+  \node[anchor=south east, fill=white, inner sep=0.6pt] at (0.340,0.450) {$w$};
+  \node[anchor=south, fill=white, inner sep=0.6pt] at (0.975,1.464) {$d$};
+\end{scope}
+\begin{scope}[thick, scale=1.0, shift={(-4.970,-6.643)},
+                 every node/.style={inner sep=1pt, font=\scriptsize}]
+  \draw (0.780,0.000) -- (1.170,0.390);
+  \draw (1.560,0.000) -- (1.170,0.390);
+  \draw (0.000,0.000) -- (0.780,0.780);
+  \draw (1.170,0.390) -- (0.780,0.780);
+  \draw (0.780,0.780) -- (0.780,1.209);
+  \fill (1.170,0.390) circle (1.3pt);
+  \fill (0.780,0.780) circle (1.3pt);
+  \node[anchor=north] at (0.000,-0.10) {$c$};
+  \node[anchor=north] at (0.780,-0.10) {$a$};
+  \node[anchor=north] at (1.560,-0.10) {$b$};
+  \node[anchor=south east, fill=white, inner sep=0.6pt] at (1.120,0.450) {$u$};
+  \node[anchor=south, fill=white, inner sep=0.6pt] at (0.780,1.269) {$d$};
+\end{scope}
+  \draw[->, >=stealth] (-6.484,1.837) -- (-4.432,5.213) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$F^{d}_{abc}$};
+  \draw[->, >=stealth] (-2.280,6.253) -- (2.280,6.253) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$R_{bc}^d$};
+  \draw[->, >=stealth] (4.432,5.213) -- (6.484,1.837) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$F^{d}_{acb}$};
+  \draw[->, >=stealth] (-6.968,-1.040) -- (-4.916,-4.416) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$R_{uc}^d$};
+  \draw[->, >=stealth] (-2.280,-6.253) -- (2.280,-6.253) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$F^{d}_{cab}$};
+  \draw[->, >=stealth] (4.916,-4.416) -- (6.968,-1.040) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$R_{ac}^w$};
+\end{tikzpicture}
+\end{center}
+Both compositions act on the same tree and must agree: that is the \emph{hexagon}:\begin{align}
+    \sum_{v} (F^{d}_{abc})_{uv}\,(R_{ac}^{v})\,(F^{d}_{cab})_{vw} = (R_{ab}^{u})\,(F^{d}_{bac})_{uw}\,(R_{bc}^{w}).
+\end{align}
+
+For a representation neither identity is an extra assumption. $F$ is an overlap of CG tensors, and both sides of the pentagon are the same overlap computed in two ways, so the identity follows for free --- for $\mathsf{SU}(2)$ it is the Biedenharn--Elliott relation among the $6j$ symbols, and the hexagon is the corresponding relation between the $6j$ and the $R$ phases. 
+
+As we will see later, the only information we need to compute any tensor is the fusion rules, their duals, and the two symbols. \begin{definition}
+    A \emph{fusion category} is a set of sectors/charges $\{1,a,b,\dots\}$ with the fusion rules $a\otimes b=\sum_c N_{ab}^c\,c$ and duals $\bar{a}$, together with a pair of symbols $(F,R)$ satisfying the pentagon and hexagon identities.
+\end{definition}
+Group representations are a special case of fusion categories, but the definition is far more general. 
+
+There is also a freedom in the symbols. Multiplying every vector of a copy by a phase (by a unitary matrix when the copy space is more than one-dimensional) changes both $F$ and $R$ while leaving every invariant unchanged, so the pair is defined only up to that gauge. For $\mathsf{SU}(2)$ this is the arbitrariness of the CG phase convention, and it is why different tables differ by signs and phases while agreeing on observables.
+
+\subsection{One shape is enough}
+Any two trees over the same ordered legs differ by a sequence of re-bracketings and exchanges: an $F$ moves an inner charge from one edge to the next, an $R$ exchanges two neighbouring legs, and a leg glued to the trivial charge --- a bend --- is a single $F$ entry contracted with the trivial charge, which comes out with weight $\sqrt{d_a d_b/d_c}$ and, for a bent leg that is a dual, a Frobenius--Schur phase. Since a sequence of these moves reaches any labelling, it is enough to store one shape. The engine keeps the left-nested chain, $(((l_1l_2)l_3)\cdots)l_r$, so that the only freedom left in a block is which leg sits at which position.
+
+\subsection{Nothing else is needed}
+Every coefficient of every block is, after the last two sections, a product of entries of $F$ and $R$; the CG coefficients never appear individually again. A tensor engine can therefore be handed the fusion rules, the duals, $F$ and $R$, and nothing else. That is exactly the interface of the library, and it is why the same code runs for $\mathbb Z_n$, $\mathsf{SU}(2)$, $\mathsf{SU}(3)$ and for a category with no CG coefficients at all, such as the Fibonacci category, whose only objects are $\mathbf{1}$ and $\tau$ with $\tau\otimes\tau=\mathbf{1}\oplus\tau$, quantum dimension $\phi$, and $F$ and $R$ given directly.

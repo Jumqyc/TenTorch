@@ -619,7 +619,7 @@ Leg fuse_legs(const Leg& first, const Leg& second) { return first.fuse(second); 
 
 Leg capped_leg(const Leg& leg, int64_t max_multiplets) {
   if (leg.multiplets() <= max_multiplets) return leg;
-  const std::shared_ptr<FusionCategory>& group = leg.group();
+  const std::shared_ptr<FusionCategory>& group = leg.cat();
   std::vector<std::pair<Sector, int64_t>> entries;
   int64_t total = 0;
   for (int64_t qi = 0; qi < leg.nblocks(); ++qi) {
@@ -654,7 +654,7 @@ void bind_tree(py::module_& m) {
               return py::make_tuple(py::cast(leg), py::tuple(py::cast(rank)));
             },
             py::arg("group"), py::arg("entries"), py::arg("qconj") = 1)
-        .def_property_readonly("group", &sym::Leg::group)
+        .def_property_readonly("cat", &sym::Leg::cat)
         .def_property_readonly("sectors", [](const sym::Leg& leg) {
           return sym::to_python(leg.sectors());
         })
@@ -684,7 +684,7 @@ void bind_tree(py::module_& m) {
         .def("__repr__", &sym::Leg::repr)
         .def("__reduce__", [](const sym::Leg& self) {
           return py::make_tuple(py::type::of<sym::Leg>(),
-                                py::make_tuple(self.group(), sym::to_python(self.sectors()),
+                                py::make_tuple(self.cat(), sym::to_python(self.sectors()),
                                                py::cast(self.slices()), self.qconj()));
         }, "the constructor arguments, so that a leg survives a pickle round trip");
 

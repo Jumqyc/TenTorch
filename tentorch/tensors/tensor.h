@@ -253,21 +253,11 @@ void bind_algebra(py::module_& m);
 namespace sym::engine {
 
 // A categorical tensor: a map between graded spaces, stored as one matrix per coupled charge over
-// the canonical tree basis of that charge. A tensor may also carry no graded structure at all, in
-// which case it holds one plain array and no categorical operation applies to it.
+// the canonical tree basis of that charge.
 class Tensor {
  public:
-  Tensor() = default;
   explicit Tensor(TensorMap map) : map_(std::move(map)) {}
-  explicit Tensor(at::Tensor plain) : plain_(std::move(plain)) {}
 
-  bool graded() const { return map_.has_value(); }
-
-  // The bare array of a tensor that carries no category.
-  const at::Tensor& plain() const {
-    if (map_) throw std::logic_error("this tensor is graded, it has no bare array");
-    return plain_;
-  }
   const TensorMap& map() const;
   TensorMap& map();
 
@@ -280,10 +270,10 @@ class Tensor {
   // A dense array with graded legs of dimension one per summand, which is the only case where the
   // component array and the blocks are the same data. A symmetry-adapted leg needs a projection and
   // is left to the checks.
-  static Tensor from_dense(const at::Tensor& data, std::optional<std::vector<Leg>> legs,
+  static Tensor from_dense(const at::Tensor& data, const std::vector<Leg>& legs,
                            std::optional<Sector> qtotal);
 
-  std::shared_ptr<FusionCategory> group() const;
+  std::shared_ptr<FusionCategory> cat() const;
   std::vector<Leg> legs() const;
   Sector qtotal() const;
   std::vector<at::Tensor> blocks() const;
@@ -291,7 +281,6 @@ class Tensor {
   std::vector<int64_t> shape() const;
   at::ScalarType dtype() const;
   c10::Device device() const;
-  bool is_dense() const;
 
   // The row and column one entry occupies in the component array of a block: `blocks` names, per
   // leg, the block that leg carries and `members` the member inside it, and the block is the one
@@ -333,8 +322,7 @@ class Tensor {
   Tensor operator-() const;
 
  private:
-  std::optional<TensorMap> map_;
-  at::Tensor plain_;
+  TensorMap map_;
 };
 
 // Contract the operands in the order the labels give, into the legs the output names. Every label

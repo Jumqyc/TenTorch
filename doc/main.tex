@@ -6,6 +6,8 @@
 \usepackage{array}
 \usepackage[margin=1in]{geometry}
 \usepackage{hyperref}
+\usepackage{mathrsfs}  
+\usepackage{physics}
 \usepackage{tikz}
 \usetikzlibrary{calc}
 
@@ -24,6 +26,11 @@
 \newcommand{\secH}[1]{\textcolor{secHalf}{#1}}
 \newcommand{\secO}[1]{\textcolor{secOne}{#1}}
 \newcommand{\secT}[1]{\textcolor{secThreeHalf}{#1}}
+
+% A multiplicity is not a charge: it counts how many copies of a sector a leg carries. It is
+% written bold in the colour of its sector, a sector dimension plain in the same colour, so the
+% colour always names the sector and the weight tells the two kinds of number apart.
+\newcommand{\secMb}[2]{\textcolor{#1}{\mathbf{#2}}}
 
 % The left-nested rank-3 fusion tree ((V_1 V_2) V_3) -> 0, labelled by the two leg
 % charges it fuses (#1, #2), the third leg charge (#3) and the inner charge (#4).
@@ -81,7 +88,8 @@
 
 \theoremstyle{definition}
 \newtheorem{definition}{Definition}[chapter]
-\newtheorem{example}{Example}[chapter]
+\newtheorem{example}[definition]{Example}
+\newtheorem{theorem}[definition]{Theorem}
 
 \title{Documentation for the Tensor Library}
 \date{\today}
