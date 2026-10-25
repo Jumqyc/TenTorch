@@ -4,7 +4,6 @@
 #pragma once
 
 #include <ATen/ATen.h>
-#include <torch/csrc/utils/pybind.h>
 
 #include <cstdint>
 #include <map>
@@ -38,33 +37,28 @@ namespace sym
     int multiplicity;
   };
 
-  // One integer naming the device a cached tensor lives on.
-  inline int64_t device_code(const c10::Device &device)
+  /**
+   * @brief One row or column of an $F$ symbol: the inner sector and the two vertices it joins.
+   * @details A row of $F^{d}_{abc}$ is an $e$ from `outcomes(a, b)` together with the vertex index of
+   * $a \otimes b \to e$ and the vertex index of $e \otimes c \to d$; a column is the same through an
+   * $f$ from `outcomes(b, c)`.  The address list is the only thing that says which entry of the
+   * matrix is which basis vector, so it belongs to the interface and not to one implementation.
+   */
+  struct FIndex
   {
-    return static_cast<int64_t>(device.type()) * 1000 + device.index();
-  }
+    Sector sector;   ///< the sector the inner vertex couples to
+    int64_t inner;   ///< vertex index of the inner fusion
+    int64_t outer;   ///< vertex index of the outer fusion
+  };
 
-  // The sector as a Python tuple, so it stays a hashable key on the Python side.
-  inline py::tuple to_python(const Sector &sector)
+  /**
+   * @brief One row or column of an $R$ symbol: the coupled sector and the vertex index.
+   */
+  struct RIndex
   {
-    py::tuple out(sector.size());
-    for (size_t i = 0; i < sector.size(); ++i)
-    {
-      out[i] = py::int_(sector[i]);
-    }
-    return out;
-  }
-
-  // The sectors as a tuple of Python tuples.
-  inline py::tuple to_python(const std::vector<Sector> &sectors)
-  {
-    py::tuple out(sectors.size());
-    for (size_t i = 0; i < sectors.size(); ++i)
-    {
-      out[i] = to_python(sectors[i]);
-    }
-    return out;
-  }
+    Sector sector;   ///< the sector the vertex couples to
+    int64_t copy;    ///< vertex index of that fusion
+  };
 
   /**
    * @brief The device a category materialises its symbols on when it is not told otherwise.
@@ -179,41 +173,76 @@ namespace sym
     virtual at::Tensor R_symbol(const Sector &b, const Sector &c) const = 0;
 
     /**
+     * @brief The rows of $F^{d}_{abc}$: the left tree $((a \otimes b) \otimes c) \to d$.
+     * @param a The first sector of the left tree.
+     * @param b The second sector.
+     * @param c The third sector.
+     * @param d The outer sector both trees fuse to.
+     * @return One entry per row, in the order the matrix lists them.
+     * @details Not virtual: the order follows from `outcomes` alone, so it is written once here and
+     * every `F_symbol` reads it.  An inner sector that cannot reach $d$ contributes no rows.
+     */
+    std::vector<FIndex> f_rows(const Sector &a, const Sector &b, const Sector &c, const Sector &d) const;
+
+    /**
+     * @brief The columns of $F^{d}_{abc}$: the right tree $(a \otimes (b \otimes c)) \to d$.
+     * @param a The first sector of the right tree.
+     * @param b The second sector.
+     * @param c The third sector.
+     * @param d The outer sector both trees fuse to.
+     * @return One entry per column, in the order the matrix lists them.
+     */
+    std::vector<FIndex> f_columns(const Sector &a, const Sector &b, const Sector &c, const Sector &d) const;
+
+    /**
+     * @brief The rows of $R_{bc}$, and its columns with $b$ and $c$ exchanged.
+     * @param b The left sector.
+     * @param c The right sector.
+     * @return One entry per row: the sector `outcomes(b, c)` yields and its vertex index.
+     */
+    std::vector<RIndex> r_rows(const Sector &b, const Sector &c) const;
+
+    /**
      * @brief The quantum dimension $d_a$, the Perron eigenvalue of the fusion matrix of $a$.
      * @param a The sector.
      * @return A real, positive, multiplicative dimension: $d_a d_b = \sum_c N^c_{ab} d_c$ and
      * $d_{\bar a} = d_a$, with $d_1 = 1$.
-     * @details It is the Frobenius-Perron dimension and not the dimension of a representation space:
-     * the Fibonacci category has $d_\tau = (1 + \sqrt{5}) / 2$, irrational, which is exactly why the
-     * two are kept apart.
+     * @details For a category of representations it is the dimension of the space the sector stands
+     * for, an integer, and the number of components the Clebsch-Gordan tensor of a vertex carries
+     * per leg.  A general fusion category has no such space and the dimension is the Frobenius-Perron
+     * eigenvalue: the Fibonacci category has $d_\tau = (1 + \sqrt{5}) / 2$, irrational.
+     *
+     * The engine never turns a dimension into a block size.  A block is sized by the multiplicities
+     * of the trees alone, because the tree basis already carries the components; a dense array that
+     * a dimension would size does not exist anywhere in the engine.
      */
     virtual double q_dim(Sector a) const = 0;
-
-    /**
-     * @brief The number of components of the sector in the dense realization.
-     * @param a The sector.
-     * @return The dimension of the vector space the sector stands for, and 1 when the category is
-     * not realized as a category of representations.
-     * @details Every simple object of a fusion category is one-dimensional.  `dim` exceeds 1 only
-     * because a concrete category comes with a fibre functor to vector spaces, which the Fibonacci
-     * category does not have.  The engine sizes a dense block with it, so it must satisfy
-     * $\sum_c N^c_{ab} \dim c = \dim a \cdot \dim b$ wherever both it and $N$ are defined.
-     */
-    virtual int dim(Sector a) const = 0;
 
     /**
      * @brief The dual sector $\bar a$.
      * @param a The sector.
      * @return The sector that fuses with $a$ to the trivial one.
-     * @details An involution, $\overline{\bar a} = a$, preserving the dimensions, $d_{\bar a} = d_a$
-     * and $\dim \bar a = \dim a$.  A leg carrying $\bar a$ is the bra of the leg carrying $a$: the
-     * same space with the arrow reversed.
+     * @details An involution, $\overline{\bar a} = a$, preserving the dimension, $d_{\bar a} = d_a$.
+     * A leg carrying $\bar a$ is the bra of the leg carrying $a$: the same space with the arrow
+     * reversed.
      */
     virtual Sector dual(Sector a) const = 0;
 
     /**
+     * @brief The Frobenius-Schur indicator $\nu_a$ of a sector.
+     * @param a The sector.
+     * @return $+1$ or $-1$, with $\nu_1 = +1$ and $\nu_{\bar a} = \nu_a$.
+     * @details The invariant form of a simple sector is the map from $a \otimes \bar a$ to the
+     * trivial sector, and on the space of $a$ it is symmetric ($\nu_a = +1$, real type) or
+     * antisymmetric ($\nu_a = -1$, quaternionic type).  It is the phase a leg picks up when it is
+     * turned around, $\nu_a = R^{1}_{a\bar a}$: a sector whose pair braids with a sign, like the
+     * spin-$1/2$ of SU(2) or the odd sector of the fermion parity, carries $\nu_a = -1$.
+     */
+    virtual double frobenius_schur_sign(const Sector& a) const = 0;
+
+    /**
      * @brief The trivial sector, the unit of the fusion.
-     * @return The sector $1$ with $1 \otimes a = a \otimes 1 = a$ and $d_1 = \dim 1 = 1$.
+     * @return The sector $1$ with $1 \otimes a = a \otimes 1 = a$ and $d_1 = 1$.
      */
     virtual Sector trivial() const = 0;
 
@@ -260,6 +289,5 @@ namespace sym
    * @brief Bind the fusion outcome and the base category into the extension module.
    * @param m The module to bind into.
    */
-  void bind_category(py::module_ &m);
 
 } // namespace sym

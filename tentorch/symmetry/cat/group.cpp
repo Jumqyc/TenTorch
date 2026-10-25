@@ -2,8 +2,6 @@
 // the Clebsch-Gordan tensors, so a group supplies neither of them.
 #include "group.h"
 
-#include <pybind11/stl.h>
-
 #include <cstdint>
 #include <vector>
 
@@ -19,7 +17,9 @@ namespace sym
     {
       return found->second;
     }
-    return cg_cache_.emplace(key, compute_clebsch_gordan(a, b, c, copy)).first->second;
+    // Every vertex is stored in the category's scalar type, so a product with a block never mixes
+    // dtypes: `matmul` does not promote.
+    return cg_cache_.emplace(key, compute_clebsch_gordan(a, b, c, copy).to(dtype())).first->second;
   }
 
   void Group::clear_cache() const
@@ -31,35 +31,23 @@ namespace sym
   at::Tensor Group::F_symbol(const Sector &a, const Sector &b, const Sector &c,
                              const Sector &d) const
   {
-    // The left tree ((a b) c) -> d, one dense vector per pair of vertex copies.
+    // The left tree ((a b) c) -> d, one dense vector per row.
     std::vector<at::Tensor> left;
-    for (const Outcome &e : outcomes(a, b))
+    for (const FIndex &row : f_rows(a, b, c, d))
     {
-      for (int64_t outer = 0; outer < e.multiplicity; ++outer)
-      {
-        for (int64_t inner = 0; inner < n_symbol(e.sector, c, d); ++inner)
-        {
-          left.push_back(
-            at::einsum("abe,ecd->abcd",
-              {clebsch_gordan(a, b, e.sector, outer),
-              clebsch_gordan(e.sector, c, d, inner)}));
-        }
-      }
+      left.push_back(
+        at::einsum("abe,ecd->abcd",
+                   {clebsch_gordan(a, b, row.sector, row.inner),
+                    clebsch_gordan(row.sector, c, d, row.outer)}));
     }
     // The right tree (a (b c)) -> d, the same way through f = (b c).
     std::vector<at::Tensor> right;
-    for (const Outcome &f : outcomes(b, c))
+    for (const FIndex &column : f_columns(a, b, c, d))
     {
-      for (int64_t outer = 0; outer < f.multiplicity; ++outer)
-      {
-        for (int64_t inner = 0; inner < n_symbol(a, f.sector, d); ++inner)
-        {
-          right.push_back(
-            at::einsum("bce,aed->abcd",
-                      {clebsch_gordan(b, c, f.sector, outer),
-                      clebsch_gordan(a, f.sector, d, inner)}));
-        }
-      }
+      right.push_back(
+        at::einsum("bce,aed->abcd",
+                   {clebsch_gordan(b, c, column.sector, column.inner),
+                    clebsch_gordan(a, column.sector, d, column.outer)}));
     }
     const int64_t rows = static_cast<int64_t>(left.size());
     const int64_t cols = static_cast<int64_t>(right.size());
@@ -75,50 +63,37 @@ namespace sym
 
   at::Tensor Group::R_symbol(const Sector &b, const Sector &c) const
   {
-    const std::vector<Outcome> &fused = outcomes(b, c);
-    int64_t size = 0;
-    for (const Outcome &e : fused)
-    {
-      size += e.multiplicity;
-    }
+    const std::vector<RIndex> rows = r_rows(b, c);
+    const int64_t size = static_cast<int64_t>(rows.size());
     at::Tensor value = at::zeros({size, size}, at::TensorOptions().dtype(dtype()).device(device()));
-    int64_t offset = 0;
-    for (const Outcome &e : fused)
+    for (int64_t start = 0; start < size;)
     {
-      const int64_t copies = e.multiplicity;
+      // One block per outcome, so an outcome owns a stretch of consecutive rows.
+      const Sector &e = rows.at(static_cast<size_t>(start)).sector;
+      int64_t end = start;
+      while (end < size && rows.at(static_cast<size_t>(end)).sector == e) ++end;
+      const int64_t copies = end - start;
       // The exchange only exists where both orders fuse to the same sectors with the same
       // multiplicity, which is what makes every block square.
-      TORCH_CHECK(n_symbol(c, b, e.sector) == copies,
+      TORCH_CHECK(n_symbol(c, b, e) == copies,
                   "R_symbol needs N^e_bc == N^e_cb for every outcome e of b (x) c");
       // One vertex per copy, straight and exchanged; the coupled sector fixes their shape.
       std::vector<at::Tensor> straight;
       std::vector<at::Tensor> swapped;
       for (int64_t copy = 0; copy < copies; ++copy)
       {
-        straight.push_back(clebsch_gordan(b, c, e.sector, copy));
+        straight.push_back(clebsch_gordan(b, c, e, copy));
         // The exchanged vertex is stored with its own axis order, so bring it back to (b, c, e).
-        swapped.push_back(clebsch_gordan(c, b, e.sector, copy).permute({1, 0, 2}));
+        swapped.push_back(clebsch_gordan(c, b, e, copy).permute({1, 0, 2}));
       }
       // Each vertex is an isometry into its coupled sector, so the block carries that q_dim once.
       const at::Tensor block = at::matmul(at::stack(straight, 0).flatten(1),
                                           at::stack(swapped, 0).conj().flatten(1).transpose(0, 1)) /
-                               q_dim(e.sector);
-      value.slice(0, offset, offset + copies)
-          .slice(1, offset, offset + copies)
-          .copy_(block.reshape({copies, copies}));
-      offset += copies;
+                               q_dim(e);
+      value.slice(0, start, end).slice(1, start, end).copy_(block.reshape({copies, copies}));
+      start = end;
     }
     return value;
-  }
-
-  double Group::q_dim(Sector a) const { return static_cast<double>(dim(a)); }
-
-  void bind_group(py::module_ &m)
-  {
-    // The group adds its vertex to the category API; the rest of its surface is the category's.
-    py::class_<Group, FusionCategory, std::shared_ptr<Group>>(m, "Group")
-      .def("clebsch_gordan", &Group::clebsch_gordan)
-      .def("clear_cache", &Group::clear_cache);
   }
 
 } // namespace sym

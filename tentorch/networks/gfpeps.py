@@ -9,8 +9,7 @@ from tentorch.linalg.freefermion.covariance import RandPureCov, symplectic_form
 from typing import Optional
 
 '''
-Based on arxiv:2012.04666: C.-M. Jian, B. Bauer, A. Keselman and A. W. W. Ludwig,"Criticality and entanglement in non-unitary quantum circuits and tensor networks
-of non-interacting fermions", Phys. Rev. B 106, 054309 (2022), Sec. III:fermionic Gaussian tensor networks.
+Based on arxiv:2012.04666: C.-M. Jian, B. Bauer, A. Keselman and A. W. W. Ludwig,"Criticality and entanglement in non-unitary quantum circuits and tensor networks of non-interacting fermions", Phys. Rev. B 106, 054309 (2022), Sec. III:fermionic Gaussian tensor networks.
 
 A node carries ``dim_of_node(node)`` Majorana modes and is described by its covariance matrix ``Gamma_ij = < i/2 [gamma_i, gamma_j] >`` that are grouped into blocks by the legs of the graph. 
 '''

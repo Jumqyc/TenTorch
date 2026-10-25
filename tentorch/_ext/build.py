@@ -17,11 +17,12 @@ SOURCES = (os.path.join(HERE, 'bindings.cpp'),
            os.path.join(HERE, '..', 'symmetry', 'cat', 'fibonacci', 'fibonacci.cpp'),
            os.path.join(HERE, '..', 'symmetry', 'cat', 'su2', 'su2.cpp'),
            os.path.join(HERE, '..', 'symmetry', 'cat', 'su3', 'su3.cpp'),
-           os.path.join(HERE, '..', 'symmetry', 'cat', 'symbol.cpp'),
            os.path.join(HERE, '..', 'symmetry', 'tree', 'tree.cpp'),
-           os.path.join(HERE, '..', 'tensors', 'diagram.cpp'),
            os.path.join(HERE, '..', 'tensors', 'tensor.cpp'),
-           os.path.join(HERE, '..', 'linalg', 'graded', 'linalg.cpp'))
+           os.path.join(HERE, '..', 'linalg', 'graded', 'contract.cpp'),
+           os.path.join(HERE, '..', 'linalg', 'graded', 'svd.cpp'),
+           os.path.join(HERE, '..', 'linalg', 'graded', 'compare.cpp'),
+           os.path.join(HERE, '..', 'linalg', 'graded', 'einsum.cpp'))
 HEADERS = tuple(sorted(glob.glob(os.path.join(HERE, '..', '**', '*.h'), recursive = True)))
 PCH = os.path.join(HERE, 'pch.h')
 PCH_OUTPUT = PCH + '.gch'

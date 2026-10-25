@@ -18,7 +18,8 @@ class AbelianGroup : public Group {
 
   Sector dual(Sector a) const override;
   Sector trivial() const override;
-  int dim(Sector a) const override;
+  double q_dim(Sector a) const override;
+  double frobenius_schur_sign(const Sector& a) const override;
   c10::ScalarType dtype() const override;
 
  protected:
@@ -92,9 +93,9 @@ class FermionParity : public FusionCategory {
                       const Sector& d) const override;
   at::Tensor R_symbol(const Sector& b, const Sector& c) const override;
   double q_dim(Sector a) const override;
-  int dim(Sector a) const override;
   Sector dual(Sector a) const override;
   Sector trivial() const override;
+  double frobenius_schur_sign(const Sector& a) const override;
   c10::ScalarType dtype() const override;
 
  protected:
@@ -107,7 +108,9 @@ const std::shared_ptr<Group>& u1_symmetry();
 const std::shared_ptr<Group>& z_n_symmetry(int64_t modulus);
 const std::shared_ptr<FusionCategory>& fermion_parity();
 
+// Drop the cache of every Z_N singleton, including the ones no longer reachable by a call.
+void clear_z_n_caches();
+
 // Bind the abelian groups and their singletons.
-void bind_abelian(py::module_& m);
 
 }  // namespace sym

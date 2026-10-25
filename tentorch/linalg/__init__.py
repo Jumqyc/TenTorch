@@ -1,17 +1,6 @@
-"""The linear algebra of the two tensor types of the library: the splittings of a block-sparse
-``Tensor`` (``graded``) and the covariance-matrix algebra of a Gaussian fermion state
-(``freefermion``)."""
-from tentorch.linalg.graded import (
-    absorb,
-    inner,
-    lanczos,
-    norm,
-    qr,
-    rq,
-    svd,
-    svdvals,
-    trace,
-)
+'''
+The linear algebra of the block-sparse tensor: the splittings and the Krylov eigensolver.
+'''
+from tentorch.linalg.graded import Decomposition, Split, qr, qr_split, rq, rq_split, split, svd, svdvals
 
-__all__ = ['absorb', 'freefermion', 'graded', 'inner', 'lanczos', 'norm', 'qr', 'rq', 'svd',
-           'svdvals', 'trace']
+__all__ = ['Decomposition', 'Split', 'qr', 'qr_split', 'rq', 'rq_split', 'split', 'svd', 'svdvals']

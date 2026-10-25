@@ -17,7 +17,8 @@ class SU2Symmetry : public Group {
 
   Sector dual(Sector a) const override;
   Sector trivial() const override;
-  int dim(Sector a) const override;
+  double q_dim(Sector a) const override;
+  double frobenius_schur_sign(const Sector& a) const override;
   c10::ScalarType dtype() const override;
 
  protected:
@@ -30,6 +31,5 @@ class SU2Symmetry : public Group {
 const std::shared_ptr<Group>& su2_symmetry();
 
 // Bind SU(2) and its Clebsch-Gordan tables.
-void bind_su2(py::module_& m);
 
 }  // namespace sym

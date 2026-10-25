@@ -8,7 +8,7 @@ namespace sym {
 /**
  * @brief The Fibonacci category, $\tau \otimes \tau = 1 \oplus \tau$.
  * @details It is not the category of representations of a group, so it has no Clebsch-Gordan
- * tensor: the dimension equation $\sum_c N^c_{ab} \dim c = \dim a \dim b$ reads $1 + x = x^2$ on
+ * tensor: the dimension equation $\sum_c N^c_{ab} d_c = d_a d_b$ reads $1 + x = x^2$ on
  * $\tau \otimes \tau$ and has no positive integer solution.  Its symbols are therefore given
  * directly, and the pentagon and hexagon equations fix them up to gauge.
  */
@@ -20,9 +20,9 @@ class FibonacciCategory : public FusionCategory {
                       const Sector& d) const override;
   at::Tensor R_symbol(const Sector& b, const Sector& c) const override;
   double q_dim(Sector a) const override;
-  int dim(Sector a) const override;
   Sector dual(Sector a) const override;
   Sector trivial() const override;
+  double frobenius_schur_sign(const Sector& a) const override;
   c10::ScalarType dtype() const override;
 
  protected:
@@ -33,6 +33,5 @@ class FibonacciCategory : public FusionCategory {
 const std::shared_ptr<FusionCategory>& fibonacci_category();
 
 // Bind the Fibonacci category.
-void bind_fibonacci(py::module_& m);
 
 }  // namespace sym

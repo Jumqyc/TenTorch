@@ -1,6 +1,6 @@
 // The groups of the engine: a fusion category whose F and R symbols are the overlaps of its
 // Clebsch-Gordan tensors.  The tensor engine sees the category interface only; this header is for
-// the group implementations and for the bindings.
+// the group implementations.
 #pragma once
 
 #include <cstdint>
@@ -73,13 +73,6 @@ namespace sym
      */
     at::Tensor R_symbol(const Sector &b, const Sector &c) const override;
 
-    /**
-     * @brief The quantum dimension, which for a representation is the dimension of its space.
-     * @param a The sector.
-     * @return `dim(a)` as a real number.
-     */
-    double q_dim(Sector a) const override;
-
    protected:
     /**
      * @brief Compute the Clebsch-Gordan tensor $C^{c}_{ab}$ of one copy.
@@ -98,11 +91,5 @@ namespace sym
     // One vertex per (a, b, c, copy); the device is the object's, so it is not part of the key.
     mutable std::map<std::tuple<Sector, Sector, Sector, int64_t>, at::Tensor> cg_cache_;
   };
-
-  /**
-   * @brief Bind the group layer of the category interface.
-   * @param m The module to bind into.
-   */
-  void bind_group(py::module_ &m);
 
 } // namespace sym

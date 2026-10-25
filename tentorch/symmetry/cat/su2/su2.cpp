@@ -29,9 +29,12 @@ Sector SU2Symmetry::dual(Sector a) const { return a; }
 
 Sector SU2Symmetry::trivial() const { return {0}; }
 
-int SU2Symmetry::dim(Sector a) const { return static_cast<int>(a.at(0) + 1); }
+double SU2Symmetry::q_dim(Sector a) const { return static_cast<double>(a.at(0) + 1); }
 
-c10::ScalarType SU2Symmetry::dtype() const { return at::kDouble; }
+// $\nu_j = (-1)^{2j}$: the invariant form of a half-integer spin is the antisymmetric $\epsilon$.
+double SU2Symmetry::frobenius_schur_sign(const Sector& a) const { return a.at(0) % 2 == 0 ? 1.0 : -1.0; }
+
+c10::ScalarType SU2Symmetry::dtype() const { return at::kComplexDouble; }
 
 at::Tensor SU2Symmetry::compute_clebsch_gordan(const Sector& a, const Sector& b, const Sector& c,
                                        int64_t copy) const {
@@ -43,13 +46,6 @@ at::Tensor SU2Symmetry::compute_clebsch_gordan(const Sector& a, const Sector& b,
 const std::shared_ptr<Group>& su2_symmetry() {
   static const std::shared_ptr<Group> instance = std::make_shared<SU2Symmetry>();
   return instance;
-}
-
-void bind_su2(py::module_& m) {
-  py::class_<sym::SU2Symmetry, sym::Group, std::shared_ptr<sym::SU2Symmetry>>(
-      m, "SU2Symmetry")
-      .def(py::init<>());
-  m.attr("su2_symmetry") = py::cast(sym::su2_symmetry());
 }
 
 }  // namespace sym

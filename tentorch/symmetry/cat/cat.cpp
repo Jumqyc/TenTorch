@@ -2,7 +2,6 @@
 // from it so that no category answers them twice.
 #include "cat.h"
 
-#include <pybind11/stl.h>
 
 #include <string>
 #include <utility>
@@ -59,41 +58,53 @@ namespace sym
     return n_symbol(a, b, c) > 0;
   }
 
-  // Bind the fusion outcome and the base category.  A concrete category is bound next to its own
-  // implementation; what lives here is the part of the interface all of them share.
-  void bind_category(py::module_ &m)
+  std::vector<FIndex> FusionCategory::f_rows(const Sector &a, const Sector &b, const Sector &c,
+                                             const Sector &d) const
   {
-    py::class_<Outcome>(m, "Outcome")
-        .def_readonly("sector", &Outcome::sector)
-        .def_readonly("multiplicity", &Outcome::multiplicity)
-        .def("__repr__", [](const Outcome &outcome)
-             {
-               return "Outcome(sector=" +
-                      py::cast<std::string>(py::repr(to_python(outcome.sector))) +
-                      ", multiplicity=" + std::to_string(outcome.multiplicity) + ")";
-             });
+    std::vector<FIndex> rows;
+    for (const Outcome &e : outcomes(a, b))
+    {
+      const int64_t copies = n_symbol(e.sector, c, d);
+      for (int64_t inner = 0; inner < e.multiplicity; ++inner)
+      {
+        for (int64_t outer = 0; outer < copies; ++outer)
+        {
+          rows.push_back(FIndex{e.sector, inner, outer});
+        }
+      }
+    }
+    return rows;
+  }
 
-    py::class_<FusionCategory, std::shared_ptr<FusionCategory>>(m, "FusionCategory")
-        .def_property_readonly("name", &FusionCategory::name)
-        .def("outcomes", [](const FusionCategory &category, const Sector &a, const Sector &b)
-             {
-               py::list out;
-               for (const Outcome &outcome : category.outcomes(a, b))
-               {
-                 out.append(py::cast(outcome));
-               }
-               return out;
-             })
-        .def("n_symbol", &FusionCategory::n_symbol)
-        .def("can_fuse_to", &FusionCategory::can_fuse_to)
-        .def("F_symbol", &FusionCategory::F_symbol)
-        .def("R_symbol", &FusionCategory::R_symbol)
-        .def("q_dim", &FusionCategory::q_dim)
-        .def("dim", &FusionCategory::dim)
-        .def("dual", &FusionCategory::dual)
-        .def("trivial", &FusionCategory::trivial)
-        .def("dtype", &FusionCategory::dtype)
-        .def("device", &FusionCategory::device);
+  std::vector<FIndex> FusionCategory::f_columns(const Sector &a, const Sector &b, const Sector &c,
+                                                const Sector &d) const
+  {
+    std::vector<FIndex> columns;
+    for (const Outcome &f : outcomes(b, c))
+    {
+      const int64_t copies = n_symbol(a, f.sector, d);
+      for (int64_t inner = 0; inner < f.multiplicity; ++inner)
+      {
+        for (int64_t outer = 0; outer < copies; ++outer)
+        {
+          columns.push_back(FIndex{f.sector, inner, outer});
+        }
+      }
+    }
+    return columns;
+  }
+
+  std::vector<RIndex> FusionCategory::r_rows(const Sector &b, const Sector &c) const
+  {
+    std::vector<RIndex> rows;
+    for (const Outcome &e : outcomes(b, c))
+    {
+      for (int64_t copy = 0; copy < e.multiplicity; ++copy)
+      {
+        rows.push_back(RIndex{e.sector, copy});
+      }
+    }
+    return rows;
   }
 
 } // namespace sym

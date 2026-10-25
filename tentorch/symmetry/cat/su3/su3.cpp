@@ -341,7 +341,10 @@ Sector SU3Symmetry::dual(Sector a) const { return {a.at(1), a.at(0)}; }
 
 Sector SU3Symmetry::trivial() const { return {0, 0}; }
 
-int SU3Symmetry::dim(Sector a) const { return static_cast<int>(su3::dimension(a)); }
+double SU3Symmetry::q_dim(Sector a) const { return static_cast<double>(su3::dimension(a)); }
+
+// Every self-dual SU(3) sector has a symmetric invariant form in this gauge.
+double SU3Symmetry::frobenius_schur_sign(const Sector&) const { return 1.0; }
 
 c10::ScalarType SU3Symmetry::dtype() const { return at::kComplexDouble; }
 
@@ -357,13 +360,6 @@ at::Tensor SU3Symmetry::compute_clebsch_gordan(const Sector& a, const Sector& b,
 const std::shared_ptr<Group>& su3_symmetry() {
   static const std::shared_ptr<Group> instance = std::make_shared<SU3Symmetry>();
   return instance;
-}
-
-void bind_su3(py::module_& m) {
-  py::class_<sym::SU3Symmetry, sym::Group, std::shared_ptr<sym::SU3Symmetry>>(
-      m, "SU3Symmetry")
-      .def(py::init<>());
-  m.attr("su3_symmetry") = py::cast(sym::su3_symmetry());
 }
 
 }  // namespace sym

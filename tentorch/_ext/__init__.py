@@ -1,30 +1,34 @@
 '''
-The C++ symmetry engine of ``tentorch``.
+The compiled symmetry engine.
 
-Exposes the charge groups with their legs and fusion trees, the block-sparse ``Tensor`` with
-``cached_einsum``, and the ``svd``/``qr``/``rq``/``svdvals``/``norm``/``inner``/``trace``
-splittings.  The engine is compiled by ``tentorch/_ext/build.py`` into
-``tentorch/ext/build/symmetry_ext.so``; an import recompiles it when the shared object
-is missing or older than one of the sources, the headers or the build script.
+Exposes the categories with their legs and fusion trees, the block-sparse ``Tensor``, the
+contraction ``contract``/``einsum``, the scalar products ``inner``/``norm``/``is_close`` and the
+splittings ``svd``/``svdvals``/``qr``/``rq``.  The engine is compiled by ``tentorch/_ext/build.py``
+into ``tentorch/_ext/build/symmetry_ext.so``; an import recompiles it when the shared object is
+missing or older than one of the sources, the headers or the build script.
+
+Everything here is the raw extension: the layers above build the user-facing objects on it and
+reach the names a user does not need through this module.
 '''
 from __future__ import annotations
 
 import importlib.util
 import os
 import sys
-from types import SimpleNamespace
 from typing import Any
 
-from tentorch.config import COMPLEX, CUDA
+# torch first: the extension hands `at::Tensor` back to Python, which needs torch's own type
+# objects to already be in place
+import torch  # noqa: F401
 from tentorch._ext.build import (BUILD_DIR, GIB_PER_JOB, HEADERS, LIBRARY, SOURCES,
-                                available_gib, build_extension)
+                                 available_gib, build_extension)
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 # the build script is an input as well: it holds the list of sources
 INPUTS = SOURCES + HEADERS + (os.path.join(HERE, 'build.py'),)
 
 os.environ.setdefault('TORCH_EXTENSIONS_DIR', BUILD_DIR)
-os.makedirs(BUILD_DIR, exist_ok=True)
+os.makedirs(BUILD_DIR, exist_ok = True)
 
 _extension: Any
 if os.path.exists(LIBRARY) and os.path.getmtime(LIBRARY) > max(
@@ -46,71 +50,56 @@ else:
             f'`PYTHONPATH=. .venv/bin/python -u tentorch/_ext/build.py --jobs 1`.')
     _extension = build_extension(verbose = False, jobs = 1)
 
-# the engine allocates a fresh block buffer with the project's device and dtype
-_extension.set_defaults(str(CUDA), str(COMPLEX))
-
 # the engine classes are pickled by name, so the module around them has to stay importable
 sys.modules.setdefault('symmetry_ext', _extension)
 
-# the raw extension: the engine's own layers and the contract checks reach the names that are
-# not part of the public surface through it, so the surface below stays what a user needs
 _engine = _extension
+"""The raw extension, for the layers that need a name this module does not re-export."""
 
-# the public surface of the engine
 Sector = tuple[int, ...]
 """One sector label: one integer per conserved charge of the group."""
 
-BraidingStyle = _extension.BraidingStyle
-FusionStyle = _extension.FusionStyle
+# the categories
 FusionCategory = _extension.FusionCategory
 Group = _extension.Group
-Tensor = _extension.Tensor
-bond_leg = _extension.bond_leg
-capped_leg = _extension.capped_leg
-fuse_legs = _extension.fuse_legs
-multiplet_leg = _extension.multiplet_leg
-site_leg = _extension.site_leg
+AbelianGroup = _extension.AbelianGroup
+NoSymmetry = _extension.NoSymmetry
+U1Symmetry = _extension.U1Symmetry
 ZNSymmetry = _extension.ZNSymmetry
-cached_einsum = _extension.cached_einsum
-absorb = _extension.absorb
-fermion_parity = _extension.fermion_parity
-fibonacci = _extension.fibonacci
-inner = _extension.inner
+FermionParity = _extension.FermionParity
+SU2Symmetry = _extension.SU2Symmetry
+SU3Symmetry = _extension.SU3Symmetry
+FibonacciCategory = _extension.FibonacciCategory
+z_n = _extension.z_n
 no_symmetry = _extension.no_symmetry
+u1 = _extension.u1
+fermion_parity = _extension.fermion_parity
+su2 = _extension.su2
+su3 = _extension.su3
+fibonacci = _extension.fibonacci
+
+# the legs, the trees and the tensors
+Leg = _extension.Leg
+FusionTree = _extension.FusionTree
+Outcome = _extension.Outcome
+BlockKey = _extension.BlockKey
+Tensor = _extension.Tensor
+validate = _extension.validate
+reachable_charges = _extension.reachable_charges
+fusion_trees = _extension.fusion_trees
+block_keys = _extension.block_keys
+
+# the contraction, the scalar products and the splittings
+contract = _extension.contract
+einsum = _extension.einsum
+inner = _extension.inner
 norm = _extension.norm
-qr = _extension.qr
-rq = _extension.rq
-su2_symmetry = _extension.su2_symmetry
-su3_symmetry = _extension.su3_symmetry
+is_close = _extension.is_close
+Split = _extension.Split
+Decomposition = _extension.Decomposition
 svd = _extension.svd
 svdvals = _extension.svdvals
-trace = _extension.trace
-u1_symmetry = _extension.u1_symmetry
-z2_symmetry = _extension.z2_symmetry
+qr = _extension.qr
+rq = _extension.rq
 
-# ``tentorch.tensors`` refers to ``_expr_cache`` by name to drop the contraction plans; the engine
-# keeps its plans inside the extension, so the name drops every cache the engine keeps.
-_expr_cache = SimpleNamespace(clear = _extension.clear_caches)
-
-
-def _restore_group(name: str) -> Group:
-    '''
-    The group a pickled group object refers to.
-
-    Args:
-      name: ``name`` of the group, and its only identity: the groups of one
-        symmetry type are singletons of the engine.
-
-    Returns:
-      The singleton of that name, or a fresh ``ZNSymmetry`` for a modulus without one.
-    '''
-    if name.startswith('Z') and name[1:].isdigit():
-        modulus = int(name[1:])
-        return getattr(_extension, f'z{modulus}_symmetry', None) or ZNSymmetry(modulus)
-    singletons = {'NoSymmetry': no_symmetry, 'U(1)': u1_symmetry, 'SU(2)': su2_symmetry,
-                  'SU(3)': su3_symmetry, 'FermionParity': fermion_parity,
-                  'Fibonacci': fibonacci}
-    if name not in singletons:
-        raise ValueError(f'No group of the engine is named {name!r}.')
-    return singletons[name]
-
+clear_caches = _extension.clear_caches

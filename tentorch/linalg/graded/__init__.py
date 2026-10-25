@@ -1,97 +1,58 @@
-"""The splittings of the block-sparse tensor of ``tentorch``.
+'''
+The splittings of the block-sparse tensor: svd, qr and rq, and the values they return.
 
-Exposes ``svd``, ``qr``, ``rq``, ``svdvals``, ``norm``, ``inner``, ``trace``, ``lanczos`` and
-``absorb``; each acts on a ``Tensor`` of the tensor layer and returns the factors as ``Tensor``.
-"""
-from tentorch import _ext as _engine
-from typing import Any, Callable, Sequence, cast
+Every splitting takes the legs of the first factor as `left`; the legs named there are brought to
+the codomain of the first factor, and the rest go to the second.  A bond that is already where the
+split wants it costs nothing.
+'''
+from __future__ import annotations
 
-import torch
+from typing import Optional, Sequence
 
-from tentorch._ext import (  # noqa: F401
-    Tensor, cached_einsum, inner, norm, qr, rq, svdvals, trace)
+from tentorch._ext import Decomposition, Split, Tensor, qr, rq, svd, svdvals
 
-__all__ = ['absorb', 'inner', 'lanczos', 'norm', 'qr', 'rq', 'svd', 'svdvals', 'trace']
+__all__ = ['Decomposition', 'Split', 'qr', 'rq', 'svd', 'svdvals']
 
 
-def svd(t: Tensor, left: Sequence[int], right: Sequence[int],
-        **kwargs: Any) -> tuple[Tensor, torch.Tensor, Tensor]:
+def split(tensor: Tensor, left: Optional[Sequence[int]] = None, max_bond: Optional[int] = None,
+          tol: float = 0.0, absorb: int = 0) -> Split:
     '''
-    Singular value decomposition of a tensor over two leg groups.
-
+    Singular value decomposition over two groups of legs.
     Args:
-        t: the tensor to split.
-        left: the legs of the first factor, in order.
-        right: the legs of the second factor, in order.
-        **kwargs: forwarded to the engine (``max_bond``, ``tol``, ``absorb``).
+      tensor: the tensor to split.
+      left: the legs of the first factor, a list of leg positions over the codomain and then the
+        domain; every leg is kept when it is None.
+      max_bond: the number of multiplets of the new bond to keep, every one when it is None.
+      tol: singular values at or below it are dropped.
+      absorb: 0 leaves the values apart, 1 folds them into the first factor, 2 into the second and
+        3 splits the root into both.
     Returns:
-        tuple: (first factor, singular values, second factor).
+      The first factor, the values and the second factor.
     '''
-    return cast(tuple[Tensor, torch.Tensor, Tensor],
-                _engine.svd(t, left, right, **kwargs))
+    if left is None:
+        return svd(tensor, max_bond, tol, absorb)
+    return svd(tensor, list(left), max_bond, tol, absorb)
 
 
-def lanczos(func: Callable[[Tensor], Tensor], v: Tensor,
-            n_iter: int = 8) -> tuple[float, Tensor]:
+def qr_split(tensor: Tensor, left: Optional[Sequence[int]] = None) -> Decomposition:
     '''
-    Ground state of a Hermitian operator by the Lanczos recursion.
-
+    QR decomposition over two groups of legs.
     Args:
-        func: the action of the operator on a tensor with the legs of *v*.
-        v: starting vector.
-        n_iter: number of Krylov steps.
+      tensor: the tensor to split.
+      left: the legs of the first factor, every leg when it is None.
     Returns:
-        tuple: the lowest Ritz value and its vector, on the legs of *v*.
+      The orthogonal first factor and the triangular second one.
     '''
-    def pair(a: Tensor, b: Tensor) -> float:
-        return inner(a, b).real
-
-    start = v / pair(v, v) ** 0.5
-
-    vecs: list[Tensor] = [start]
-    alphas = torch.zeros(n_iter, dtype=torch.float64, device=start.device)
-    betas = torch.zeros(n_iter, dtype=torch.float64, device=start.device)
-    for k in range(n_iter):
-        current = vecs[k]
-        w = func(current)
-        alphas[k] = pair(current, w)
-        w = w - alphas[k] * current
-        if k > 0:
-            w = w - betas[k - 1] * vecs[k - 1]
-        # the three-term recurrence loses orthogonality once the Krylov space fills up, and a
-        # tridiagonal built on a dependent basis gives Ritz values no better than the starting
-        # vector; folding the residual against every vector already built keeps it orthonormal
-        for _ in range(2):
-            for previous in vecs[:k + 1]:
-                w = w - pair(previous, w) * previous
-        beta = pair(w, w) ** 0.5
-        betas[k] = beta
-        vecs.append(w / beta if float(beta) > 0.0 else w * 0.0)
-    # a negligible beta closes the Krylov space: the vectors generated after it are round-off,
-    # and folding them into the tridiagonal mixes in directions that are not orthogonal to the
-    # ones already found, which loses the normalisation of the ground vector
-    closed = (betas < 1e-12).nonzero()
-    n_eff = n_iter if closed.numel() == 0 else min(n_iter, int(closed[0]) + 1)
-    T = torch.diag(alphas[:n_eff])
-    if n_eff > 1:
-        T = T + torch.diag(betas[:n_eff - 1], diagonal=1) \
-              + torch.diag(betas[:n_eff - 1], diagonal=-1)
-    eigvals, eigvecs = torch.linalg.eigh(T)
-    ground = vecs[0] * eigvecs[0, 0].to(dtype=start.dtype)
-    for k in range(1, n_eff):
-        ground = ground + eigvecs[k, 0].to(dtype=start.dtype) * vecs[k]
-    return float(eigvals[0]), ground
+    return qr(tensor) if left is None else qr(tensor, list(left))
 
 
-def absorb(second: Tensor, values: torch.Tensor) -> Tensor:
+def rq_split(tensor: Tensor, left: Optional[Sequence[int]] = None) -> Decomposition:
     '''
-    Fold the singular values of a split into the second factor.
-
+    RQ decomposition over two groups of legs.
     Args:
-        second: the second factor of ``svd``, whose first leg is the new bond.
-        values: the singular values, in the order the split returned them; one per copy kept of
-            every charge of the new bond.
+      tensor: the tensor to split.
+      left: the legs of the first factor, every leg when it is None.
     Returns:
-        Tensor: the second factor with every bond window scaled by its singular value.
+      The triangular first factor and the orthogonal second one.
     '''
-    return cast(Tensor, _engine.absorb(second, values))
+    return rq(tensor) if left is None else rq(tensor, list(left))

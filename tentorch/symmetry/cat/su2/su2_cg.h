@@ -11,7 +11,6 @@
 // coupling schemes of three spins contracts those tensors on the host.
 
 #include <ATen/ATen.h>
-#include <torch/csrc/utils/pybind.h>
 #include <cstdint>
 #include <map>
 #include <tuple>

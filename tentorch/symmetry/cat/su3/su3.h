@@ -57,7 +57,8 @@ class SU3Symmetry : public Group {
 
   Sector dual(Sector a) const override;
   Sector trivial() const override;
-  int dim(Sector a) const override;
+  double q_dim(Sector a) const override;
+  double frobenius_schur_sign(const Sector& a) const override;
   c10::ScalarType dtype() const override;
 
  protected:
@@ -70,6 +71,5 @@ class SU3Symmetry : public Group {
 const std::shared_ptr<Group>& su3_symmetry();
 
 // Bind the SU(3) representation data.
-void bind_su3(py::module_& m);
 
 }  // namespace sym

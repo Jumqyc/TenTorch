@@ -28,9 +28,10 @@ namespace sym
    * @details The blocks are held sorted by sector, so two legs over the same space hold identical
    * storage and compare equal without a search.
    *
-   * The sectors a leg stores are the charges it contributes to the fusion, not the ones it is
-   * indexed by.  A leg standing for $\bar a$ stores $\bar a$: `conj` dualises every sector instead of
-   * a direction flag carrying the arrow.  Fusion therefore never asks which way a leg points.
+   * The sectors a leg stores are the charges of the space it indexes, so a leg reads the same
+   * whichever side of a tensor it sits on and two legs over one space are one value.  The arrow is
+   * not stored: a domain leg carries a bra index, so the charge it contributes to the fusion is the
+   * dual of what it stores, and that dual is taken where the total charge is compared.
    *
    * `dim` counts components and `multiplets` counts copies.  A block of multiplicity $m$ in sector
    * $c$ contributes $m \dim c$ components and $m$ multiplets; a bond dimension is counted in
@@ -52,13 +53,13 @@ namespace sym
         std::vector<int64_t> multiplicities);
 
     /**
-     * @brief One block in the trivial sector, carrying `dim` copies of it.
-     * @param dim The number of components, which is the multiplicity because the trivial sector has
-     * one component.
+     * @brief One block in the trivial sector, carrying `multiplets` copies of it.
+     * @param multiplets The number of copies, which is the number of components because the trivial
+     * sector has one component.
      * @param cat The category.
      * @return The leg.
      */
-    static Leg trivial(int64_t dim, std::shared_ptr<const FusionCategory> cat);
+    static Leg trivial(int64_t multiplets, std::shared_ptr<const FusionCategory> cat);
 
     /**
      * @brief A leg from `(sector, multiplicity)` entries, together with where each entry landed.
@@ -81,14 +82,6 @@ namespace sym
     const Sector &sector(int64_t block) const { return sectors_.at(static_cast<size_t>(block)); }
     // Multiplicity of one block.
     int64_t multiplicity(int64_t block) const { return multiplicities_.at(static_cast<size_t>(block)); }
-    // Components of one block, $m_c \dim c$.
-    int64_t block_dim(int64_t block) const;
-    // Index of the first component of one block in the dense layout.
-    int64_t offset(int64_t block) const;
-    // The start of every block in the dense layout, one more entry than there are blocks.
-    std::vector<int64_t> offsets() const;
-    // Components of the whole leg, $\sum_c m_c \dim c$.
-    int64_t dim() const;
     // Copies of the whole leg, $\sum_c m_c$.
     int64_t multiplets() const;
 
@@ -114,8 +107,6 @@ namespace sym
      * the last one the cut reaches, that one truncated.
      */
     Leg capped(int64_t max_multiplets) const;
-
-    std::string repr() const;
 
     bool operator==(const Leg &other) const;
     bool operator!=(const Leg &other) const { return !(*this == other); }
@@ -163,28 +154,10 @@ namespace sym
      */
     std::vector<Sector> chain() const;
 
-    std::string repr() const;
-
     bool operator==(const FusionTree &other) const;
     bool operator!=(const FusionTree &other) const { return !(*this == other); }
     bool operator<(const FusionTree &other) const;
 
-    std::size_t hash() const;
-  };
-
-  /**
-   * @brief The two sides of a tensor block: the trees of the codomain and of the domain, which
-   * couple to the same charge.
-   */
-  struct FusionTreePair
-  {
-    FusionTree codomain;
-    FusionTree domain;
-
-    std::string repr() const;
-    bool operator==(const FusionTreePair &other) const;
-    bool operator!=(const FusionTreePair &other) const { return !(*this == other); }
-    bool operator<(const FusionTreePair &other) const;
     std::size_t hash() const;
   };
 
@@ -198,16 +171,6 @@ namespace sym
    * inner loops and validates them where a mistake would be made.
    */
   void validate(const FusionCategory &category, const FusionTree &tree);
-
-  /**
-   * @brief The number of copies the fusion at `vertex` has.
-   * @param category The category.
-   * @param tree The tree.
-   * @param vertex The vertex, in $[0, n - 1)$.
-   * @return $N^{c_k}_{c_{k-1} l_k}$, the number of distinct vertices of that fusion, which is the
-   * side of the block the vertex contributes to.
-   */
-  int64_t vertex_copies(const FusionCategory &category, const FusionTree &tree, int64_t vertex);
 
   /**
    * @brief The charges a side can couple to.
@@ -230,40 +193,9 @@ namespace sym
                                        const std::vector<Leg> &legs,
                                        const Sector &coupled);
 
-  /**
-   * @brief The block keys of a tensor of one total charge: the pairs of trees of the two sides.
-   * @param category The category.
-   * @param codomain The legs of the codomain, in order.
-   * @param domain The legs of the domain, in order.
-   * @param qtotal The charge the tensor as a whole carries, which the two sides fuse to.
-   * @return The pairs whose codomain root $r$ and domain root $s$ satisfy $r \otimes s \ni q$, the
-   * codomain side outer and the domain side grouped by its root.
-   * @details The two sides do not couple to the same charge: a leg stores the charge it contributes,
-   * so the domain root is already the dual of the charge the domain space carries, and the tensor is
-   * an invariant of $q$ exactly when the two roots fuse to it.
-   */
-  std::vector<FusionTreePair> tree_pairs(const FusionCategory &category,
-                                         const std::vector<Leg> &codomain,
-                                         const std::vector<Leg> &domain,
-                                         const Sector &qtotal);
-
-  /**
-   * @brief The block keys of a tensor over every total charge its two sides can fuse to.
-   * @param category The category.
-   * @param codomain The legs of the codomain, in order.
-   * @param domain The legs of the domain, in order.
-   * @return The pairs of every total charge, the charges in sorted order and each one's pairs as
-   * `tree_pairs` returns them.  A pair whose two roots fuse to several charges appears once per
-   * charge.
-   */
-  std::vector<FusionTreePair> tree_pairs(const FusionCategory &category,
-                                         const std::vector<Leg> &codomain,
-                                         const std::vector<Leg> &domain);
-
-  /**
-   * @brief Bind the legs, the fusion trees and the shape algebra into the extension module.
-   * @param m The module to bind into.
-   */
-  void bind_tree(py::module_ &m);
+  // The sector as it is written in a message, `(0,)` for one component and `(0, 0)` for two.
+  std::string render(const Sector &sector);
+  std::string render_list(const std::vector<Sector> &sectors);
+  std::string render_copies(const std::vector<int64_t> &values);
 
 } // namespace sym

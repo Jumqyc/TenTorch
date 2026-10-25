@@ -29,14 +29,8 @@ std::vector<Outcome> FibonacciCategory::compute_outcomes(const Sector& a, const 
 
 at::Tensor FibonacciCategory::F_symbol(const Sector& a, const Sector& b, const Sector& c,
                                        const Sector& d) const {
-  std::vector<int64_t> rows;
-  for (const Outcome& e : outcomes(a, b)) {
-    if (n_symbol(e.sector, c, d) > 0) rows.push_back(e.sector.at(0));
-  }
-  std::vector<int64_t> columns;
-  for (const Outcome& f : outcomes(b, c)) {
-    if (n_symbol(a, f.sector, d) > 0) columns.push_back(f.sector.at(0));
-  }
+  const std::vector<FIndex> rows = f_rows(a, b, c, d);
+  const std::vector<FIndex> columns = f_columns(a, b, c, d);
   const int64_t side = static_cast<int64_t>(rows.size());
   const int64_t other = static_cast<int64_t>(columns.size());
   at::Tensor value = at::zeros({side, other}, at::TensorOptions().dtype(dtype()));
@@ -48,7 +42,8 @@ at::Tensor FibonacciCategory::F_symbol(const Sector& a, const Sector& b, const S
                                  {1.0 / std::sqrt(phi), -1.0 / phi}};
     for (int64_t i = 0; i < side; ++i) {
       for (int64_t j = 0; j < other; ++j) {
-        value[i][j] = golden[rows[i]][columns[j]];
+        value[i][j] = golden[rows.at(static_cast<size_t>(i)).sector.at(0)]
+                            [columns.at(static_cast<size_t>(j)).sector.at(0)];
       }
     }
     return value.to(device());
@@ -58,19 +53,17 @@ at::Tensor FibonacciCategory::F_symbol(const Sector& a, const Sector& b, const S
 }
 
 at::Tensor FibonacciCategory::R_symbol(const Sector& b, const Sector& c) const {
-  std::vector<c10::complex<double>> phases;
-  for (const Outcome& e : outcomes(b, c)) {
+  const std::vector<RIndex> rows = r_rows(b, c);
+  const int64_t size = static_cast<int64_t>(rows.size());
+  at::Tensor value = at::zeros({size, size}, at::TensorOptions().dtype(dtype()));
+  for (int64_t at = 0; at < size; ++at) {
     c10::complex<double> phase(1.0, 0.0);
     if (b.at(0) == kTau && c.at(0) == kTau) {
-      phase = e.sector.at(0) == kTrivial ? std::polar(1.0, -4.0 * std::numbers::pi / 5.0)
-                                         : std::polar(1.0, 3.0 * std::numbers::pi / 5.0);
+      phase = rows.at(static_cast<size_t>(at)).sector.at(0) == kTrivial
+                  ? std::polar(1.0, -4.0 * std::numbers::pi / 5.0)
+                  : std::polar(1.0, 3.0 * std::numbers::pi / 5.0);
     }
-    phases.push_back(phase);
-  }
-  const int64_t size = static_cast<int64_t>(phases.size());
-  at::Tensor value = at::zeros({size, size}, at::TensorOptions().dtype(dtype()));
-  for (int64_t i = 0; i < size; ++i) {
-    value[i][i] = phases[i];
+    value[at][at] = phase;
   }
   return value.to(device());
 }
@@ -79,24 +72,18 @@ double FibonacciCategory::q_dim(Sector a) const {
   return a.at(0) == kTau ? golden_ratio() : 1.0;
 }
 
-int FibonacciCategory::dim(Sector) const { return 1; }
-
 Sector FibonacciCategory::dual(Sector a) const { return a; }
 
 Sector FibonacciCategory::trivial() const { return {kTrivial}; }
+
+// $\tau$ is self-dual with a symmetric invariant form.
+double FibonacciCategory::frobenius_schur_sign(const Sector&) const { return 1.0; }
 
 c10::ScalarType FibonacciCategory::dtype() const { return at::kComplexDouble; }
 
 const std::shared_ptr<FusionCategory>& fibonacci_category() {
   static const std::shared_ptr<FusionCategory> instance = std::make_shared<FibonacciCategory>();
   return instance;
-}
-
-void bind_fibonacci(py::module_& m) {
-  py::class_<FibonacciCategory, FusionCategory, std::shared_ptr<FibonacciCategory>>(
-      m, "FibonacciCategory")
-      .def(py::init<>());
-  m.attr("fibonacci_category") = py::cast(fibonacci_category());
 }
 
 }  // namespace sym

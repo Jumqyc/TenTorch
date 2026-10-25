@@ -3,68 +3,64 @@
 
 #include <algorithm>
 #include <functional>
-#include <map>
 #include <numeric>
-#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include <pybind11/stl.h>
-
 namespace sym
 {
 
+  // The sector as it is written in a message, `(0,)` for one component and `(0, 0)` for two.
+  std::string render(const Sector &sector)
+  {
+    std::string out = "(";
+    for (size_t i = 0; i < sector.size(); ++i)
+    {
+      if (i != 0)
+      {
+        out += ", ";
+      }
+      out += std::to_string(sector[i]);
+    }
+    if (sector.size() == 1)
+    {
+      out += ",";
+    }
+    return out + ")";
+  }
+
+  std::string render_list(const std::vector<Sector> &sectors)
+  {
+    std::string out = "[";
+    for (size_t i = 0; i < sectors.size(); ++i)
+    {
+      if (i != 0)
+      {
+        out += ", ";
+      }
+      out += render(sectors[i]);
+    }
+    return out + "]";
+  }
+
+  std::string render_copies(const std::vector<int64_t> &values)
+  {
+    std::string out = "[";
+    for (size_t i = 0; i < values.size(); ++i)
+    {
+      if (i != 0)
+      {
+        out += ", ";
+      }
+      out += std::to_string(values[i]);
+    }
+    return out + "]";
+  }
+
   namespace
   {
-    // The sector as Python renders it, `(0,)` for one component and `(0, 0)` for two.
-    std::string render(const Sector &sector)
-    {
-      std::string out = "(";
-      for (size_t i = 0; i < sector.size(); ++i)
-      {
-        if (i != 0)
-        {
-          out += ", ";
-        }
-        out += std::to_string(sector[i]);
-      }
-      if (sector.size() == 1)
-      {
-        out += ",";
-      }
-      return out + ")";
-    }
-
-    std::string render_list(const std::vector<Sector> &sectors)
-    {
-      std::string out = "[";
-      for (size_t i = 0; i < sectors.size(); ++i)
-      {
-        if (i != 0)
-        {
-          out += ", ";
-        }
-        out += render(sectors[i]);
-      }
-      return out + "]";
-    }
-
-    std::string render_copies(const std::vector<int64_t> &values)
-    {
-      std::string out = "[";
-      for (size_t i = 0; i < values.size(); ++i)
-      {
-        if (i != 0)
-        {
-          out += ", ";
-        }
-        out += std::to_string(values[i]);
-      }
-      return out + "]";
-    }
-
     void hash_combine(std::size_t &seed, std::size_t value)
     {
       seed ^= value + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
@@ -135,7 +131,7 @@ namespace sym
     }
     for (const Sector &sector : sectors_)
     {
-      if (cat_->dim(sector) <= 0)
+      if (cat_->q_dim(sector) <= 0.0)
       {
         throw std::invalid_argument("The sector " + render(sector) + " has no components in " +
                                     cat_->name() + ".");
@@ -143,18 +139,18 @@ namespace sym
     }
   }
 
-  Leg Leg::trivial(int64_t dim, std::shared_ptr<const FusionCategory> cat)
+  Leg Leg::trivial(int64_t multiplets, std::shared_ptr<const FusionCategory> cat)
   {
-    if (dim <= 0)
+    if (multiplets <= 0)
     {
       throw std::invalid_argument("A trivial leg needs at least one component, got " +
-                                  std::to_string(dim) + ".");
+                                  std::to_string(multiplets) + ".");
     }
     if (cat == nullptr)
     {
       throw std::invalid_argument("A trivial leg needs a category.");
     }
-    return Leg(cat, {cat->trivial()}, {dim});
+    return Leg(cat, {cat->trivial()}, {multiplets});
   }
 
   std::pair<Leg, std::vector<int64_t>> Leg::from_blocks(
@@ -178,41 +174,6 @@ namespace sym
       rank[k] = static_cast<int64_t>(found - leg.sectors().begin());
     }
     return {std::move(leg), std::move(rank)};
-  }
-
-  int64_t Leg::block_dim(int64_t block) const
-  {
-    return multiplicity(block) * static_cast<int64_t>(cat_->dim(sector(block)));
-  }
-
-  int64_t Leg::offset(int64_t block) const
-  {
-    int64_t out = 0;
-    for (int64_t previous = 0; previous < block; ++previous)
-    {
-      out += block_dim(previous);
-    }
-    return out;
-  }
-
-  std::vector<int64_t> Leg::offsets() const
-  {
-    std::vector<int64_t> out(static_cast<size_t>(nblocks() + 1), 0);
-    for (int64_t block = 0; block < nblocks(); ++block)
-    {
-      out[static_cast<size_t>(block + 1)] = out[static_cast<size_t>(block)] + block_dim(block);
-    }
-    return out;
-  }
-
-  int64_t Leg::dim() const
-  {
-    int64_t out = 0;
-    for (int64_t block = 0; block < nblocks(); ++block)
-    {
-      out += block_dim(block);
-    }
-    return out;
   }
 
   int64_t Leg::multiplets() const
@@ -282,20 +243,6 @@ namespace sym
     return Leg(cat_, std::move(sectors), std::move(multiplicities));
   }
 
-  std::string Leg::repr() const
-  {
-    std::string out = "Leg(" + cat_->name() + ": ";
-    for (int64_t block = 0; block < nblocks(); ++block)
-    {
-      if (block != 0)
-      {
-        out += ", ";
-      }
-      out += render(sector(block)) + ":" + std::to_string(multiplicity(block));
-    }
-    return out + ")";
-  }
-
   bool Leg::operator==(const Leg &other) const
   {
     return cat_ == other.cat_ && sectors_ == other.sectors_ && multiplicities_ == other.multiplicities_;
@@ -327,12 +274,6 @@ namespace sym
     }
     out.push_back(coupled);
     return out;
-  }
-
-  std::string FusionTree::repr() const
-  {
-    return "FusionTree(" + render_list(sectors) + " -> " + render_list(inner) + " -> " +
-           render(coupled) + ", copies " + render_copies(copies) + ")";
   }
 
   bool FusionTree::operator==(const FusionTree &other) const
@@ -374,28 +315,6 @@ namespace sym
       hash_combine(seed, std::hash<int64_t>{}(copy));
     }
     hash_combine(seed, hash_sector(coupled));
-    return seed;
-  }
-
-  std::string FusionTreePair::repr() const
-  {
-    return "FusionTreePair(" + codomain.repr() + " -> " + domain.repr() + ")";
-  }
-
-  bool FusionTreePair::operator==(const FusionTreePair &other) const
-  {
-    return codomain == other.codomain && domain == other.domain;
-  }
-
-  bool FusionTreePair::operator<(const FusionTreePair &other) const
-  {
-    return codomain != other.codomain ? codomain < other.codomain : domain < other.domain;
-  }
-
-  std::size_t FusionTreePair::hash() const
-  {
-    std::size_t seed = codomain.hash();
-    hash_combine(seed, domain.hash());
     return seed;
   }
 
@@ -451,19 +370,6 @@ namespace sym
                                     std::to_string(tree.copies[static_cast<size_t>(vertex)]) + ".");
       }
     }
-  }
-
-  int64_t vertex_copies(const FusionCategory &category, const FusionTree &tree, int64_t vertex)
-  {
-    const int64_t legs = tree.size();
-    if (vertex < 0 || vertex + 1 >= legs)
-    {
-      throw std::invalid_argument("A tree of " + std::to_string(legs) + " legs has vertices in [0, " +
-                                  std::to_string(legs - 1) + "), got " + std::to_string(vertex) + ".");
-    }
-    const Sector &left = vertex == 0 ? tree.sectors[0] : tree.inner[static_cast<size_t>(vertex - 1)];
-    const Sector &out = vertex + 2 == legs ? tree.coupled : tree.inner[static_cast<size_t>(vertex)];
-    return category.n_symbol(left, tree.sectors[static_cast<size_t>(vertex + 1)], out);
   }
 
   std::vector<Sector> reachable_charges(const FusionCategory &category, const std::vector<Leg> &legs)
@@ -562,142 +468,6 @@ namespace sym
     };
     walk(0, category.trivial());
     return out;
-  }
-
-  namespace
-  {
-    // Every tree of a side, over every charge it can couple to.
-    std::vector<FusionTree> all_trees(const FusionCategory &category, const std::vector<Leg> &legs)
-    {
-      std::vector<FusionTree> out;
-      for (const Sector &charge : reachable_charges(category, legs))
-      {
-        for (const FusionTree &tree : fusion_trees(category, legs, charge))
-        {
-          out.push_back(tree);
-        }
-      }
-      return out;
-    }
-  } // namespace
-
-  std::vector<FusionTreePair> tree_pairs(const FusionCategory &category,
-                                         const std::vector<Leg> &codomain,
-                                         const std::vector<Leg> &domain,
-                                         const Sector &qtotal)
-  {
-    // The columns are grouped by the charge the domain side couples to, which the total charge and
-    // the codomain root then pin down through the fusion of the two.
-    std::map<Sector, std::vector<FusionTree>> columns;
-    for (const FusionTree &tree : all_trees(category, domain))
-    {
-      columns[tree.coupled].push_back(tree);
-    }
-    std::vector<FusionTreePair> out;
-    for (const FusionTree &first : all_trees(category, codomain))
-    {
-      for (const auto &column : columns)
-      {
-        if (category.n_symbol(first.coupled, column.first, qtotal) == 0)
-        {
-          continue;
-        }
-        for (const FusionTree &second : column.second)
-        {
-          out.push_back(FusionTreePair{first, second});
-        }
-      }
-    }
-    return out;
-  }
-
-  std::vector<FusionTreePair> tree_pairs(const FusionCategory &category,
-                                         const std::vector<Leg> &codomain,
-                                         const std::vector<Leg> &domain)
-  {
-    std::set<Sector> charges;
-    for (const Sector &codomain_root : reachable_charges(category, codomain))
-    {
-      for (const Sector &domain_root : reachable_charges(category, domain))
-      {
-        for (const Outcome &outcome : category.outcomes(codomain_root, domain_root))
-        {
-          charges.insert(outcome.sector);
-        }
-      }
-    }
-    std::vector<FusionTreePair> out;
-    for (const Sector &qtotal : charges)
-    {
-      for (const FusionTreePair &pair : tree_pairs(category, codomain, domain, qtotal))
-      {
-        out.push_back(pair);
-      }
-    }
-    return out;
-  }
-
-  void bind_tree(py::module_ &m)
-  {
-    py::class_<Leg>(m, "Leg")
-        .def(py::init([](std::shared_ptr<FusionCategory> cat, std::vector<Sector> sectors,
-                         std::vector<int64_t> multiplicities) {
-               return Leg(std::shared_ptr<const FusionCategory>(std::move(cat)), std::move(sectors),
-                          std::move(multiplicities));
-             }),
-             py::arg("cat"), py::arg("sectors"), py::arg("multiplicities"))
-        .def_static("trivial", &Leg::trivial, py::arg("dim"), py::arg("cat"))
-        .def_static("from_blocks", &Leg::from_blocks, py::arg("cat"), py::arg("entries"))
-        .def_property_readonly("cat",
-                               [](const Leg &leg) { return std::const_pointer_cast<FusionCategory>(leg.cat()); })
-        .def_property_readonly("sectors", &Leg::sectors)
-        .def_property_readonly("multiplicities", &Leg::multiplicities)
-        .def("nblocks", &Leg::nblocks)
-        .def("sector", &Leg::sector, py::arg("block"))
-        .def("multiplicity", &Leg::multiplicity, py::arg("block"))
-        .def("block_dim", &Leg::block_dim, py::arg("block"))
-        .def("offset", &Leg::offset, py::arg("block"))
-        .def("offsets", &Leg::offsets)
-        .def("dim", &Leg::dim)
-        .def("multiplets", &Leg::multiplets)
-        .def("fuse", &Leg::fuse, py::arg("other"))
-        .def("conj", &Leg::conj)
-        .def("capped", &Leg::capped, py::arg("max_multiplets"))
-        .def("__repr__", &Leg::repr)
-        .def("__eq__", &Leg::operator==, py::is_operator())
-        .def("__ne__", &Leg::operator!=, py::is_operator())
-        .def("__hash__", &Leg::hash);
-
-    py::class_<FusionTree>(m, "FusionTree")
-        .def_readonly("sectors", &FusionTree::sectors)
-        .def_readonly("inner", &FusionTree::inner)
-        .def_readonly("copies", &FusionTree::copies)
-        .def_readonly("coupled", &FusionTree::coupled)
-        .def("size", &FusionTree::size)
-        .def("chain", &FusionTree::chain)
-        .def("__repr__", &FusionTree::repr)
-        .def("__eq__", &FusionTree::operator==, py::is_operator())
-        .def("__ne__", &FusionTree::operator!=, py::is_operator())
-        .def("__hash__", &FusionTree::hash);
-
-    py::class_<FusionTreePair>(m, "FusionTreePair")
-        .def_readonly("codomain", &FusionTreePair::codomain)
-        .def_readonly("domain", &FusionTreePair::domain)
-        .def("__repr__", &FusionTreePair::repr)
-        .def("__eq__", &FusionTreePair::operator==, py::is_operator())
-        .def("__ne__", &FusionTreePair::operator!=, py::is_operator())
-        .def("__hash__", &FusionTreePair::hash);
-
-    m.def("validate", &validate, py::arg("category"), py::arg("tree"));
-    m.def("vertex_copies", &vertex_copies, py::arg("category"), py::arg("tree"), py::arg("vertex"));
-    m.def("reachable_charges", &reachable_charges, py::arg("category"), py::arg("legs"));
-    m.def("fusion_trees", &fusion_trees, py::arg("category"), py::arg("legs"), py::arg("coupled"));
-    m.def("tree_pairs", py::overload_cast<const FusionCategory &, const std::vector<Leg> &,
-                                          const std::vector<Leg> &, const Sector &>(&tree_pairs),
-          py::arg("category"), py::arg("codomain"), py::arg("domain"), py::arg("coupled"));
-    m.def("tree_pairs", py::overload_cast<const FusionCategory &, const std::vector<Leg> &,
-                                          const std::vector<Leg> &>(&tree_pairs),
-          py::arg("category"), py::arg("codomain"), py::arg("domain"));
   }
 
 } // namespace sym
