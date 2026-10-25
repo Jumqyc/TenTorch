@@ -105,10 +105,11 @@ namespace sym
     check_single(cat, other, other.qtotal(), "second tensor");
     check_single(cat, out, charge, "product");
 
-    // The blocks of the second tensor, grouped by the root its codomain fuses to.
+    // The blocks of the second tensor, grouped by the root its codomain fuses to: that root is the
+    // one the summed legs carry, so it has to equal the root of the domain of the first tensor.
     std::map<Sector, std::vector<std::pair<Sector, const at::Tensor *>>> rows;
     for (const auto &[key, block] : other.blocks())
-      rows[key.domain].push_back({key.codomain, &block});
+      rows[key.codomain].push_back({key.domain, &block});
 
     for (const auto &[key, left] : first.blocks())
     {

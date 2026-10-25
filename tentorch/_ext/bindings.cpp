@@ -302,11 +302,11 @@ namespace sym
           operands.reserve(args.size());
           for (const py::handle item : args) operands.push_back(item.cast<Tensor>());
           for (const auto &item : options)
-            if (std::string(py::str(item.first)) != "charge")
+            if (std::string(py::str(item.first)) != "outcharge")
               throw std::invalid_argument("einsum does not take the keyword '" +
                                           std::string(py::str(item.first)) + "'");
-          if (options.contains("charge"))
-            return einsum(spec, operands, options["charge"].cast<Sector>());
+          if (options.contains("outcharge"))
+            return einsum(spec, operands, options["outcharge"].cast<Sector>());
           return einsum(spec, operands);
         },
         py::arg("spec"));

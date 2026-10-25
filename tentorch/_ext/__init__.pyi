@@ -308,7 +308,7 @@ def contract(first: Tensor, other: Tensor, first_domain: Sequence[int],
     '''Contract the named legs of the two tensors, the charge of the result given explicitly.'''
     ...
 
-def einsum(spec: str, *tensors: Tensor, charge: Optional[Sector] = ...) -> Tensor:
+def einsum(spec: str, *tensors: Tensor, outcharge: Optional[Sector] = ...) -> Tensor:
     '''Contract a whole network at once, summing over every path of charges that reaches `charge`.'''
     ...
 
