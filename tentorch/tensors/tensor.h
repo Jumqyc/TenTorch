@@ -1,334 +1,148 @@
-// The block-sparse tensor of the engine: a graded space, the map over it, and the contraction.
+// The block-sparse tensors of the engine: a map between two graded spaces, one dense matrix per
+// pair of roots, and the layout that numbers the rows and columns of a block.
 #pragma once
 
+#include <ATen/ATen.h>
+
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
-#include <tuple>
-#include <unordered_map>
 #include <utility>
 #include <vector>
-
-#include <c10/core/Device.h>
-#include <c10/core/ScalarType.h>
-#include <torch/extension.h>
 
 #include "../symmetry/cat/cat.h"
 #include "../symmetry/tree/tree.h"
 
-#include <map>
-#include <memory>
-#include <vector>
+namespace sym
+{
 
-#include <c10/core/Device.h>
-#include <c10/core/ScalarType.h>
-#include <torch/extension.h>
+  /**
+   * @brief The rows one side of a block spans.
+   * @details The side of a block is every tree of one root, and a tree contributes one row per
+   * combination of the multiplicities its legs carry: $\prod_i m_i$, where $m_i$ is the
+   * multiplicity of the block that leg $i$ carries in the tree.  `offsets[t]` is the first row of
+   * `trees[t]`, so `offsets.back()` is the number of rows and a row is read back by mixed-radix
+   * decomposition of its offset into the tree.
+   *
+   * The trees are in the order `fusion_trees` gives them, so the layout is a function of the legs
+   * and the root alone.
+   */
+  struct SideLayout
+  {
+    std::vector<FusionTree> trees;
+    std::vector<int64_t> offsets;
 
+    // Rows the side spans.
+    int64_t rows() const { return offsets.back(); }
+  };
 
-namespace sym::engine {
+  /**
+   * @brief The layout of one side of a block.
+   * @param category The category.
+   * @param legs The legs of the side, in order.
+   * @param root The sector the trees of the side couple to.
+   * @return The trees that couple to `root` and where each one starts.
+   */
+  SideLayout layout_of(const FusionCategory &category,
+                       const std::vector<Leg> &legs,
+                       const Sector &root);
 
-// One charge block of a leg, as the tree enumeration sees it: the sector it carries and whether the
-// side stores that sector dualised.
-std::vector<LegCharge> leg_charges(const Leg& leg);
+  /**
+   * @brief The block keys of a tensor.
+   * @param category The category.
+   * @param codomain The legs of the codomain, in order.
+   * @param domain The legs of the domain, in order.
+   * @param qtotal The charge the tensor as a whole carries.
+   * @return Every pair of roots $(r, s)$ with $r \otimes s \ni q$, the codomain root outer, in the
+   * order the fusion outcomes of the two sides give them.
+   * @details The two sides do not couple to the same charge: a leg stores the charge it
+   * contributes, so the domain root is already the dual of the charge the domain space carries, and
+   * a pair closes to $q$ exactly when the two roots fuse to it.
+   */
+  std::vector<std::pair<Sector, Sector>> block_keys(const FusionCategory &category,
+                                                    const std::vector<Leg> &codomain,
+                                                    const std::vector<Leg> &domain,
+                                                    const Sector &qtotal);
 
-// The domain root that goes with a codomain root at a given total charge: the block of a tensor is
-// fixed by the root of its codomain side, and the domain root is the sector the two sides fuse
-// through, which the total charge then pins down.
-// Args:
-//   group: the category all sectors belong to.
-//   codomain_root: the sector the codomain side of the block couples to.
-//   qtotal: the total charge of the tensor.
-// Returns:
-//   The domain root that closes `qtotal` with `codomain_root`.
-// Raises:
-//   std::invalid_argument: if more than one domain root closes to `qtotal`.
-Sector partner_root(const FusionCategory& group, const Sector& codomain_root, const Sector& qtotal);
+  /**
+   * @brief A tensor: a map between two graded spaces.
+   * @details The map is held as one dense matrix per pair of roots, keyed
+   * $(r, s)$: the rows are the trees of the codomain that couple to $r$, the columns the trees of
+   * the domain that couple to $s$, and an entry is the coefficient of that pair of basis vectors.
+   *
+   * The tree basis is orthonormal, so the coefficient is the whole entry: a contraction of two
+   * tensors is the matrix product of their blocks and needs no weight, and a closed diagram is a
+   * sum of products of coefficients.  Every block of every key is allocated, so a key the legs allow
+   * always names a matrix.
+   *
+   * A tensor is data.  It holds the category, the legs of the two sides, its total charge and its
+   * blocks, and nothing else: the layout of a block is a function of the legs and the roots, so
+   * storing it would be a second copy of the same information.
+   */
+  class Tensor
+  {
+  public:
+    /**
+     * @brief A tensor whose blocks are all zero.
+     * @param cat The category.
+     * @param codomain The legs of the codomain, in order.
+     * @param domain The legs of the domain, in order.
+     * @param qtotal The charge the tensor as a whole carries.
+     * @param dtype The scalar type, the category's own when omitted.
+     * @param device The device, the category's own when omitted.
+     * @throws std::invalid_argument When a leg is over a different category.
+     */
+    Tensor(std::shared_ptr<const FusionCategory> cat,
+           std::vector<Leg> codomain,
+           std::vector<Leg> domain,
+           Sector qtotal,
+           std::optional<c10::ScalarType> dtype = std::nullopt,
+           std::optional<c10::Device> device = std::nullopt);
 
-// A leg from its summands, each carrying the multiplicity it appears with, and the direction it
-// points: the slices are the running sum of the summand dimensions, so the leg's index is the
-// concatenation of its summands.
-Leg leg_of(std::shared_ptr<FusionCategory> group,
-           const std::vector<std::pair<Sector, int64_t>>& summands, int64_t qconj);
+    const std::shared_ptr<const FusionCategory> &cat() const { return cat_; }
+    const std::vector<Leg> &codomain() const { return codomain_; }
+    const std::vector<Leg> &domain() const { return domain_; }
+    const Sector &qtotal() const { return qtotal_; }
+    const std::map<std::pair<Sector, Sector>, at::Tensor> &blocks() const { return blocks_; }
 
-// The two sides of a tensor: the legs it comes out of and the legs it goes into.
-struct Space {
-  std::shared_ptr<FusionCategory> group;
-  std::vector<Leg> codomain;
-  std::vector<Leg> domain;
+    // Legs of both sides, codomain first.
+    std::vector<Leg> legs() const;
+    // Number of legs of both sides.
+    int64_t size() const { return static_cast<int64_t>(codomain_.size() + domain_.size()); }
 
-  std::shared_ptr<FusionCategory> category() const { return group; }
-  int64_t size() const { return static_cast<int64_t>(codomain.size() + domain.size()); }
-  bool operator==(const Space& other) const;
-};
+    /**
+     * @brief The block of one pair of roots.
+     * @param codomain_root The sector the codomain side couples to.
+     * @param domain_root The sector the domain side couples to.
+     * @return The matrix of that pair.
+     * @throws std::out_of_range When the legs do not allow that pair.
+     */
+    const at::Tensor &block(const Sector &codomain_root, const Sector &domain_root) const;
+    at::Tensor &block(const Sector &codomain_root, const Sector &domain_root);
 
-// A tensor: one matrix per coupled charge, whose rows and columns are the tree pairs of that charge
-// in the canonical enumeration of ``tree_pairs``.
-struct TensorMap {
-  Space space;
-  // The charge the tensor as a whole carries: only the block of this charge is filled, and a tensor
-  // with a trivial total charge is the one a closed diagram can weigh.
-  Sector qtotal;
-  std::map<Sector, at::Tensor> blocks;
+    // The rows of one codomain root, and the columns of one domain root.
+    SideLayout rows_of(const Sector &codomain_root) const;
+    SideLayout columns_of(const Sector &domain_root) const;
 
-  std::vector<LegCharge> codomain_charges() const;
-  std::vector<LegCharge> domain_charges() const;
-  // The tree pairs of one block, in row-major order of that block.
-  std::vector<FusionTreePair> pairs(const Sector& coupled) const;
-};
+    // The block keys, in the order the constructor allocates them.
+    std::vector<std::pair<Sector, Sector>> keys() const;
 
-// The component array of one tree: the contraction of one fusion vertex per coupling, divided by
-// the square root of the product of the quantum dimensions it fuses, so that the tree basis is
-// orthonormal. A leg that carries duals stores its index in the conjugate basis, so it is dressed
-// by the duality matrix.
-at::Tensor tree_tensor(const FusionCategory& group, const FusionTree& tree,
-                       const c10::Device& device, bool dress = false);
+    at::ScalarType dtype() const { return blocks_.empty() ? at::kComplexDouble : blocks_.begin()->second.scalar_type(); }
+    c10::Device device() const { return blocks_.empty() ? cat_->device() : blocks_.begin()->second.device(); }
 
-// The legs of a tensor, rearranged so that the codomain carries `keep` of them: a leg that crosses
-// changes its direction, and both sides are re-expressed in each other's tree basis.
-// Args:
-//   tensor: a tensor map.
-//   keep: the number of legs the codomain carries afterwards.
-//   device: where the associator is read from.
-// Returns:
-//   The same map over rearranged legs, its blocks rebuilt in the new tree basis.
-// Raises:
-//   std::out_of_range: if `keep` does not fit the legs of the tensor.
-TensorMap repartition_tensor(const TensorMap& tensor, int64_t keep, const c10::Device& device);
+    std::string repr() const;
 
-// The rows (or columns) one side of a block spans: every fusion tree of that charge, and for each
-// of its legs the multiplicity index the row picks along that leg.
-struct SideLayout {
-  // The trees of the side, in the order the block enumerates them.
-  std::vector<FusionTree> trees;
-  // base.at(i) is the first row of trees.at(i); base.back() is the number of rows.
-  std::vector<int64_t> base;
-  // mults.at(i).at(leg) is the multiplicity of that leg along the i-th tree.
-  std::vector<std::vector<int64_t>> mults;
+    bool operator==(const Tensor &other) const;
+    bool operator!=(const Tensor &other) const { return !(*this == other); }
 
-  int64_t rows() const { return base.empty() ? 0 : base.back(); }
-};
+  private:
+    std::shared_ptr<const FusionCategory> cat_;
+    std::vector<Leg> codomain_;
+    std::vector<Leg> domain_;
+    Sector qtotal_;
+    std::map<std::pair<Sector, Sector>, at::Tensor> blocks_;
+  };
 
-// The layout of one side of a block, given the legs of that side and the trees of one charge.
-SideLayout side_layout(const std::vector<Leg>& legs, const std::vector<FusionTree>& trees);
-
-// The tree index of a row and the multiplicity index that row picks along every leg.
-std::pair<int64_t, std::vector<int64_t>> row_parts(const SideLayout& layout, int64_t row);
-
-// The row that carries the given tree and multiplicity indices.
-int64_t row_index(const SideLayout& layout, int64_t tree, const std::vector<int64_t>& mults);
-
-// The component array of a tensor whose legs all point out of it: the sum of its block entries times
-// the tree tensors. This is the only place a Clebsch-Gordan tensor is needed, and it is what the
-// checks compare against.
-
-// Bind the engine's tree and layout entry points for a check to compare against the legacy route.
-void bind_engine(py::module_& m);
-
-}  // namespace sym::engine
-
-#include <vector>
-
-
-namespace sym::engine {
-
-// Move the legs of a tensor into a new arrangement: the first ``keep`` legs of ``order`` become the
-// codomain, the rest the domain, and ``order`` names the legs of the tensor counting from one, its
-// codomain legs first. A leg that changes side changes its direction and its tree carries the dual.
-//
-// A leg move recouples the trees of a block, so an entry of the source block is spread over the
-// destination blocks of the charges the new root couples to; the result is therefore a fresh tensor
-// whose blocks are accumulated from every source entry.
-//
-// Args:
-//   tensor: the tensor to move, its legs numbered codomain first.
-//   keep: how many of the first legs of ``order`` stay on the codomain.
-//   order: a permutation of the leg numbers of ``tensor``.
-//   device: where the category symbols are read from.
-// Returns:
-//   The tensor with its legs in the requested arrangement.
-TensorMap permute_tensor(const TensorMap& tensor, int64_t keep, const std::vector<int64_t>& order,
-                         const c10::Device& device);
-
-// The same map written over any arrangement of its legs: each leg may cross to the other side, so
-// `keep` names how many of them end up in the codomain and `order` lists the legs in their wanted
-// order. The blocks are rebuilt in the tree basis of the new sides.
-// Args:
-//   tensor: a tensor map.
-//   keep: the number of legs the codomain carries afterwards.
-//   order: the legs in their wanted order, as one-based positions in ``tensor``.
-//   device: where the category symbols are read from.
-// Returns:
-//   The same map over rearranged legs.
-// Raises:
-//   std::invalid_argument: if `keep` or `order` does not describe an arrangement of the legs.
-TensorMap arrange_tensor(const TensorMap& tensor, int64_t keep, const std::vector<int64_t>& order,
-                         const c10::Device& device);
-
-// Contract two tensors whose middle legs meet: every codomain leg of ``right`` is glued to a domain
-// leg of ``left``, so ``left`` carries the free codomain legs and ``right`` the free domain legs.
-// The tree bases are orthonormal, so the contraction of one charge is the matrix product of the two
-// blocks and needs no further weight.
-//
-// Args:
-//   left: the tensor whose codomain legs survive on the left of the result.
-//   right: the tensor whose domain legs survive on the right of the result, with as many codomain
-//     legs as ``left`` has domain legs.
-// Returns:
-//   The contracted tensor, one block per charge the two operands share.
-TensorMap contract(const TensorMap& left, int64_t left_glue, const TensorMap& right,
-                   int64_t right_glue, const c10::Device& device);
-
-// The two directions between a tensor and the dictionary Python hands it around as: its legs per
-// side, each a list of (sector, multiplicity) summands plus the direction the leg points, and one
-// block per charge.
-TensorMap tensor_of(const std::shared_ptr<FusionCategory>& group, const py::dict& data);
-py::dict tensor_as(const TensorMap& tensor);
-
-// The device a Python argument names, defaulting to the project device.
-c10::Device device_of(const py::object& value);
-
-// Bind the moves above for a check to compare them with the legacy route.
-void bind_contract(py::module_& m);
-
-}  // namespace sym::engine
-
-#ifndef MPSDMRG_ENGINE_ALGEBRA_H
-#define MPSDMRG_ENGINE_ALGEBRA_H
-/**
- * The pointwise and trace constructions of a block-sparse tensor of the engine.
- *
- * ``adjoint`` turns a tensor around into its bra, and ``norm`` and ``inner`` reduce a tensor to the
- * scalar its diagram evaluates to. Every block entry is a coefficient in the orthonormal tree basis,
- * so these sums need no further weight.
- */
-
-namespace sym::engine {
-
-/**
- * The bra: every block conjugated and transposed, the two sides of the space exchanged.
- * Args:
- *   tensor: the tensor to turn around.
- * Returns:
- *   The tensor with the domain as its codomain and the codomain as its domain.
- */
-TensorMap adjoint(const TensorMap& tensor);
-
-/**
- * The Frobenius norm of a tensor, summed over every coefficient the tree basis carries.
- * Args:
- *   tensor: the tensor to measure.
- * Returns:
- *   The square root of the sum of the squared moduli of its components.
- */
-double norm(const TensorMap& tensor);
-
-/**
- * The inner product of two tensors over the same space, the second one conjugated.
- * Args:
- *   left: the tensor whose coefficients are not conjugated.
- *   right: the tensor that is conjugated.
- * Returns:
- *   The sum of ``left * conj(right)`` over every component of the space.
- * Raises:
- *   std::invalid_argument: if the two tensors do not cover the same space.
- */
-std::complex<double> inner(const TensorMap& left, const TensorMap& right);
-
-// Closes the legs pairwise and returns the scalar they leave: a map is traced over its own
-// codomain and domain legs, and a diagram whose legs all point in is closed over the two bond legs
-// of every tree, keeping the entries whose indices agree.
-std::complex<double> trace(const TensorMap& tensor);
-
-/// Expose the algebra of the engine to Python.
-void bind_algebra(py::module_& m);
-
-}  // namespace sym::engine
-
-#endif
-
-#include <optional>
-
-
-namespace sym::engine {
-
-// A categorical tensor: a map between graded spaces, stored as one matrix per coupled charge over
-// the canonical tree basis of that charge.
-class Tensor {
- public:
-  explicit Tensor(TensorMap map) : map_(std::move(map)) {}
-
-  const TensorMap& map() const;
-  TensorMap& map();
-
-  // Build every block the legs allow: a tensor with a domain sums over the coupled charges, one
-  // that is only a ket carries the single charge it is labelled with. kind: 0 zero, 1 one, 2 random.
-  static Tensor filled(const std::vector<Leg>& codomain, const std::vector<Leg>& domain,
-                       const Sector& qtotal, int kind, at::ScalarType dtype,
-                       const c10::Device& device);
-
-  // A dense array with graded legs of dimension one per summand, which is the only case where the
-  // component array and the blocks are the same data. A symmetry-adapted leg needs a projection and
-  // is left to the checks.
-  static Tensor from_dense(const at::Tensor& data, const std::vector<Leg>& legs,
-                           std::optional<Sector> qtotal);
-
-  std::shared_ptr<FusionCategory> cat() const;
-  std::vector<Leg> legs() const;
-  Sector qtotal() const;
-  std::vector<at::Tensor> blocks() const;
-  std::vector<Sector> charges() const;
-  std::vector<int64_t> shape() const;
-  at::ScalarType dtype() const;
-  c10::Device device() const;
-
-  // The row and column one entry occupies in the component array of a block: `blocks` names, per
-  // leg, the block that leg carries and `members` the member inside it, and the block is the one
-  // labelled by `charge`. Throws std::invalid_argument when no tree spans those blocks or the
-  // charge is no coupling of the side.
-  std::pair<int64_t, int64_t> slot(const Sector& charge, const std::vector<int64_t>& blocks,
-                                   const std::vector<int64_t>& members) const;
-
-  std::complex<double> item() const;
-  Tensor clone() const;
-  Tensor detach() const;
-  // The bra: every block conjugated and transposed and the two sides of the space exchanged, so the
-  // dual of a ket is not merely its complex conjugate.
-  Tensor conj() const;
-  Tensor to(const py::kwargs& options) const;
-
-  // Fuse the given groups of legs into one leg each; the groups are lists of leg indices.
-  Tensor combine_legs(const std::vector<std::vector<int64_t>>& groups) const;
-
-  // Multiply every block row by a value, one per copy of the single codomain leg: the row that
-  // names a copy takes the value of that copy, so the leg keeps the space it carries and no leg
-  // has to move.  This is what the singular values of a split do to the second factor.
-  // Args:
-  //   values: one value per copy of the codomain leg, in the order that leg lists them.
-  // Returns:
-  //   The tensor with that leg scaled.
-  // Raises:
-  //   std::invalid_argument: if the tensor does not have exactly one codomain leg, or `values`
-  //     does not hold one entry per copy of it.
-  Tensor absorb(const at::Tensor& values) const;
-
-  // Sum of every block entry times its tree tensor: the component array of a tensor whose legs all
-  // point out of it. This needs the Clebsch-Gordan tensor and exists for the checks only.
-
-  Tensor& operator+=(const Tensor& other);
-  Tensor& operator-=(const Tensor& other);
-  Tensor& operator*=(const std::complex<double>& scalar);
-  Tensor& operator/=(const std::complex<double>& scalar);
-  Tensor operator-() const;
-
- private:
-  TensorMap map_;
-};
-
-// Contract the operands in the order the labels give, into the legs the output names. Every label
-// of every operand appears either once in the output or twice among the operands.
-Tensor einsum(const std::string& spec, const std::vector<Tensor>& operands);
-
-void bind_tensor(py::module_& m);
-
-}  // namespace sym::engine
+} // namespace sym
