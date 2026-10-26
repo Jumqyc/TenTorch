@@ -25,11 +25,22 @@ namespace sym
   void Group::clear_cache() const
   {
     cg_cache_.clear();
+    f_cache_.clear();
+    r_cache_.clear();
     FusionCategory::clear_cache();
   }
 
   at::Tensor Group::F_symbol(const Sector &a, const Sector &b, const Sector &c,
                              const Sector &d) const
+  {
+    const std::tuple<Sector, Sector, Sector, Sector> key{a, b, c, d};
+    const auto held = f_cache_.find(key);
+    if (held != f_cache_.end()) return held->second;
+    return f_cache_.emplace(key, compute_F_symbol(a, b, c, d)).first->second;
+  }
+
+  at::Tensor Group::compute_F_symbol(const Sector &a, const Sector &b, const Sector &c,
+                                     const Sector &d) const
   {
     // The normalisation the matrix is written in: every vertex is an isometry onto its coupled
     // sector, $\|C^{c}_{ab}\|^{2} = d_c$ for each copy, so a tree over legs with root $r$ satisfies
@@ -70,6 +81,14 @@ namespace sym
   }
 
   at::Tensor Group::R_symbol(const Sector &b, const Sector &c) const
+  {
+    const std::pair<Sector, Sector> key{b, c};
+    const auto held = r_cache_.find(key);
+    if (held != r_cache_.end()) return held->second;
+    return r_cache_.emplace(key, compute_R_symbol(b, c)).first->second;
+  }
+
+  at::Tensor Group::compute_R_symbol(const Sector &b, const Sector &c) const
   {
     // Under the same normalisation $R_{bc}$ is the straight vertex written in the exchanged basis,
     //   \text{straight}_{r} = \sum_{c} R_{bc}[r, c] \, \text{swapped}_{c},

@@ -116,8 +116,8 @@ namespace sym
           throw std::invalid_argument("the roots " + render(key.codomain) + " and " +
                                       render(key.domain) + " of a trace close to " + render(qtotal) +
                                       " in more than one way, which a trace does not recouple yet");
-        const SideLayout rows = layout_of(*cat, tensor.codomain(), key.codomain);
-        const SideLayout columns = layout_of(*cat, tensor.domain(), key.domain);
+        const SideLayout &rows = tensor.rows_of(key.codomain);
+        const SideLayout &columns = tensor.columns_of(key.domain);
         for (size_t row_at = 0; row_at < rows.trees.size(); ++row_at)
         {
           const FusionTree &above_tree = rows.trees.at(row_at);

@@ -9,6 +9,7 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sym::su3 {
@@ -193,6 +194,96 @@ const std::vector<std::pair<std::array<int64_t, 3>, int64_t>>& permutations() {
   return table;
 }
 
+// The integer weight lattice: the simple roots and the Weyl vector.  The Dynkin labels (p, q)
+// have highest weight $(2p + q, -p + q, -p - 2q)$, and the Weyl group permutes the three
+// coordinates, so every weight of (p, q) is $h - i \alpha_1 - j \alpha_2$ with $i, j \ge 0$.
+constexpr std::array<int64_t, 3> kAlpha1{3, -3, 0};
+constexpr std::array<int64_t, 3> kAlpha2{0, 3, -3};
+constexpr std::array<int64_t, 3> kWeylVector{3, 0, -3};
+
+std::array<int64_t, 3> highest_weight(int64_t p, int64_t q) {
+  return {2 * p + q, -p + q, -p - 2 * q};
+}
+
+std::array<int64_t, 3> permute(const std::array<int64_t, 3>& vector,
+                               const std::array<int64_t, 3>& permutation) {
+  return {vector[permutation[0]], vector[permutation[1]], vector[permutation[2]]};
+}
+
+int64_t dot(const std::array<int64_t, 3>& left, const std::array<int64_t, 3>& right) {
+  return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
+}
+
+// The number of ways to write $x \alpha_1 + y \alpha_2$ as a non-negative sum of positive roots,
+// which is $\min(x, y) + 1$ on the positive root cone and zero outside it.
+int64_t partition_count(const std::array<int64_t, 3>& weight) {
+  if (weight[0] % 3 != 0 || weight[2] % 3 != 0) return 0;
+  const int64_t x = weight[0] / 3;
+  const int64_t y = -weight[2] / 3;
+  if (x < 0 || y < 0) return 0;
+  return (x < y ? x : y) + 1;
+}
+
+// Kostant's formula: $m(\mu) = \sum_{w \in W} \epsilon(w) P(w(\lambda + \rho) - \rho - \mu)$.
+int64_t weight_multiplicity(const std::array<int64_t, 3>& highest,
+                            const std::array<int64_t, 3>& weight) {
+  const std::array<int64_t, 3> shifted{
+      highest[0] + kWeylVector[0], highest[1] + kWeylVector[1], highest[2] + kWeylVector[2]};
+  int64_t multiplicity = 0;
+  for (const auto& [permutation, parity] : permutations()) {
+    const std::array<int64_t, 3> image = permute(shifted, permutation);
+    const std::array<int64_t, 3> argument{
+        image[0] - kWeylVector[0] - weight[0], image[1] - kWeylVector[1] - weight[1],
+        image[2] - kWeylVector[2] - weight[2]};
+    multiplicity += (parity ? -1 : 1) * partition_count(argument);
+  }
+  return multiplicity;
+}
+
+struct WeightTerm {
+  std::array<int64_t, 3> key;
+  int64_t multiplicity;
+};
+
+// The weights of a sector as (key, multiplicity) pairs: the lattice points of the Weyl polytope
+// $h - Q_+$ that are also inside $\operatorname{conv}(W h)$, counted by Kostant's formula.
+std::map<Sector, std::vector<WeightTerm>>& weight_terms_cache() {
+  static std::map<Sector, std::vector<WeightTerm>> cache;
+  return cache;
+}
+
+const std::vector<WeightTerm>& weight_terms(const Sector& sector) {
+  std::map<Sector, std::vector<WeightTerm>>& cache = weight_terms_cache();
+  const auto found = cache.find(sector);
+  if (found != cache.end()) return found->second;
+  const int64_t p = sector.at(0);
+  const int64_t q = sector.at(1);
+  const std::array<int64_t, 3> highest = highest_weight(p, q);
+  std::vector<std::array<int64_t, 3>> orbit;
+  for (const auto& entry : permutations()) orbit.push_back(permute(highest, entry.first));
+  std::sort(orbit.begin(), orbit.end());
+  orbit.erase(std::unique(orbit.begin(), orbit.end()), orbit.end());
+  const int64_t norm = dot(highest, highest);
+  const int64_t span = p + q;
+  std::vector<WeightTerm> terms;
+  for (int64_t i = 0; i <= span; ++i) {
+    for (int64_t j = 0; j <= span; ++j) {
+      // h - i alpha_1 - j alpha_2
+      const std::array<int64_t, 3> weight{
+          highest[0] - i * kAlpha1[0] - j * kAlpha2[0],
+          highest[1] - i * kAlpha1[1] - j * kAlpha2[1],
+          highest[2] - i * kAlpha1[2] - j * kAlpha2[2]};
+      const bool inside = std::all_of(orbit.begin(), orbit.end(), [&](const auto& vertex) {
+        return dot(vertex, weight) <= norm;
+      });
+      if (!inside) continue;
+      const int64_t multiplicity = weight_multiplicity(highest, weight);
+      if (multiplicity > 0) terms.push_back({weight, multiplicity});
+    }
+  }
+  return cache.emplace(sector, std::move(terms)).first->second;
+}
+
 }  // namespace
 
 int64_t dimension(const Sector& sector) {
@@ -219,6 +310,57 @@ const std::vector<std::array<int64_t, 3>>& weight_keys(const Sector& sector) {
 }
 
 std::map<Sector, int64_t> fusion(const Sector& first, const Sector& second) {
+  const std::vector<WeightTerm>& left = weight_terms(first);
+  const std::vector<WeightTerm>& right = weight_terms(second);
+  // The multiplicity of a weight of the product is a sum over the smaller weight list, with the
+  // other one as a lookup table.
+  const bool left_is_smaller = left.size() <= right.size();
+  const std::vector<WeightTerm>& scan = left_is_smaller ? left : right;
+  const std::vector<WeightTerm>& table = left_is_smaller ? right : left;
+  std::map<std::array<int64_t, 3>, int64_t> index;
+  for (const auto& term : table) index.emplace(term.key, term.multiplicity);
+  const auto product_multiplicity = [&](const std::array<int64_t, 3>& total) {
+    int64_t multiplicity = 0;
+    for (const auto& term : scan) {
+      const std::array<int64_t, 3> remainder{
+          total[0] - term.key[0], total[1] - term.key[1], total[2] - term.key[2]};
+      const auto hit = index.find(remainder);
+      if (hit != index.end()) multiplicity += term.multiplicity * hit->second;
+    }
+    return multiplicity;
+  };
+  const std::array<int64_t, 3> first_highest = highest_weight(first.at(0), first.at(1));
+  const std::array<int64_t, 3> second_highest = highest_weight(second.at(0), second.at(1));
+  const std::array<int64_t, 3> top{first_highest[0] + second_highest[0],
+                                   first_highest[1] + second_highest[1],
+                                   first_highest[2] + second_highest[2]};
+  // Every weight of the product is top - i alpha_1 - j alpha_2, and the largest i and j are the
+  // sums of the two spans.
+  const int64_t span = first.at(0) + first.at(1) + second.at(0) + second.at(1);
+  std::map<Sector, int64_t> found;
+  for (int64_t i = 0; i <= span; ++i) {
+    for (int64_t j = 0; j <= span; ++j) {
+      const std::array<int64_t, 3> key{top[0] - i * kAlpha1[0] - j * kAlpha2[0],
+                                       top[1] - i * kAlpha1[1] - j * kAlpha2[1],
+                                       top[2] - i * kAlpha1[2] - j * kAlpha2[2]};
+      if (key[0] < key[1] || key[1] < key[2]) continue;
+      // Racah-Speiser: $N^c_{ab} = \sum_{w \in W} \epsilon(w) m_{a \otimes b}(c + \rho - w\rho)$.
+      int64_t multiplicity = 0;
+      for (const auto& [permutation, parity] : permutations()) {
+        const std::array<int64_t, 3> shifted{
+            key[0] + kWeylVector[0] - kWeylVector[permutation[0]],
+            key[1] + kWeylVector[1] - kWeylVector[permutation[1]],
+            key[2] + kWeylVector[2] - kWeylVector[permutation[2]]};
+        multiplicity += (parity ? -1 : 1) * product_multiplicity(shifted);
+      }
+      if (multiplicity != 0)
+        found[{(key[0] - key[1]) / 3, (key[1] - key[2]) / 3}] = multiplicity;
+    }
+  }
+  return found;
+}
+
+std::map<Sector, int64_t> fusion_from_weights(const Sector& first, const Sector& second) {
   std::map<std::array<int64_t, 3>, int64_t> product;
   for (const auto& left : weight_keys(first)) {
     for (const auto& right : weight_keys(second)) {
@@ -338,6 +480,7 @@ at::Tensor metric(const Sector& sector, const c10::Device& device) {
 void clear_caches() {
   irrep_cache().clear();
   weight_keys_cache().clear();
+  weight_terms_cache().clear();
 }
 
 }  // namespace sym::su3

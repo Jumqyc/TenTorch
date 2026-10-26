@@ -28,6 +28,10 @@ const std::vector<std::array<int64_t, 3>>& weight_keys(const Sector& sector);
 // The Littlewood-Richardson outcomes of first (x) second with their multiplicities.
 std::map<Sector, int64_t> fusion(const Sector& first, const Sector& second);
 
+// The same fusion from the weight multiplicities of the dense irreps: the reference the
+// combinatorial `fusion` is checked against, not the path the engine uses.
+std::map<Sector, int64_t> fusion_from_weights(const Sector& first, const Sector& second);
+
 // The invariant coupling of first (x) second -> third, in the shape (d1, d2, d3) with the
 // third factor in its conjugate basis; an empty tensor when the triple does not fuse.
 at::Tensor clebsch_copies(const Sector& first, const Sector& second, const Sector& third,

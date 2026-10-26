@@ -56,7 +56,9 @@ namespace sym
      * @param d The outer sector both trees fuse to.
      * @return The matrix `FusionCategory::F_symbol` describes, with entry $\langle ((a \otimes b)
      * \otimes c) \to d \mid (a \otimes (b \otimes c)) \to d \rangle / q_{\dim}(d)$; empty when $d$
-     * is not an outcome of $a \otimes b \otimes c$.
+     * is not an outcome of $a \otimes b \otimes c$.  The matrix of one sector quadruple is built
+     * once per object and then held, because a reordering asks for the same associator per tree
+     * pair of every block.
      */
     at::Tensor F_symbol(const Sector &a, const Sector &b, const Sector &c,
                         const Sector &d) const override;
@@ -67,13 +69,32 @@ namespace sym
      * @param c The right sector before the exchange.
      * @return A square matrix, one block per outcome $e$ of `outcomes(b, c)` with $N^e_{bc}$ rows
      * and $N^e_{cb}$ columns, entry $\langle (b \otimes c) \to e \mid (c \otimes b) \to e \rangle /
-     * q_{\dim}(e)$.
+     * q_{\dim}(e)$.  The matrix of one sector pair is built once per object and then held.
      * @raises RuntimeError If $b$ and $c$ fuse to some $e$ with $N^e_{bc} \neq N^e_{cb}$, which no
      * braiding can relate.
      */
     at::Tensor R_symbol(const Sector &b, const Sector &c) const override;
 
    protected:
+    /**
+     * @brief The associator of one sector quadruple, without the cache.
+     * @param a The first sector.
+     * @param b The second sector.
+     * @param c The third sector.
+     * @param d The outer sector.
+     * @return The matrix of `F_symbol`.
+     */
+    at::Tensor compute_F_symbol(const Sector &a, const Sector &b, const Sector &c,
+                                const Sector &d) const;
+
+    /**
+     * @brief The braiding of one sector pair, without the cache.
+     * @param b The left sector before the exchange.
+     * @param c The right sector before the exchange.
+     * @return The matrix of `R_symbol`.
+     */
+    at::Tensor compute_R_symbol(const Sector &b, const Sector &c) const;
+
     /**
      * @brief Compute the Clebsch-Gordan tensor $C^{c}_{ab}$ of one copy.
      * @param a The sector of the first leg.
@@ -90,6 +111,9 @@ namespace sym
    private:
     // One vertex per (a, b, c, copy); the device is the object's, so it is not part of the key.
     mutable std::map<std::tuple<Sector, Sector, Sector, int64_t>, at::Tensor> cg_cache_;
+    // One associator per sector quadruple and one braiding per sector pair, the same way.
+    mutable std::map<std::tuple<Sector, Sector, Sector, Sector>, at::Tensor> f_cache_;
+    mutable std::map<std::pair<Sector, Sector>, at::Tensor> r_cache_;
   };
 
 } // namespace sym
