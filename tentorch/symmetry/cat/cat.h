@@ -373,11 +373,12 @@ namespace sym
     virtual c10::ScalarType dtype() const = 0;
 
     /**
-     * @brief The device the symbols and the cached tables of the category live on.
-     * @return The device `F_symbol` and `R_symbol` allocate on.
-     * @details A symbol is the same mathematical object on any device, so the device names only
-     * where the tables are materialised; it is object state here because the tables are cached.
-     * The category takes it in its constructor and every concrete category inherits it.
+     * @brief The device the cached tables of the category live on.
+     * @return The device the fusion tables and the mutable caches allocate on.
+     * @details The symbols (`F_symbol`, `R_symbol`, `clebsch_gordan`) are built and held on the
+     * host, because the recoupling plans read them entry by entry; the device names only where the
+     * tables that a contraction touches are materialised.  It is object state here because those
+     * tables are cached, and every concrete category inherits it from its constructor.
      */
     virtual c10::Device device() const;
 

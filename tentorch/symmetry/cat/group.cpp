@@ -36,9 +36,9 @@ namespace sym
     const std::tuple<Sector, Sector, Sector, Sector> key{a, b, c, d};
     const auto held = f_cache_.find(key);
     if (held != f_cache_.end()) return held->second;
-    // The recoupling plans read the symbols coefficient by coefficient on the host, so each symbol
-    // is copied off the device once, when it is built, and not at every use.
-    return f_cache_.emplace(key, compute_F_symbol(a, b, c, d).to(at::kCPU).contiguous()).first->second;
+    // The recoupling plans read the symbols coefficient by coefficient on the host, and the symbol
+    // is built there, so no device copy is involved.
+    return f_cache_.emplace(key, compute_F_symbol(a, b, c, d)).first->second;
   }
 
   at::Tensor Group::compute_F_symbol(const Sector &a, const Sector &b, const Sector &c,
@@ -74,7 +74,7 @@ namespace sym
     const int64_t cols = static_cast<int64_t>(right.size());
     if (rows == 0 || cols == 0)
     {
-      return at::zeros({rows, cols}, at::TensorOptions().dtype(dtype()).device(device()));
+      return at::zeros({rows, cols}, at::TensorOptions().dtype(dtype()));
     }
     // Each tree is an isometry into d, so the overlap carries q_dim(d) once.
     const at::Tensor overlap = at::matmul(at::stack(left, 0).flatten(1),
@@ -87,7 +87,7 @@ namespace sym
     const std::pair<Sector, Sector> key{b, c};
     const auto held = r_cache_.find(key);
     if (held != r_cache_.end()) return held->second;
-    return r_cache_.emplace(key, compute_R_symbol(b, c).to(at::kCPU).contiguous()).first->second;
+    return r_cache_.emplace(key, compute_R_symbol(b, c)).first->second;
   }
 
   at::Tensor Group::compute_R_symbol(const Sector &b, const Sector &c) const
@@ -98,7 +98,7 @@ namespace sym
     // straight vertex therefore carries $d_e$ once.
     const std::vector<RIndex> rows = r_rows(b, c);
     const int64_t size = static_cast<int64_t>(rows.size());
-    at::Tensor value = at::zeros({size, size}, at::TensorOptions().dtype(dtype()).device(device()));
+    at::Tensor value = at::zeros({size, size}, at::TensorOptions().dtype(dtype()));
     for (int64_t start = 0; start < size;)
     {
       // One block per outcome, so an outcome owns a stretch of consecutive rows.

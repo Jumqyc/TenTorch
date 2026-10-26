@@ -514,7 +514,7 @@ at::Tensor SU3Symmetry::compute_clebsch_gordan(const Sector& a, const Sector& b,
   // fused sector converts that axis into the basis of the leg it is contracted with.
   return at::einsum(
       "pq,abq->abp",
-      {su3::metric(c, device()), su3::clebsch_copies(a, b, c, device()).select(0, copy)});
+      {su3::metric(c, at::kCPU), su3::clebsch_copies(a, b, c, at::kCPU).select(0, copy)});
 }
 
 const std::shared_ptr<Group>& su3_symmetry() {

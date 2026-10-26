@@ -40,7 +40,8 @@ namespace sym
      * @details It is the embedding of Eq. (eq:cg-orth) of the notes: each copy is a unit vector of
      * the component space, so the whole tensor has squared norm $q_{\dim}(c)$.  The tensor of one
      * sector triple is computed once per object and then held, because the associator and the
-     * braiding ask for the same vertices many times.
+     * braiding ask for the same vertices many times.  It is built and kept on the host, like the
+     * symbols derived from it.
      */
     at::Tensor clebsch_gordan(const Sector &a, const Sector &b, const Sector &c,
                               int64_t copy) const;
@@ -109,7 +110,7 @@ namespace sym
                                               int64_t copy) const = 0;
 
    private:
-    // One vertex per (a, b, c, copy); the device is the object's, so it is not part of the key.
+    // One vertex per (a, b, c, copy); every symbol is a host tensor, so no device is in the key.
     mutable std::map<std::tuple<Sector, Sector, Sector, int64_t>, at::Tensor> cg_cache_;
     // One associator per sector quadruple and one braiding per sector pair, the same way.
     mutable std::map<std::tuple<Sector, Sector, Sector, Sector>, at::Tensor> f_cache_;

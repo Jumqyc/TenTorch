@@ -40,7 +40,7 @@ at::Tensor SU2Symmetry::compute_clebsch_gordan(const Sector& a, const Sector& b,
                                        int64_t copy) const {
   TORCH_CHECK(copy == 0, "The coupling of ", half_label(a.at(0)), " and ", half_label(b.at(0)),
               " to ", half_label(c.at(0)), " is unique, so copy ", copy, " does not exist.");
-  return su2::fusion_tensor(a.at(0), b.at(0), c.at(0), device());
+  return su2::fusion_tensor(a.at(0), b.at(0), c.at(0), at::kCPU);
 }
 
 const std::shared_ptr<Group>& su2_symmetry() {

@@ -50,7 +50,7 @@ at::Tensor AbelianGroup::compute_clebsch_gordan(const Sector& a, const Sector& b
                                         int64_t copy) const {
   TORCH_CHECK(copy == 0, "An abelian fusion couples at most once, not ", copy + 1, " times.");
   TORCH_CHECK(combine(a, b) == c, "The sectors do not fuse to the requested one.");
-  return at::ones({1, 1, 1}, at::TensorOptions().dtype(dtype()).device(device()));
+  return at::ones({1, 1, 1}, at::TensorOptions().dtype(dtype()));
 }
 
 NoSymmetry::NoSymmetry(c10::Device device) : AbelianGroup("NoSymmetry", device) {}
