@@ -1,470 +1,271 @@
-from __future__ import annotations
-
-from math import sqrt
-from typing import Sequence
+import math
+from typing import Optional, Sequence
 
 import torch
 
-from tentorch.config import COMPLEX, CUDA
-from tentorch import linalg
-from tentorch.networks.mpo import MPO
-from tentorch.symmetry import FusionCategory
-from tentorch.symmetry.cat import has_content, no_symmetry
-from tentorch.tensors import Tensor, bond_leg, cached_einsum, capped_leg, fuse_legs, multiplet_leg
-from tentorch.tensors import phys_leg
+from tentorch._ext import (FusionCategory, FusionTree, Leg, Sector, Tensor, contract,
+                           einsum, inner, reachable_charges)
+from tentorch.linalg.graded import qr, rq
+from tentorch.tensors.tree import entered
 
 
-def _bond_multiplets(tensors: list[Tensor]) -> list[int]:
+def _leg(cat: FusionCategory, sectors: Sequence[Sector], multiplets: int = 1) -> Leg:
     '''
-    The number of multiplets on every bond of a chain of tensors.
-
+    A bond over the named sectors, with the same number of multiplets in each of them.
     Args:
-        tensors (list[Tensor]): one tensor per site, legs (left bond, physical, right bond).
+      cat: the category of the leg.
+      sectors: the sectors to carry, in order.
+      multiplets: the multiplets of every sector.
     Returns:
-        list[int]: one count per bond, the left edge first.  This is the bond dimension of the
-            QSpace convention; the dense length of the same bond counts the states instead,
-            every multiplet holding ``sector_dim`` of them.
+      The leg.
     '''
-    return ([tensors[0].legs[0].multiplets]
-            + [tensor.legs[2].multiplets for tensor in tensors])
+    return Leg(cat, list(sectors), [multiplets] * len(sectors))
+
+
+def _identity(cat: FusionCategory, bond: Leg, middle: Optional[Leg] = None) -> Tensor:
+    '''
+    The tensor that closes a chain at one end: the identity on the bond it meets.
+    Args:
+      cat: the category of the legs.
+      bond: the bond of the state, on both the codomain and the domain.
+      middle: the virtual bond of the operator, on the codomain; omit it for a plain state.
+    Returns:
+      The tensor.
+    '''
+    def entry(tree_out: FusionTree, copy_out: tuple[int, ...], tree_in: FusionTree,
+              copy_in: tuple[int, ...]) -> float:
+        same = tree_out.sectors[0] == tree_in.sectors[0] and copy_out[0] == copy_in[0]
+        return 1.0 if same and (middle is None or tree_out.sectors[1] == cat.trivial()) else 0.0
+
+    codomain = [bond] if middle is None else [bond, middle]
+    return entered(cat, codomain, [bond], entry)
 
 
 class MPS:
     '''
-    A class representing a Matrix Product State (MPS) in quantum physics and tensor networks.
+    A matrix product state over a chain of sites, in the mixed canonical form of `center`: every
+    site left of the centre is left isometric, every site right of it right isometric, so the norm
+    of the state sits in the centre tensor alone.
+
+    Args:
+      tensors: one tensor per site; site `i` has the codomain `(bond i, physical)` and the domain
+        `(bond i + 1)`, and every site shares the physical leg.
+      physical: the physical leg of one site.
+      center: the site that carries the norm, the first one when it is omitted.
+    Raises:
+      ValueError: when the chain is empty or a site has another layout.
+      IndexError: when the centre falls outside the chain.
     '''
-    def __init__(self,
-                 L: int,
-                 phys_dim:int,
-                 bond_dims:list[int]|None = None,
-                 init_state:list[Tensor]|None = None,
-                 dtype = COMPLEX,
-                 device = CUDA,
-                 *,
-                 cat: FusionCategory = no_symmetry,
-                 site_sector: tuple[int, ...] | None = None,
-                 max_bond_dim: int | None = None):
+
+    def __init__(self, tensors: Sequence[Tensor], physical: Leg, center: int = 0) -> None:
+        if not tensors:
+            raise ValueError('A state needs at least one site.')
+        for at, tensor in enumerate(tensors):
+            if tensor.nlegs() != 3:
+                raise ValueError(f'site {at} needs three legs, not {tensor.nlegs()}')
+        if not 0 <= center < len(tensors):
+            raise IndexError(f'the centre {center} is outside the chain of {len(tensors)} sites')
+        self.tensors = list(tensors)
+        self.physical = physical
+        self.center = center
+        self.canonicalize()
+
+    @property
+    def L(self) -> int:
+        '''The number of sites.'''
+        return len(self.tensors)
+
+    @property
+    def cat(self) -> FusionCategory:
+        '''The category of the state.'''
+        return self.tensors[0].cat
+
+    @property
+    def dtype(self) -> torch.dtype:
+        '''The scalar type of the state.'''
+        return self.tensors[0].dtype
+
+    @property
+    def device(self) -> torch.device:
+        '''The device of the state.'''
+        return self.tensors[0].device
+
+    @property
+    def bond_dims(self) -> list[int]:
+        '''The multiplets of every bond, one entry per bond between two sites.'''
+        return [self.tensors[at].domain[0].multiplets() for at in range(self.L - 1)]
+
+    @classmethod
+    def product(cls, cat: FusionCategory, physical: Leg, patterns: Sequence[Sector],
+                sector: Optional[Sector] = None) -> 'MPS':
         '''
+        The product state of one physical sector per site, with bonds of one multiplet.
         Args:
-            L (int): Length of the MPS (number of sites).
-            phys_dim (int): Physical dimension of each site.
-            bond_dims (list[int] | None): List of dense bond dimensions -- the number of states on
-                each bond -- for each bond in the MPS. Including the left and right virtual bonds,
-                the length of this list should be L+1. If None, defaults to
-                [1] + [phys_dim] * (L - 1) + [1].  The ``bond_dim`` of the state counts the
-                multiplets instead.
-            init_state (list[Tensor] | None): Optional initial state for the MPS. If None, random tensors will be generated.
-            dtype: data type of the MPS tensors (default: COMPLEX).
-            device: device that stores the MPS tensors (default: CUDA).
-            cat: the symmetry category of the chain, ``no_symmetry`` by default.  A group whose
-                operator content is
-                implemented builds its own start state -- one singlet tensor per site, whose
-                bond legs carry every sector the physical legs to their left fuse to, capped
-                at ``max_bond_dim`` -- and ignores ``bond_dims`` and ``init_state``.
-            site_sector: the multiplet one site lives in, e.g. ``(1,)`` for a spin-1/2 site of
-                SU(2) or ``(1, 0)`` for the fundamental of SU(3); a group whose multiplets are
-                not told apart by their dimension needs it, an abelian group does not.
-            init_state: kept as a copy of the caller's list; the tensors themselves are
-                canonicalized in place, so the caller's tensors are left as they were only
-                when the constructor does not rebuild them.
-            max_bond_dim: largest number of multiplets of that invariant start state.
+          cat: the category of the state.
+          physical: the physical leg of one site.
+          patterns: the sector every site occupies, in order.
+          sector: the charge of the state, the trivial charge when it is None.
+        Returns:
+          The state.
         Raises:
-            ValueError: If the length of bond_dims does not match L+1, or if a
-                multiplet-carrying group is given without a bond cap.
+          ValueError: when the sectors do not couple along the chain, or the chain as a whole
+            couples to a charge other than `sector`.
         '''
-        if init_state is None and has_content(cat):
-            if max_bond_dim is None:
-                raise ValueError(f'{cat.name} builds its own start state and needs a bond cap.')
-            # one singlet tensor per site: each bond carries every sector the physical legs to
-            # its left fuse to, capped at max_bond_dim, so the state is a singlet and the sweep
-            # starts from a bond dimension it can afford
-            phys = phys_leg(cat, phys_dim, site_sector)
-            # the two ends grow towards each other: a bond holds the sectors the sites to its left
-            # fuse to as well as the sectors the sites to its right fuse to, which differ when the
-            # category is not self-dual
-            half = L // 2
-            bonds = [multiplet_leg(cat, cat.trivial_sector)]
-            for _ in range(half):
-                bonds.append(capped_leg(fuse_legs(bonds[-1], phys), max_bond_dim))
-            right = [multiplet_leg(cat, cat.trivial_sector)]
-            dual = multiplet_leg(cat, cat.dual_sector(phys.sectors[0]))
-            for _ in range(L - half):
-                right.append(capped_leg(fuse_legs(dual, right[-1]), max_bond_dim))
-            bonds += [right[L - i] for i in range(half + 1, L)]
-            if not any(tuple(cat.trivial_sector) in cat.fusion_outcomes(sector, phys.sectors[0])
-                       for sector in bonds[-1].sectors):
-                raise ValueError(
-                    f'A bond of {bonds[-1].dim} states cannot close {L} sites of dimension '
-                    f'{phys_dim} to the trivial sector of {cat.name}.')
-            bonds.append(multiplet_leg(cat, cat.trivial_sector))
-            init_state = [Tensor.rand((bonds[i].dim, phys.dim, bonds[i + 1].dim),
-                                      legs=(bonds[i], phys, bonds[i + 1].conj()),
-                                      qtotal=cat.trivial_sector,
-                                      dtype=dtype, device=device) for i in range(L)]
-            bond_dims = [bond.dim for bond in bonds]
-        if bond_dims is None:
-            bond_dims = [1] + [phys_dim] * (L - 1) + [1]
-        self.L = L
-        self.phys_dim = phys_dim
-        if len(bond_dims) != L + 1:
-            raise ValueError(f"Bond dimension list length {len(bond_dims)} does not match the expected length of {L + 1}.")
-        self.dtype = dtype
-        self.device = device
-        self.cat = cat
-        self.center = 0  # Center site index for canonical form
+        charge = cat.trivial() if sector is None else sector
+        bonds = [_leg(cat, [charge])]
+        for pattern in patterns:
+            coupled = [outcome.sector for outcome in cat.outcomes(bonds[-1].sector(0), pattern)]
+            if not coupled:
+                raise ValueError(f'the sector {pattern} couples to nothing on {bonds[-1].sector(0)}')
+            bonds.append(_leg(cat, [coupled[0]]))
+        if bonds[-1].sector(0) != charge:
+            raise ValueError(f'the sites couple to {bonds[-1].sector(0)}, not to {charge}')
 
-        # Initialize MPS tensors (left_bond_dim, phys_dim, right_bond_dim)
-        if init_state is None:
-            phys = phys_leg(cat, phys_dim, site_sector)
-            # a bond leg of a bare dimension carries the trivial sector with that multiplicity
-            bonds = [bond_leg(cat, [(cat.trivial_sector, dim)], 1) for dim in bond_dims]
-            self.tensors = [
-                Tensor.rand(bonds[i].dim, phys.dim, bonds[i + 1].dim,
-                            legs=(bonds[i], phys, bonds[i + 1].conj()),
-                            qtotal=cat.trivial_sector,
-                            dtype=dtype, device=device) for i in range(L)]
-        else:
-            # a copy of the list, so the caller's sequence is left alone
-            self.tensors = list(init_state)
-            if any(t.shape != (bond_dims[i], phys_dim, bond_dims[i + 1]) for i, t in enumerate(init_state)):
-                raise ValueError("Initial state tensors do not match the specified bond and physical dimensions.")
+        tensors = []
+        for at in range(len(patterns)):
+            def entry(tree_out: FusionTree, copy_out: tuple[int, ...], tree_in: FusionTree,
+                      copy_in: tuple[int, ...]) -> float:
+                return 1.0 if tree_out.sectors[1] == patterns[at] else 0.0
 
-        self.bond_dim = _bond_multiplets(self.tensors)
-        self._canonical = True  # the tensors below are canonical unless an operator breaks the form
-        self.canonicalize()  # Ensure the MPS is in canonical form upon initialization
-        self.normalize()  # Normalize the MPS upon initialization
+            tensors.append(entered(cat, [bonds[at], physical], [bonds[at + 1]], entry))
+        return cls(tensors, physical)
 
-    @staticmethod
-    def _from_tensors(tensors: list[Tensor], cat: FusionCategory, dtype: torch.dtype,
-                      device: torch.device) -> MPS:
+    @classmethod
+    def random(cls, cat: FusionCategory, physical: Leg, length: int,
+               sector: Optional[Sector] = None, seed: int = 0, multiplets: int = 1) -> 'MPS':
         '''
-        Assemble an MPS from tensors as they are, without canonicalizing or normalizing them.
-
-        The caller guarantees the tensors form a chain.  An operator applied to a state lands in
-        another charge sector, whose tensors are not the canonical form of a trivial total charge,
-        so the state has to be taken as it is; its left edge carries the total charge.
-
+        The random state of a charge, over every bond charge that charge admits.
         Args:
-            tensors (list[Tensor]): one tensor per site, legs (left bond, physical, right bond).
-            cat: the symmetry the tensors carry.
-            dtype (torch.dtype): the element type of the state.
-            device (torch.device): the device of the state.
+          cat: the category of the state.
+          physical: the physical leg of one site.
+          length: the number of sites.
+          sector: the charge of the state, the trivial charge when it is None.
+          seed: the seed of the random entries.
+          multiplets: the multiplets carried by every bond charge.
         Returns:
-            MPS: the state those tensors make.
-        '''
-        state = MPS.__new__(MPS)
-        state.L = len(tensors)
-        state.phys_dim = tensors[0].shape[1]
-        state.dtype = dtype
-        state.device = device
-        state.cat = cat
-        state.center = 0
-        state.tensors = list(tensors)
-        state.bond_dim = _bond_multiplets(state.tensors)
-        state._canonical = False
-        return state
-
-    def __getitem__(self, idx):
-        return self.tensors[idx]
-    def to(self, device):
-        '''
-        Move the MPS tensors to the specified device (e.g., 'cuda' or 'cpu').
-        '''
-        self.device = device
-        for i in range(self.L):
-            self.tensors[i] = self.tensors[i].to(device)
-
-    def move_center_to(self, new_center:int):
-        '''
-        Move the center site index to a new position in the MPS.
-        Args:
-            new_center (int): The new center site index (0 <= new_center < L).
+          The state.
         Raises:
-            IndexError: If the new center index is out of bounds for the MPS length.
-            '''
-        if new_center == self.center:
-            return  # No need to move if the new center is the same as the current center
-        if new_center < 0 or new_center >= self.L:
-            raise IndexError('New center index is out of bounds for the MPS length.')
-        if new_center < self.center:
-            for i in range(self.center, new_center, -1):  # move to the left
-                self._right_canonicalize_site(i, update_center=True)
-        elif new_center > self.center:
-            for i in range(self.center, new_center):      # move to the right
-                self._left_canonicalize_site(i, update_center=True)
-
-    def expectation(self,operators)-> complex:
+          ValueError: when the charge admits no state of that length.
         '''
-        Compute the expectation value of operators on the MPS.
-        Accepts either a dict[int, operator] of single-site operators or an MPO.
+        charge = cat.trivial() if sector is None else sector
+        left = [reachable_charges(cat, [physical] * at) for at in range(length + 1)]
+        tail = [reachable_charges(cat, [physical] * (length - at)) for at in range(length + 1)]
+        bonds = [_leg(cat, [bond for bond in left[at]
+                            if any(cat.can_fuse_to(bond, reached, charge) for reached in tail[at])],
+                      multiplets)
+                 for at in range(length + 1)]
+        # the two ends of a finite chain carry one multiplet, so the state is a vector and not a map
+        bonds[0], bonds[-1] = _leg(cat, [charge]), _leg(cat, [charge])
+        if not bonds[0].nblocks() or not bonds[-1].nblocks():
+            raise ValueError(f'the charge {charge} admits no state of {length} sites')
 
-        To compute the norm, just pass {} as the operator list.
+        torch.manual_seed(seed)
+        tensors = [Tensor.random(cat, [bonds[at], physical], [bonds[at + 1]], charge)
+                   for at in range(length)]
+        return cls(tensors, physical)
+
+    def _left_move(self, at: int) -> None:
+        '''
+        Make site `at` left isometric and push its remainders into site `at + 1`.
+
+        The QR of the site splits it into an isometry and the matrix the next site absorbs; the
+        centre therefore lands on `at + 1`.
         Args:
-            operators: dict[int, Tensor | torch.Tensor | numpy.ndarray] | MPO: a dictionary of the
-                       operators to measure, or an MPO representing a full matrix product operator.
-                       A value without legs is the matrix of the operator on the physical leg of
-                       the state at that site; the dictionary is then a product of one-site
-                       operators, measured exactly on the dense state, which a state of a
-                       non-trivial group does not have.
-        Returns:
-            complex: The expectation value of the operators on the MPS.
+          at: the site to canonicalize, in `[0, L - 1)`.
         Raises:
-            ValueError: If the operator shapes do not match the physical dimension of the MPS tensors.
+          IndexError: when the site has no site to its right.
         '''
-        if isinstance(operators, MPO):
-            return self._mpo_expectation(operators)
-        if any(not isinstance(operator, Tensor) or not operator.legs for operator in operators.values()):
-            if has_content(self.cat):
-                # a bare matrix carries every magnetic component, while a symmetry-adapted tensor
-                # stores only the reduced data of its fusion trees
-                raise NotImplementedError(
-                    f'A bare matrix measures on a state of a trivial group; for {self.cat.name} '
-                    f'pass the operator as a Tensor of the group or as an MPO.')
-            matrices: dict[int, torch.Tensor] = {}
-            for site, operator in operators.items():
-                matrix = (next(iter(operator.blocks.values())) if isinstance(operator, Tensor)
-                          else torch.as_tensor(operator))
-                if matrix.shape != (self.phys_dim, self.phys_dim):
-                    raise ValueError(f"Operator shapes do not match the physical dimension {self.phys_dim}.")
-                if site < 0 or site >= self.L:
-                    raise ValueError(f"Operator indices must be in the range [0, {self.L - 1}].")
-                matrices[site] = matrix.reshape(self.phys_dim, self.phys_dim)
-            return self._dense_expectation(matrices)
-        if any(op.shape != (self.phys_dim, self.phys_dim) for op in operators.values()):
-            raise ValueError(f"Operator shapes do not match the physical dimension {self.phys_dim}.")
-        elif any(idx < 0 or idx >= self.L for idx in operators.keys()):
-            raise ValueError(f"Operator indices must be in the range [0, {self.L - 1}].")
-        return self._walk_contract(operators)
+        if at < 0 or at >= self.L - 1:
+            raise IndexError(f'index {at} has no site to its right in a chain of {self.L} sites')
+        factor, rest = qr(self.tensors[at], [0, 1])
+        self.tensors[at] = factor
+        self.tensors[at + 1] = contract(rest, self.tensors[at + 1].repartition([0]), [0],
+                                        [0]).repartition([0, 1])
+        self.center = at + 1
 
-    def norm(self)->float:
+    def _right_move(self, at: int) -> None:
         '''
-        Return the squared norm <self|self>.
-        Returns:
-            float: the squared norm of the state.
-        '''
-        # a closed diagram of a ket with its bra is a positive real, while the walk rounds every
-        # bond of it against its dual, which pays the Frobenius-Schur phase of the bond sectors
-        return abs(self._walk_contract({}))
+        Make site `at` right isometric and push its remainders into site `at - 1`.
 
-    def apply(self,
-              operator: "MPO",
-              max_bond_dim: int | None = None,
-              tol: float = 0.0) -> MPS:
-        '''
-        Return the state ``operator |self>`` as a new MPS.
-
-        Each site contracts the state tensor with the operator tensor on the physical leg, and the
-        pair of virtual legs the contraction leaves open - the state's and the operator's - is split
-        off again, so the bonds of the result carry whatever charge the operator adds.  The result
-        is not canonicalized.
-
+        The RQ of the site splits it into the matrix the previous site absorbs and an isometry; the
+        centre therefore lands on `at - 1`.
         Args:
-            operator (MPO): the operator to apply; same length and physical dimension as the state.
-            max_bond_dim (int | None): largest number of multiplets the splits keep; ``None`` keeps all.
-            tol (float): singular values at or below this are dropped.
-        Returns:
-            MPS: the state after the operator.
+          at: the site to canonicalize, in `(0, L - 1]`.
         Raises:
-            ValueError: If the operator does not act on this state.
+          IndexError: when the site has no site to its left.
         '''
-        if operator.L != self.L or operator.physical_dim != self.phys_dim:
-            raise ValueError(
-                f'An operator of {operator.L} sites of dimension {operator.physical_dim} does not '
-                f'act on a state of {self.L} sites of dimension {self.phys_dim}.')
-        tensors: list[Tensor] = []
-        carry = None
-        for site in range(self.L):
-            state, matrix = self.tensors[site], operator.tensors[site]
-            if carry is None:
-                # the state's left edge is the left bond of the chain; the operator's left edge is a
-                # trivial leg, so it is closed with its conjugate
-                edge = Tensor.ones(1, legs=(matrix.legs[0].conj(),), dtype=self.dtype,
-                                   device=self.device)
-                merged = cached_einsum('lsr,abps,a->lprb', state, matrix, edge)
-            else:
-                # carry: the new left bond, the state's previous right leg, the operator's previous
-                # right leg
-                merged = cached_einsum('mla,lsr,abps->mprb', carry, state, matrix)
-            if site == self.L - 1:
-                # the chain closes: the operator's right edge is a trivial leg, the state keeps its
-                # own right edge as the last bond
-                edge = Tensor.ones(1, legs=(merged.legs[3].conj(),), dtype=self.dtype,
-                                   device=self.device)
-                tensors.append(cached_einsum('mprb,b->mpr', merged, edge))
-                break
-            # the left group (the new bond and the physical leg) becomes this site's tensor, the
-            # right group (the two virtual legs) becomes the carry into the next site
-            tensor, singular, rest = linalg.svd(merged, (0, 1), (2, 3), max_bond=max_bond_dim,
-                                                tol=tol)
-            tensors.append(tensor)
-            carry = linalg.absorb(rest, singular)
-        return MPS._from_tensors(tensors, self.cat, self.dtype, self.device)
+        if at <= 0 or at >= self.L:
+            raise IndexError(f'index {at} has no site to its left in a chain of {self.L} sites')
+        factor, rest = rq(self.tensors[at], [0])
+        self.tensors[at] = rest.repartition([0, 1])
+        self.tensors[at - 1] = contract(self.tensors[at - 1], factor, [0], [0])
+        self.center = at - 1
 
-    def normalize(self):
+    def move_center(self, at: int) -> None:
         '''
-        Normalize the MPS by dividing each tensor by the square root of the norm.
-        '''
-        norm:float = self.norm()
-        self.tensors[self.center] /= sqrt(norm.real)
-
-    def _dense_expectation(self, operators: dict[int, torch.Tensor]) -> complex:
-        '''
-        The exact expectation of a product of one-site operators, contracted over the dense state.
-
-        A state of a trivial group has one block per tensor, which is the whole dense array; this
-        is the reference an adapted contraction has to reproduce, and it needs no multiplet
-        structure at all.
-
+        Move the centre to a site, keeping the mixed canonical form.
         Args:
-            operators: site -> matrix in shape (phys_dim, phys_dim), at most one per site.
-        Returns:
-            complex: the expectation value, exact up to the floating point error.
-        '''
-        # one block holds the whole array of a trivial group; the sites are taken on the same
-        # side so that its shape is the legs in order, whatever side the split left them on
-        tensors = [next(iter(tensor.blocks.values())).reshape(*(leg.dim for leg in tensor.legs))
-                   for tensor in self.tensors]
-        environment = torch.ones(1, 1, dtype=self.dtype, device=self.device)
-        for site in range(self.L):
-            operator = operators.get(site)
-            if operator is None:
-                environment = torch.einsum('ab,aic,bid->cd', environment, tensors[site].conj(),
-                                           tensors[site])
-            else:
-                environment = torch.einsum('ab,aic,bjd,ij->cd', environment, tensors[site].conj(),
-                                           tensors[site],
-                                           operator.to(dtype=self.dtype, device=self.device))
-        return complex(environment.sum())
-
-    def _mpo_expectation(self, mpo) -> complex:
-        '''
-        Compute <self|O|self> by walking the bra, the ket and the tensors of the MPO to the right.
-        Args:
-            mpo: the MPO to measure, of the same length and physical dimension as the state.
-        Returns:
-            complex: the expectation value, exact up to the floating point error.
-        '''
-        trivial = multiplet_leg(self.cat, self.cat.trivial_sector)
-        lenv = Tensor.ones(1, 1, 1, legs = (trivial, trivial.conj(), trivial.conj()),
-                           qtotal = self.cat.trivial_sector,
-                           dtype = self.dtype, device = self.device)
-        for i in range(self.L):
-            lenv = cached_einsum('aic,spa,cqd,ijpq->sjd', lenv, self.tensors[i].conj(),
-                                 self.tensors[i], mpo.tensors[i])
-        return complex(next(iter(lenv.blocks.values())).reshape(-1)[0].item())
-
-    def _walk_contract(self,operators:dict[int,Tensor]):
-        '''
-        Contract the MPS with the given operators into the transfer walk of every site.
-        Args:
-            operators: site -> matrix in shape (phys_dim, phys_dim), at most one per site.
-        Returns:
-            complex: <self|O|self>, exact up to the floating point error.
-        '''
-        trivial = multiplet_leg(self.cat, self.cat.trivial_sector)
-        lenv = Tensor.ones(1, 1, legs = (trivial, trivial.conj()),
-                           qtotal = self.cat.trivial_sector,
-                           dtype = self.dtype, device = self.device)
-        for i in range(self.L):
-            lenv = cached_einsum('ab,aic->bic', lenv, self.tensors[i])
-            if i in operators:
-                lenv = cached_einsum('bic,dkb,ki->cd', lenv, self.tensors[i].conj(), operators[i])
-            else:
-                lenv = cached_einsum('bic,dib->cd', lenv, self.tensors[i].conj())
-        return linalg.trace(lenv).item()
-
-    def entanglement_entropy(self,bond:int,alpha:float|None = None, svd_tol:float = 1e-14)-> float:
-        '''
-        Compute the entanglement entropy of ith and i+1th site.
-        Args:
-            bond (int): The bond index between sites i and i+1 (0 <= bond < L-1).
-            alpha (float | None): The Renyi entropy order. If None, the von Neumann entropy is computed. (default: None)
-            svd_tol (float): Tolerance for singular value truncation. (default: 1e-14)
-        '''
-        if bond < 0 or bond >= self.L - 1:
-            raise IndexError(f"Bond index {bond} is out of bounds for MPS of length {self.L}.")
-        # the Schmidt values live at the center, so the center moves to the bond and back
-        center = self.center
-        self.move_center_to(bond)
-        s = linalg.svdvals(self.tensors[bond], (0, 1), (2,))
-        s = s[s > svd_tol]
-        self.move_center_to(center)
-        if alpha is None:
-            return -torch.sum(s**2 * torch.log(s**2)).item()
-        else:
-            return 1/(1-alpha) * torch.log(torch.sum(s**(2*alpha))).item()
-
-
-    def _left_canonicalize_site(self, i, update_center=True):
-        '''
-        Canonicalize the MPS site at index i to the left canonical form using QR decomposition. Optionally update the center site index.
-                |          |           |
-        --i-1--A[i-1]--i-- A[i]-i+1- A[i+1]-i+2-
-        =>
-                |        |           |
-        -i-1--A[i-1]--i--Q---R-i+1- A[i+1]-i+2-
-        Args:
-            i (int): Index of the site to canonicalize (0 <= i < L-1).
-            update_center (bool): Whether to update the center site index after canonicalization (default: True).
+          at: the new centre, in `[0, L)`.
         Raises:
-            IndexError: If the index i is out of bounds for the MPS length.
+          IndexError: when the site falls outside the chain.
         '''
-        if i < 0 or i >= self.L-1:
-            raise IndexError(f"Index {i} is out of bounds for MPS of length {self.L}.")
-        q, r = linalg.qr(self.tensors[i], (0, 1), (2,))
-        self.bond_dim[i+1] = q.legs[2].multiplets
-        self.tensors[i] = q
-        self.tensors[i+1] = cached_einsum('ab,bcd->acd', r, self.tensors[i+1])
-        if update_center:
-            self.center = i + 1
+        if not 0 <= at < self.L:
+            raise IndexError(f'the centre {at} is outside the chain of {self.L} sites')
+        while self.center < at:
+            self._left_move(self.center)
+        while self.center > at:
+            self._right_move(self.center)
 
-    def _right_canonicalize_site(self, i, update_center=True):
+    def canonicalize(self) -> None:
         '''
-        Canonicalize the MPS site at index i to the right canonical form using RQ decomposition. Optionally update the center site index.
-                |          |           |
-        --i-1--A[i-1]--i-- A[i]-i+1- A[i+1]-i+2-
-        =>
-                |              |          |
-        -i-1--A[i-1]--i--R.T---Q.T-i+1- A[i+1]-i+2-
+        Bring the state to the mixed canonical form of the current centre.
+
+        Every site left of the centre becomes left isometric and every site right of it right
+        isometric, so the norm of the state ends up in the centre tensor alone.
+        '''
+        for at in range(self.center):
+            self._left_move(at)
+        for at in range(self.L - 1, self.center, -1):
+            self._right_move(at)
+
+    def norm(self) -> float:
+        '''The norm of the state, the Frobenius norm of the centre tensor.'''
+        return math.sqrt(self._weight())
+
+    def _weight(self) -> float:
+        '''The squared norm, read off the centre tensor of the mixed canonical form.'''
+        return sum(float((block.abs() ** 2).sum())
+                   for block in self.tensors[self.center].to_tuple()[3].values())
+
+    def normalize(self) -> None:
+        '''Scale the state to unit norm.'''
+        self.tensors[self.center] /= self.norm()
+
+    def expectation(self, operator) -> complex:
+        '''
+        The expectation value of an operator in the state.
         Args:
-            i (int): Index of the site to canonicalize (1 <= i < L).
-            update_center (bool): Whether to update the center site index after canonicalization (default: True).
-        Raises:
-            IndexError: If the index i is out of bounds for the MPS length.
+          operator: the matrix product operator over the same physical leg, whose virtual bonds
+            meet the bonds of the state.
+        Returns:
+          The value, complex in general.
         '''
-        if i <= 0 or i >= self.L:
-            raise IndexError(f"Index {i} is out of bounds for MPS of length {self.L}.")
-        r, q = linalg.rq(self.tensors[i], (0,), (1, 2))
-        self.bond_dim[i] = q.legs[0].multiplets
-        self.tensors[i] = q
-        self.tensors[i-1] = cached_einsum('lpb,br->lpr', self.tensors[i-1], r)
-        if update_center:
-            self.center = i - 1
+        left = _identity(self.cat, self.tensors[0].codomain[0], operator.tensors[0].codomain[0])
+        for at, tensor in enumerate(self.tensors):
+            left = einsum('aie,aPb,feQ,iPQj->bfj', left, tensor, tensor.conj(),
+                          operator.tensors[at]).repartition([0, 2])
+        return inner(
+            _identity(self.cat, self.tensors[-1].domain[0], operator.tensors[-1].domain[1]), left)
 
-    def canonicalize(self):
-        '''
-        Canonicalize the MPS in the specified mode.
-        '''
-        for i in range(self.center): # to center -1
-            self._left_canonicalize_site(i, update_center=True)
+    def copy(self) -> 'MPS':
+        '''A copy of the state, at the same centre.'''
+        return MPS([tensor.clone() for tensor in self.tensors], self.physical, self.center)
 
-        for i in range(self.L - 1, self.center, -1):   # i = L-1, L-2,...,self.center+1
-            self._right_canonicalize_site(i, update_center=True)
-    def copy(self):
-        '''
-        Create a deep copy of the MPS instance.
-        '''
-        return MPS(self.L,
-                      self.phys_dim,
-                      [tensor.shape[0] for tensor in self.tensors[:1]]
-                      + [tensor.shape[2] for tensor in self.tensors],
-                      [t.clone().detach() for t in self.tensors],
-                      self.dtype,
-                      self.device,
-                      cat=self.cat)
-    def __repr__(self):
-        return (f"MPS(L={self.L}, phys_dim={self.phys_dim}, bond_dim={self.bond_dim}, "
-            f"center={self.center}, group={self.cat.name})")
-    def __sizeof__(self):
-        return sum(t.numel() * t.element_size() for t in self.tensors)
+    def __len__(self) -> int:
+        '''The number of sites.'''
+        return self.L
 
+    def __repr__(self) -> str:
+        '''The shape of the state.'''
+        return (f'MPS(L={self.L}, blocks={self.physical.nblocks()}, bond_dim={self.bond_dims}, '
+                f'center={self.center})')

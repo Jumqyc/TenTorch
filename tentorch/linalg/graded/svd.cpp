@@ -93,11 +93,20 @@ namespace sym
       if (factor.kept == 0) continue;
       multiplicities[factor.domain] += factor.kept;
     }
+    // The offsets inside a block start over with every sector; the flat array of values follows the
+    // bond, whose multiplets run through the sectors in order.
     std::map<Sector, int64_t> next;
     for (Factor &factor : factors)
     {
       factor.offset = next[factor.domain];
       next[factor.domain] += factor.kept;
+    }
+    std::map<Sector, int64_t> placed;
+    int64_t run = 0;
+    for (const auto &[sector, count] : multiplicities)
+    {
+      placed[sector] = run;
+      run += count;
     }
 
     // A tensor whose values are all gone keeps the trivial sector, so the bond is still a leg.
@@ -136,7 +145,8 @@ namespace sym
       out.second.block(factor.domain, factor.domain).narrow(0, factor.offset, factor.kept).copy_(vh);
       // The singular values are real; the bond array carries the tensor's scalar type, like every
       // block does, so the widening is written out rather than left to `copy_`.
-      out.values.narrow(0, factor.offset, factor.kept).copy_(values.to(arranged.dtype()));
+      out.values.narrow(0, placed.at(factor.domain) + factor.offset, factor.kept)
+          .copy_(values.to(arranged.dtype()));
     }
     return out;
   }

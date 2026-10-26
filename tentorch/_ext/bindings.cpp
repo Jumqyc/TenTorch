@@ -270,13 +270,37 @@ namespace sym
           .def("keys", &Tensor::keys)
           .def("conj", &Tensor::conj)
           .def("clone", &Tensor::clone)
+          .def("repartition", &Tensor::repartition, py::arg("codomain"))
           .def("__iadd__", &Tensor::operator+=, py::is_operator())
           .def("__isub__", &Tensor::operator-=, py::is_operator())
-          .def("__imul__", &Tensor::operator*=, py::is_operator())
-          .def("__itruediv__", &Tensor::operator/=, py::is_operator())
-          .def("__mul__", [](const Tensor &tensor, double scalar) { return tensor.clone() *= scalar; },
+          .def("__imul__",
+               [](Tensor &tensor, const py::object &scalar) -> Tensor &
+               {
+                 if (py::isinstance<py::float_>(scalar) || py::isinstance<py::int_>(scalar))
+                   return tensor *= scalar.cast<double>();
+                 return tensor *= scalar.cast<std::complex<double>>();
+               },
                py::is_operator())
-          .def("__rmul__", [](const Tensor &tensor, double scalar) { return tensor.clone() *= scalar; },
+          .def("__itruediv__", &Tensor::operator/=, py::is_operator())
+          .def("__mul__",
+               [](const Tensor &tensor, const py::object &scalar)
+               {
+                 Tensor out = tensor.clone();
+                 if (py::isinstance<py::float_>(scalar) || py::isinstance<py::int_>(scalar))
+                   out *= scalar.cast<double>();
+                 else out *= scalar.cast<std::complex<double>>();
+                 return out;
+               },
+               py::is_operator())
+          .def("__rmul__",
+               [](const Tensor &tensor, const py::object &scalar)
+               {
+                 Tensor out = tensor.clone();
+                 if (py::isinstance<py::float_>(scalar) || py::isinstance<py::int_>(scalar))
+                   out *= scalar.cast<double>();
+                 else out *= scalar.cast<std::complex<double>>();
+                 return out;
+               },
                py::is_operator())
           .def("to_tuple", [](const Tensor &tensor)
                {
@@ -303,15 +327,6 @@ namespace sym
 
     void bind_linalg(py::module_ &m)
     {
-      py::class_<Split>(m, "Split")
-          .def_readonly("first", &Split::first)
-          .def_readonly("values", &Split::values)
-          .def_readonly("second", &Split::second);
-
-      py::class_<Decomposition>(m, "Decomposition")
-          .def_readonly("first", &Decomposition::first)
-          .def_readonly("second", &Decomposition::second);
-
       m.def(
         "contract",
         [](const Tensor &first, const Tensor &other, const std::vector<int64_t> &first_domain,
@@ -345,22 +360,52 @@ namespace sym
       m.def("norm", &norm, py::arg("tensor"));
 
       m.def("svd",
-            py::overload_cast<const Tensor &, std::optional<int64_t>, double, int64_t>(&svd),
+            [](const Tensor &tensor, std::optional<int64_t> max_bond, double tol, int64_t absorb)
+            {
+              Split split = svd(tensor, max_bond, tol, absorb);
+              return py::make_tuple(split.first, split.values, split.second);
+            },
             py::arg("tensor"), py::arg("max_bond") = py::none(), py::arg("tol") = 0.0, py::arg("absorb") = 0);
       m.def("svd",
-            py::overload_cast<const Tensor &, const std::vector<int64_t> &, std::optional<int64_t>, double,
-                              int64_t>(&svd),
+            [](const Tensor &tensor, const std::vector<int64_t> &left, std::optional<int64_t> max_bond,
+               double tol, int64_t absorb)
+            {
+              Split split = svd(tensor, left, max_bond, tol, absorb);
+              return py::make_tuple(split.first, split.values, split.second);
+            },
             py::arg("tensor"), py::arg("left"), py::arg("max_bond") = py::none(), py::arg("tol") = 0.0,
             py::arg("absorb") = 0);
       m.def("svdvals", py::overload_cast<const Tensor &>(&svdvals), py::arg("tensor"));
       m.def("svdvals", py::overload_cast<const Tensor &, const std::vector<int64_t> &>(&svdvals),
             py::arg("tensor"), py::arg("left"));
-      m.def("qr", py::overload_cast<const Tensor &>(&qr), py::arg("tensor"));
-      m.def("qr", py::overload_cast<const Tensor &, const std::vector<int64_t> &>(&qr), py::arg("tensor"),
-            py::arg("left"));
-      m.def("rq", py::overload_cast<const Tensor &>(&rq), py::arg("tensor"));
-      m.def("rq", py::overload_cast<const Tensor &, const std::vector<int64_t> &>(&rq), py::arg("tensor"),
-            py::arg("left"));
+      m.def("qr",
+            [](const Tensor &tensor)
+            {
+              Decomposition split = qr(tensor);
+              return py::make_tuple(split.first, split.second);
+            },
+            py::arg("tensor"));
+      m.def("qr",
+            [](const Tensor &tensor, const std::vector<int64_t> &left)
+            {
+              Decomposition split = qr(tensor, left);
+              return py::make_tuple(split.first, split.second);
+            },
+            py::arg("tensor"), py::arg("left"));
+      m.def("rq",
+            [](const Tensor &tensor)
+            {
+              Decomposition split = rq(tensor);
+              return py::make_tuple(split.first, split.second);
+            },
+            py::arg("tensor"));
+      m.def("rq",
+            [](const Tensor &tensor, const std::vector<int64_t> &left)
+            {
+              Decomposition split = rq(tensor, left);
+              return py::make_tuple(split.first, split.second);
+            },
+            py::arg("tensor"), py::arg("left"));
     }
 
     // Drop every table and cache the engine keeps: the vertex tables of the two groups first, then

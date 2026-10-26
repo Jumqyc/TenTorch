@@ -1081,6 +1081,20 @@ namespace sym
     return *this;
   }
 
+  Tensor &Tensor::operator*=(std::complex<double> scalar)
+  {
+    if (scalar.imag() == 0.0) return *this *= scalar.real();
+    for (auto &[key, block] : blocks_)
+    {
+      if (!block.is_complex())
+        throw std::invalid_argument("a block of real entries cannot take the complex factor " +
+                                    std::to_string(scalar.real()) + "+" +
+                                    std::to_string(scalar.imag()) + "i");
+      block.mul_(c10::complex<double>(scalar.real(), scalar.imag()));
+    }
+    return *this;
+  }
+
   Tensor &Tensor::operator/=(double scalar)
   {
     if (scalar == 0.0) throw std::invalid_argument("a tensor cannot be divided by zero");

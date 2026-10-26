@@ -9,98 +9,129 @@ term has been written, so one pass along the chain spells out every term at once
 '''
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Callable
 
-from tentorch._ext import AbelianGroup, FusionTree, Leg, Tensor
+from tentorch._ext import AbelianGroup, FusionTree, Leg, NoSymmetry, Tensor
 from tentorch.networks.mpo import MPO
 from tentorch.symmetry import FusionCategory, trivial_leg
-from tentorch.tensors.tree import state
+from tentorch.tensors.tree import entered
 
 # The automaton: 0 nothing written yet, 1 the $S^z$ of a term, 2 its $S^+$, 3 its $S^-$, 4 closed.
 START, CLOSED = 0, 4
 
-# How the copies of a virtual bond stand for the states: the trivial charge carries the three states
-# that do not move the charge, the charge $2$ carries $S^+$ and $-2$ carries $S^-$.
-_STATE_OF_COPY = {(0,): {0: START, 1: 1, 2: CLOSED}, (2,): {0: 2}, (-2,): {0: 3}}
+# How the copies of a virtual bond stand for the states of a category whose sectors are the charges:
+# the trivial charge carries the three states that keep it, the charge $2$ carries $S^+$ and $-2$
+# carries $S^-$.
+_STATE_OF_CHARGED = {(0,): {0: START, 1: 1, 2: CLOSED}, (2,): {0: 2}, (-2,): {0: 3}}
 
-# The operator a transition writes, as a function of the physical sector it leaves and enters.
-_OPERATOR: dict[tuple[int, int], Callable[[tuple, tuple], float]] = {
+# The operator a transition writes, as a function of the spin the physical leg leaves and the one it
+# enters; the half of a raising and a lowering is carried by the closing transition.
+_OPERATOR: dict[tuple[int, int], Callable[[int, int], float]] = {
     (START, START): lambda out, into: 1.0 if out == into else 0.0,
     (CLOSED, CLOSED): lambda out, into: 1.0 if out == into else 0.0,
-    (START, 1): lambda out, into: 0.5 if out == into == (1,) else (-0.5 if out == into else 0.0),
-    (1, CLOSED): lambda out, into: 0.5 if out == into == (1,) else (-0.5 if out == into else 0.0),
-    (START, 2): lambda out, into: 1.0 if out == (1,) and into == (-1,) else 0.0,
-    (2, CLOSED): lambda out, into: 0.5 if out == (-1,) and into == (1,) else 0.0,
-    (START, 3): lambda out, into: 1.0 if out == (-1,) and into == (1,) else 0.0,
-    (3, CLOSED): lambda out, into: 0.5 if out == (1,) and into == (-1,) else 0.0,
+    (START, 1): lambda out, into: 0.5 if out == into == 1 else (-0.5 if out == into else 0.0),
+    (1, CLOSED): lambda out, into: 0.5 if out == into == 1 else (-0.5 if out == into else 0.0),
+    (START, 2): lambda out, into: 1.0 if out == into + 2 else 0.0,
+    (2, CLOSED): lambda out, into: 0.5 if out == into - 2 else 0.0,
+    (START, 3): lambda out, into: 1.0 if out == into - 2 else 0.0,
+    (3, CLOSED): lambda out, into: 0.5 if out == into + 2 else 0.0,
 }
+
+
+def _table(cat: FusionCategory) -> tuple[Leg, Leg, Callable[[tuple, int], int],
+                                         Callable[[tuple, int], int]]:
+    '''
+    The legs of a site and the meaning of their blocks.
+    Args:
+      cat: an abelian category, either one whose sectors are charges or the one with a single
+        sector, which then tells the spins and the states apart by the copies of that sector.
+    Returns:
+      The physical leg, the virtual leg, the state of a virtual block, and the spin of a physical
+      block.
+    '''
+    if isinstance(cat, NoSymmetry):
+        return (Leg(cat, [(0,)], (2,)), Leg(cat, [(0,)], (5,)),
+                lambda sector, copy: copy, lambda sector, copy: 1 - 2 * copy)
+    return (Leg(cat, [(1,), (-1,)], (1, 1)), Leg(cat, [(0,), (2,), (-2,)], (3, 1, 1)),
+            lambda sector, copy: _STATE_OF_CHARGED[sector][copy], lambda sector, copy: sector[0])
 
 
 def physical(cat: FusionCategory) -> Leg:
     '''
-    The spin-$\tfrac12$ leg: the two sectors of one half unit of angular momentum.
+    The spin-$\tfrac12$ leg.
     Args:
-      cat: the category, whose sectors are tuples holding one integer charge.
+      cat: the category.
     Returns:
-      The leg, with the sector $(1)$ for spin up and $(-1)$ for spin down.
+      The leg, of dimension two.
     '''
-    return Leg(cat, [(1,), (-1,)], (1, 1))
+    return _table(cat)[0]
 
 
 def virtual(cat: FusionCategory) -> Leg:
     '''
-    The virtual bond of the automaton: one block per charge it can carry.
+    The virtual bond of the automaton: one block per state it can carry.
     Args:
       cat: the category.
     Returns:
-      The leg, with three copies of the trivial charge for the states that keep it.
+      The leg.
     '''
-    return Leg(cat, [(0,), (2,), (-2,)], (3, 1, 1))
+    return _table(cat)[1]
 
 
 def heisenberg(cat: FusionCategory, length: int, coupling: float = 1.0) -> MPO:
     '''
     The nearest neighbour Heisenberg chain.
     Args:
-      cat: an abelian category whose sectors hold one integer charge.
+      cat: an abelian category whose sectors hold one integer charge, or the category with a single
+        sector.
       length: the number of sites.
       coupling: the coefficient in front of every bond term.
     Returns:
-      The operator, each site tensor over legs (bond left, out, in, bond right) on the codomain.
+      The operator, each site tensor over legs (bond left, out, in, bond right).
     Raises:
       ValueError: when the category is not abelian, since its tree basis is the coupled basis and a
         coefficient then is not a plain matrix element.
     '''
     if not isinstance(cat, AbelianGroup):
-        raise ValueError(f'the rows of {cat.name()} would need the recoupling to dress them')
-    phys = physical(cat)
-    bond = virtual(cat)
+        raise ValueError(f'the rows of {cat.name} would need the recoupling to dress them')
+    phys, bond, state_of, spin_of = _table(cat)
     edge = trivial_leg(cat, 1)
-    sites = [_site(cat, phys, edge if at == 0 else bond, edge if at == length - 1 else bond,
-                   at == 0, at == length - 1, coupling)
+    sites = [_site(phys, edge if at == 0 else bond, edge if at == length - 1 else bond,
+                   at == 0, at == length - 1, coupling, state_of, spin_of)
              for at in range(length)]
-    return MPO(sites)
+    return MPO(sites, phys, cat)
 
 
-def _site(cat: FusionCategory, phys: Leg, w_left: Leg, w_right: Leg, first: bool, last: bool,
-          coupling: float) -> Tensor:
+def _site(phys: Leg, w_left: Leg, w_right: Leg, first: bool, last: bool, coupling: float,
+          state_of: Callable[[tuple, int], int],
+          spin_of: Callable[[tuple, int], int]) -> Tensor:
     '''
     One site of the operator.
     Args:
-      cat: the category.
       phys: the physical leg, once for the outgoing index and once for the incoming one.
-      w_left: the virtual bond to the left.
-      w_right: the virtual bond to the right.
-      first: whether the site starts the chain, which fixes the state to `START`.
-      last: whether the site ends the chain, which fixes the state to `CLOSED`.
+      w_left: the virtual bond to the left, over the codomain.
+      w_right: the virtual bond to the right, over the domain.
+      first: whether the site starts the chain, which fixes the state before it.
+      last: whether the site ends the chain, which fixes the state after it.
       coupling: the coefficient of a bond term.
+      state_of: the automaton state of a block of the virtual leg.
+      spin_of: the spin of a block of the physical leg, $+1$ up and $-1$ down.
     Returns:
-      The site tensor.
+      The site tensor, a map from the incoming leg and the right bond to the outgoing leg and the
+      left one.
     '''
-    def entry(tree: FusionTree, copy: tuple[int, ...]) -> float:
-        before = START if first else _STATE_OF_COPY[tree.sectors[0]][copy[0]]
-        after = CLOSED if last else _STATE_OF_COPY[tree.sectors[3]][copy[3]]
-        write = _OPERATOR.get((before, after))
-        return 0.0 if write is None else coupling * write(tree.sectors[1], tree.sectors[2])
+    cat = phys.cat
 
-    return state(cat, [w_left, phys, phys, w_right], entry)
+    def entry(tree_out: FusionTree, copy_out: tuple[int, ...],
+              tree_in: FusionTree, copy_in: tuple[int, ...]) -> float:
+        before = START if first else state_of(tree_out.sectors[0], copy_out[0])
+        after = CLOSED if last else state_of(tree_in.sectors[1], copy_in[1])
+        write = _OPERATOR.get((before, after))
+        if write is None:
+            return 0.0
+        # a bond term is written by two sites, so its coefficient rides on the one that closes it
+        weight = coupling if before not in (START, CLOSED) and after == CLOSED else 1.0
+        return weight * write(spin_of(tree_out.sectors[1], copy_out[1]),
+                              spin_of(tree_in.sectors[0], copy_in[0]))
+
+    return entered(cat, [w_left, phys], [phys, w_right], entry)

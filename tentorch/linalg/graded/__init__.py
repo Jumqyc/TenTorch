@@ -9,13 +9,15 @@ from __future__ import annotations
 
 from typing import Optional, Sequence
 
-from tentorch._ext import Decomposition, Split, Tensor, qr, rq, svd, svdvals
+import torch
 
-__all__ = ['Decomposition', 'Split', 'qr', 'rq', 'svd', 'svdvals']
+from tentorch._ext import Tensor, qr, rq, svd, svdvals
+
+__all__ = ['qr', 'rq', 'svd', 'svdvals']
 
 
 def split(tensor: Tensor, left: Optional[Sequence[int]] = None, max_bond: Optional[int] = None,
-          tol: float = 0.0, absorb: int = 0) -> Split:
+          tol: float = 0.0, absorb: int = 0) -> tuple[Tensor, torch.Tensor, Tensor]:
     '''
     Singular value decomposition over two groups of legs.
     Args:
@@ -27,14 +29,14 @@ def split(tensor: Tensor, left: Optional[Sequence[int]] = None, max_bond: Option
       absorb: 0 leaves the values apart, 1 folds them into the first factor, 2 into the second and
         3 splits the root into both.
     Returns:
-      The first factor, the values and the second factor.
+      The first factor, the values and the second factor, as a tuple.
     '''
     if left is None:
         return svd(tensor, max_bond, tol, absorb)
     return svd(tensor, list(left), max_bond, tol, absorb)
 
 
-def qr_split(tensor: Tensor, left: Optional[Sequence[int]] = None) -> Decomposition:
+def qr_split(tensor: Tensor, left: Optional[Sequence[int]] = None) -> tuple[Tensor, Tensor]:
     '''
     QR decomposition over two groups of legs.
     Args:
@@ -46,7 +48,7 @@ def qr_split(tensor: Tensor, left: Optional[Sequence[int]] = None) -> Decomposit
     return qr(tensor) if left is None else qr(tensor, list(left))
 
 
-def rq_split(tensor: Tensor, left: Optional[Sequence[int]] = None) -> Decomposition:
+def rq_split(tensor: Tensor, left: Optional[Sequence[int]] = None) -> tuple[Tensor, Tensor]:
     '''
     RQ decomposition over two groups of legs.
     Args:

@@ -4,6 +4,7 @@
 
 #include <ATen/ATen.h>
 
+#include <complex>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -276,6 +277,14 @@ namespace sym
      * so a factor applies to every block: it is not a physical symmetry operation.
      */
     Tensor &operator*=(double scalar);
+
+    /**
+     * @brief Scales every entry of this tensor by a complex factor.
+     * @param scalar The factor.
+     * @return This tensor.
+     * @throws std::invalid_argument When a block holds real entries and the factor is not real.
+     */
+    Tensor &operator*=(std::complex<double> scalar);
 
     /**
      * @brief Divides every entry of this tensor.
