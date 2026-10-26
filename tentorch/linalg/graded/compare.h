@@ -31,9 +31,11 @@ namespace sym
    * @return $\sum_{\text{blocks}} \overline{a} \, b$, summed entry by entry over the blocks the two
    * tensors share; zero when they carry different total charges.
    * @throws std::invalid_argument When the two do not sit over one category, or their legs differ.
-   * @details Both tensors hold the same trees over the same legs, and the tree basis of a side is
-   * orthonormal, so the scalar product of two vectors of that basis is the sum over the entries of
-   * the blocks and needs no contraction: one tree meets only itself.
+   * @details Both tensors hold the same trees over the same legs, and two different trees are
+   * orthogonal, so one tree meets only itself and the scalar product is the sum over the entries of
+   * the blocks.  A tree weighs the dimension of its root, $\|\text{tree}\|^2 = d_r$, which this sum
+   * leaves out: it is the reduced scalar product, short one factor of the dimension of the root the
+   * two sides close to compared with the component array of the same tensor.
    */
   std::complex<double> inner(const Tensor &first, const Tensor &second);
 

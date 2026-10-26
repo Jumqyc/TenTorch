@@ -304,12 +304,13 @@ def contract(first: Tensor, other: Tensor, first_domain: Sequence[int],
 def contract(first: Tensor, other: Tensor, first_domain: Sequence[int],
              other_codomain: Sequence[int], charge: Sector) -> Tensor: ...
 def contract(first: Tensor, other: Tensor, first_domain: Sequence[int],
-             other_codomain: Sequence[int], charge: Optional[Sector] = ...) -> Tensor:
+             other_codomain: Sequence[int], charge: Sector) -> Tensor:
     '''Contract the named legs of the two tensors, the charge of the result given explicitly.'''
     ...
 
 def einsum(spec: str, *tensors: Tensor, outcharge: Optional[Sector] = ...) -> Tensor:
-    '''Contract a whole network at once, summing over every path of charges that reaches `charge`.'''
+    '''Contract a whole network at once, summing over every path of charges that reaches
+    `outcharge`, which defaults to the trivial charge.'''
     ...
 
 def inner(first: Tensor, second: Tensor) -> complex:

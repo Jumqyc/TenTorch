@@ -72,9 +72,11 @@ namespace sym
    * every tensor of the engine is stored in the tree basis this interface defines.
    *
    * A block of a tensor carries one sector per leg and one multiplicity index per vertex of its
-   * fusion tree.  The entry of a block is the coefficient of that basis vector: each vertex tensor
-   * is normalised to unit Frobenius norm, and a tree is built by contracting them, so the tree basis
-   * is orthonormal.  Three consequences the engine relies on:
+   * fusion tree.  The entry of a block is the coefficient of that basis vector.  A vertex is
+   * normalised as an isometry onto the sector it couples to, $\|C^{c}_{ab}\|^{2}_{F} = d_c$ for each
+   * copy, so a tree over legs with root $r$ has $\|\text{tree}\|^{2} = d_r$ and two different trees
+   * are orthogonal: the tree basis is orthonormal up to the dimension of the root.  Three
+   * consequences the engine relies on:
    *
    * - The block of a tensor is the list of coefficients, not a matrix of overlap integrals.
    * - `F_symbol` and `R_symbol` are unitary matrices, so a move is a lossless basis change.
@@ -141,17 +143,21 @@ namespace sym
      * @return A square matrix of side
      * $\sum_e N^e_{ab} N^d_{ec} = \sum_f N^f_{bc} N^d_{af} = \dim \operatorname{Hom}(a \otimes b
      * \otimes c, d)$, empty when $d$ is not an outcome.
-     * @details The rows are the left tree and the columns the right tree.  Both bases are
-     * orthonormal in the tree basis, so the matrix is unitary.
+     * @details The rows are the left tree and the columns the right tree, and the matrix is the
+     * relation between them: a left tree is the combination
+     * $\text{left}_r = \sum_c F^{d}_{abc}[r, c] \, \text{right}_c$.  Both bases are orthonormal up to
+     * the root dimension, so the matrix is unitary.
      *
      * A row is addressed by three indices: the inner sector $e$ of $a \otimes b$, taken in the order
      * `outcomes(a, b)` returns it; then the vertex $a \otimes b \to e$ in $[0, N^e_{ab})$; then the
      * vertex $e \otimes c \to d$ in $[0, N^d_{ec})$.  A column is addressed the same way through $f$
      * from `outcomes(b, c)`, $b \otimes c \to f$ and $a \otimes f \to d$.
      *
-     * The gauge is fixed by the tree basis: every vertex tensor has unit Frobenius norm, and the
-     * phase of each multiplicity index is the one the concrete category chose.  A change of gauge
-     * multiplies the matrix by diagonal unitaries and leaves the pentagon equation invariant.
+     * The gauge is fixed by the tree basis: every vertex is an isometry onto its coupled sector,
+     * $\|C^{c}_{ab}\|^2_F = d_c$ for each copy, so a tree over legs with root $r$ has
+     * $\|\text{tree}\|^2 = d_r$ and two different trees are orthogonal.  The phase of each
+     * multiplicity index is the one the concrete category chose; a change of gauge multiplies the
+     * matrix by diagonal unitaries and leaves the pentagon equation invariant.
      */
     virtual at::Tensor F_symbol(const Sector &a,
                                 const Sector &b,
@@ -165,10 +171,11 @@ namespace sym
      * @return A square matrix of side $\sum_e N^e_{bc} = \sum_e N^e_{cb}$, empty when the two
      * sectors do not fuse at all.
      * @details The rows are addressed by $e$ from `outcomes(b, c)` and its vertex index, the columns
-     * by $e$ from `outcomes(c, b)` and its vertex index.  The matrix is block diagonal in $e$, one
-     * block of shape $N^e_{bc} \times N^e_{cb}$ per outcome, and it is unitary in the standard
-     * normalisation.  For a multiplicity-free category every block is a single entry, which is the
-     * usual phase $R^c_{bc}$.
+     * by $e$ from `outcomes(c, b)` and its vertex index.  The matrix is the relation between the two
+     * vertices, $\text{straight}_r = \sum_c R_{bc}[r, c] \, \text{swapped}_c$, both read in the
+     * $(b, c, e)$ axis order.  It is block diagonal in $e$, one block of shape
+     * $N^e_{bc} \times N^e_{cb}$ per outcome, and it is unitary in the standard normalisation.  For a
+     * multiplicity-free category every block is a single entry, which is the usual phase $R^c_{bc}$.
      */
     virtual at::Tensor R_symbol(const Sector &b, const Sector &c) const = 0;
 
@@ -284,10 +291,5 @@ namespace sym
     // One fusion table per pair, keyed by the sectors themselves so that a lookup copies nothing.
     mutable std::map<Sector, std::map<Sector, std::vector<Outcome>>> outcomes_cache_;
   };
-
-  /**
-   * @brief Bind the fusion outcome and the base category into the extension module.
-   * @param m The module to bind into.
-   */
 
 } // namespace sym

@@ -31,6 +31,14 @@ namespace sym
   at::Tensor Group::F_symbol(const Sector &a, const Sector &b, const Sector &c,
                              const Sector &d) const
   {
+    // The normalisation the matrix is written in: every vertex is an isometry onto its coupled
+    // sector, $\|C^{c}_{ab}\|^{2} = d_c$ for each copy, so a tree over legs with root $r$ satisfies
+    // $\|\text{tree}\|^{2} = d_r$ and two different trees are orthogonal.  Rows are the left trees
+    // $((a b) c) \to d$ of `f_rows`, columns the right trees $(a (b c)) \to d$ of `f_columns`, and
+    // the two bracketings are related by
+    //   \text{left}_{r} = \sum_{c} F^{d}_{abc}[r, c] \, \text{right}_{c}.
+    // The overlap $\langle \text{left}_{r}, \text{right}_{c} \rangle$ therefore carries $d_d$ once,
+    // so the division below gives the matrix of that relation.
     // The left tree ((a b) c) -> d, one dense vector per row.
     std::vector<at::Tensor> left;
     for (const FIndex &row : f_rows(a, b, c, d))
@@ -63,6 +71,10 @@ namespace sym
 
   at::Tensor Group::R_symbol(const Sector &b, const Sector &c) const
   {
+    // Under the same normalisation $R_{bc}$ is the straight vertex written in the exchanged basis,
+    //   \text{straight}_{r} = \sum_{c} R_{bc}[r, c] \, \text{swapped}_{c},
+    // where a swapped vertex is brought back to the $(b, c, e)$ axis order first; its overlap with a
+    // straight vertex therefore carries $d_e$ once.
     const std::vector<RIndex> rows = r_rows(b, c);
     const int64_t size = static_cast<int64_t>(rows.size());
     at::Tensor value = at::zeros({size, size}, at::TensorOptions().dtype(dtype()).device(device()));

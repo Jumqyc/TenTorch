@@ -253,17 +253,6 @@ at::Tensor clebsch_copies(const Sector& first, const Sector& second, const Secto
   const int64_t da = left.generators.size(2);
   const int64_t db = right.generators.size(2);
   const int64_t dc = conjugate.generators.size(2);
-  const at::Tensor ia = at::eye(da, at::kComplexDouble);
-  const at::Tensor ib = at::eye(db, at::kComplexDouble);
-  const at::Tensor ic = at::eye(dc, at::kComplexDouble);
-  const int64_t size = da * db * dc;
-  at::Tensor casimir = at::zeros({size, size}, at::kComplexDouble);
-  for (int64_t a = 0; a < 8; ++a) {
-    const at::Tensor total = at::kron(at::kron(left.generators[a], ib), ic)
-        + at::kron(at::kron(ia, right.generators[a]), ic)
-        + at::kron(at::kron(ia, ib), conjugate.generators[a]);
-    casimir = casimir + total.matmul(total);
-  }
   std::vector<int64_t> zero;
   for (int64_t i = 0; i < da; ++i) {
     const std::array<int64_t, 3> first_key = weight_key(left.weights, i);
@@ -279,11 +268,39 @@ at::Tensor clebsch_copies(const Sector& first, const Sector& second, const Secto
       }
     }
   }
+  const int64_t size = da * db * dc;
+  const int64_t kept = static_cast<int64_t>(zero.size());
+  TORCH_CHECK(kept > 0, "The coupling has no invariant vertex.");
   const at::Tensor index = at::tensor(zero, at::kLong);
-  const at::Tensor restricted = casimir.index_select(0, index).index_select(1, index);
+  // The Casimir acts inside the subspace whose weights add up to zero, so it is applied to a basis
+  // of that subspace instead of being written out on the full triple product, which is (da db dc)^2
+  // entries and dominates both the time and the memory of a vertex.
+  const auto action = [&](const at::Tensor& vector, const at::Tensor& generator, int64_t axis) {
+    std::vector<int64_t> order{0, 1, 2, 3};
+    order.erase(order.begin() + axis);
+    order.insert(order.begin(), axis);
+    std::vector<int64_t> back(order.size());
+    for (size_t at = 0; at < order.size(); ++at) back.at(order.at(at)) = static_cast<int64_t>(at);
+    const at::Tensor turned = vector.reshape({da, db, dc, kept}).permute(order);
+    const int64_t width = turned.numel() / turned.size(0);
+    return generator.matmul(turned.reshape({turned.size(0), width})).reshape(turned.sizes()).permute(back);
+  };
+  // The basis vectors of the weight-zero subspace as the columns of a (da db dc) x kept matrix.
+  at::Tensor basis = at::zeros({size, kept}, at::kComplexDouble);
+  basis.index_copy_(0, index, at::eye(kept, at::kComplexDouble));
+  at::Tensor restricted = at::zeros({kept, kept}, at::kComplexDouble);
+  for (int64_t a = 0; a < 8; ++a) {
+    const at::Tensor total = action(basis, left.generators[a], 0)
+        + action(basis, right.generators[a], 1)
+        + action(basis, conjugate.generators[a], 2);
+    const at::Tensor applied = action(total, left.generators[a], 0)
+        + action(total, right.generators[a], 1) + action(total, conjugate.generators[a], 2);
+    restricted = restricted + applied.reshape({size, kept}).index_select(0, index);
+  }
+  // A vertex is an eigenvector of the Casimir with eigenvalue zero; the others are its eigenvalues.
   auto [values, vectors] = at::linalg_eigh(restricted);
-  const at::Tensor kernel = (values.abs() < 1e-6).nonzero().squeeze(-1);
-  TORCH_CHECK(kernel.numel() > 0, "The coupling has no invariant vertex.");
+  const double largest = values.abs().max().item<double>();
+  const at::Tensor kernel = (values.abs() < 1e-6 * std::max(1.0, largest)).nonzero().squeeze(-1);
   std::vector<at::Tensor> copies;
   for (int64_t copy = 0; copy < kernel.numel(); ++copy) {
     at::Tensor vector = at::zeros({size}, at::kComplexDouble);

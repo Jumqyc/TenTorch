@@ -80,8 +80,8 @@ namespace sym
    * @param codomain The legs of the codomain, in order.
    * @param domain The legs of the domain, in order.
    * @param qtotal The charge the tensor as a whole carries.
-   * @return Every pair of roots $(r, s)$ with $r \otimes s \ni q$ and, for each, one key per copy of
-   * the closing vertex, the codomain root outer, in the order the fusion outcomes give them.
+   * @return Every pair of roots $(r, s)$ with $r \otimes \bar{s} \ni q$ and, for each, one key per
+   * copy of the closing vertex, the codomain root outer, in the order the fusion outcomes give them.
    * @details The two sides do not couple to the same charge: a leg stores the charge it
    * contributes, so the domain root is already the dual of the charge the domain space carries, and
    * a pair closes to $q$ exactly when the two roots fuse to it.
@@ -97,10 +97,14 @@ namespace sym
    * $(r, s)$: the rows are the trees of the codomain that couple to $r$, the columns the trees of
    * the domain that couple to $s$, and an entry is the coefficient of that pair of basis vectors.
    *
-   * The tree basis is orthonormal, so the coefficient is the whole entry: a contraction of two
-   * tensors is the matrix product of their blocks and needs no weight, and a closed diagram is a
-   * sum of products of coefficients.  Every block of every key is allocated, so a key the legs allow
-   * always names a matrix.
+   * The tree basis is orthonormal up to the dimension of its root, $\|\text{tree}\|^2 = d_r$, so
+   * the coefficient is the whole entry: a contraction of two tensors is the matrix product of their
+   * blocks and needs no weight.  Closing a pair of legs sums the copies the two trees share.  A
+   * tree of a single leg carries no vertex of its own, so the trace of the identity on a leg is one
+   * rather than the dimension of that leg: a closed diagram is the reduced sum of its coefficients,
+   * one factor of a closed loop's quantum dimension away from the component array of the same
+   * tensor.
+   * Every block of every key is allocated, so a key the legs allow always names a matrix.
    *
    * A tensor is data.  It holds the category, the legs of the two sides, its total charge and its
    * blocks, and nothing else: the layout of a block is a function of the legs and the roots, so
@@ -118,6 +122,7 @@ namespace sym
      * @param dtype The scalar type, the category's own when omitted.
      * @param device The device, the category's own when omitted.
      * @throws std::invalid_argument When a leg is over a different category.
+     * @throws std::invalid_argument When the category is null.
      */
     Tensor(std::shared_ptr<const FusionCategory> cat,
            std::vector<Leg> codomain,
@@ -204,8 +209,8 @@ namespace sym
      * on its domain in their original relative order.
      * @throws std::invalid_argument When a number is out of range or named twice.
      * @details Only the codomain can be permuted, so every leg is first bent onto the codomain,
-     * ordered there, and the ones that belong on the domain are bent back last to first, which
-     * lands them on the domain in the order they were named.
+     * ordered there, and the legs that are not named are bent back last to first, which lands them
+     * on the domain in their original relative order.
      */
     Tensor repartition(const std::vector<int64_t> &codomain) const;
 
@@ -224,6 +229,14 @@ namespace sym
     Tensor conj() const;
 
     /**
+     * @brief Copies this tensor with storage of its own.
+     * @return A tensor with the same legs and charge whose blocks share no memory with this one.
+     * @details The copy constructor shares the block tensors, which is what a read-only view
+     * wants; an in-place update needs this instead.
+     */
+    Tensor clone() const;
+
+    /**
      * @brief Adds `other` into this tensor, block by block.
      * @param other The tensor to add, with the same legs and the same charge.
      * @return This tensor.
@@ -232,14 +245,6 @@ namespace sym
      * @details The tree basis of a side is fixed by the legs and the root, so two tensors with the
      * same legs hold their coefficients over one basis and a sum is a sum of coefficients.
      */
-    /**
-     * @brief Copies this tensor with storage of its own.
-     * @return A tensor with the same legs and charge whose blocks share no memory with this one.
-     * @details The copy constructor shares the block tensors, which is what a read-only view
-     * wants; an in-place update needs this instead.
-     */
-    Tensor clone() const;
-
     Tensor &operator+=(const Tensor &other);
 
     /**

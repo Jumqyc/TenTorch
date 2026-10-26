@@ -10,8 +10,8 @@ namespace sym
 {
 
   /**
-   * @brief The contraction of `first` with `other` over a prefix of the domain of `first` and the
-   * same prefix of the codomain of `other`, giving a tensor of the charge `charge`.
+   * @brief The contraction of `first` with `other` over the domain legs of `first` and the codomain
+   * legs of `other`, giving a tensor of the charge `charge`.
    * @param first The tensor whose codomain survives.
    * @param other The tensor whose domain survives.
    * @param first_domain The legs of the domain of `first` that are summed, in the order they meet
@@ -38,10 +38,10 @@ namespace sym
                   const Sector &charge);
 
   /**
-   * @brief The same contraction with `first` of the trivial charge and `other` neutral, which is the
-   * case a chain of tensors mostly meets.
-   * @param first The tensor whose codomain survives, carrying the trivial charge.
-   * @param other The tensor whose domain survives, carrying the trivial charge.
+   * @brief The same contraction with `other` neutral, which is the case a chain of tensors mostly
+   * meets; the product carries the charge of `first`.
+   * @param first The tensor whose codomain survives; the product carries its charge.
+   * @param other The tensor whose domain survives, which has to be neutral.
    * @param first_domain The legs of the domain of `first` that are summed.
    * @param other_codomain The legs of the codomain of `other` that are summed.
    * @return The tensor with the codomain of `first`, the domain of `other` and the charge of

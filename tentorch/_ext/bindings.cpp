@@ -305,7 +305,7 @@ namespace sym
             if (std::string(py::str(item.first)) != "outcharge")
               throw std::invalid_argument("einsum does not take the keyword '" +
                                           std::string(py::str(item.first)) + "'");
-          if (options.contains("outcharge"))
+          if (options.contains("outcharge") && !options["outcharge"].is_none())
             return einsum(spec, operands, options["outcharge"].cast<Sector>());
           return einsum(spec, operands);
         },

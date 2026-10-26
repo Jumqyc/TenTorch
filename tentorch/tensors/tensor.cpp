@@ -1,8 +1,8 @@
 #include "tensor.h"
 
 #include <algorithm>
+#include <cmath>
 #include <numeric>
-#include <cstdio>
 #include <stdexcept>
 
 namespace sym

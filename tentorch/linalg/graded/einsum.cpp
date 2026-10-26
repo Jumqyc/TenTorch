@@ -1,10 +1,13 @@
 #include "einsum.h"
 
 #include <algorithm>
-#include <functional>
+#include <cstdint>
+#include <iterator>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "contract.h"
@@ -56,7 +59,10 @@ namespace sym
     }
 
     // The tensor over the legs `above` on the codomain and `below` under them on the domain, each
-    // list in the order it is to read, every leg of the tensor named by one of them.
+    // list in the order it is to read, every leg of the tensor named by one of them.  This is the
+    // general form of Tensor::repartition, which asks for the legs above in the order they already
+    // have and leaves the rest under them; the order below has to be spelled out here because a
+    // traced leg is put last on both sides.
     Tensor place(const Tensor &tensor, const std::vector<int64_t> &above,
                  const std::vector<int64_t> &below)
     {
@@ -129,7 +135,9 @@ namespace sym
             const SideLayout out_columns = layout_of(*cat, out_domain, kept_under.coupled);
             const int64_t new_row = tree_position(out_rows, kept_above);
             const int64_t new_column = tree_position(out_columns, kept_under);
-            if (new_row < 0 || new_column < 0) continue;
+            if (new_row < 0 || new_column < 0)
+              throw std::logic_error("a kept tree of a trace is not in the layout it was trimmed "
+                                     "from");
             // Dropping the traced leg drops its copy digit, the last and fastest radix of a tree.
             const int64_t inside_rows = out_rows.offsets.at(static_cast<size_t>(new_row) + 1) -
                                         out_rows.offsets.at(static_cast<size_t>(new_row));
@@ -137,9 +145,8 @@ namespace sym
                                            out_columns.offsets.at(static_cast<size_t>(new_column));
             const int64_t copies = row_span / inside_rows;
             // Both legs carry the copy as their last radix, so the sum over the two copies is the
-            // diagonal of that pair of axes: the coefficients already count the components the two
-            // legs share, so no dimension enters.
-            const at::Tensor piece =
+            // diagonal of that pair of axes.
+            at::Tensor piece =
               matrix.narrow(0, rows.offsets.at(row_at), row_span)
                 .narrow(1, columns.offsets.at(column_at), column_span)
                 .reshape({inside_rows, copies, inside_columns, copies})
@@ -153,9 +160,9 @@ namespace sym
                   "the kept roots " + render(kept_above.coupled) + " and " +
                   render(kept_under.coupled) + " of a trace close to " + render(closing.sector) +
                   " in more than one way, which a trace does not recouple yet");
-              auto [slot, fresh] = out.try_emplace(closing.sector, cat, out_codomain, out_domain,
-                                                   closing.sector, tensor.dtype(), tensor.device());
-              slot->second.block(kept_above.coupled, kept_under.coupled)
+              const auto slot = out.try_emplace(closing.sector, cat, out_codomain, out_domain,
+                                                closing.sector, tensor.dtype(), tensor.device());
+              slot.first->second.block(kept_above.coupled, kept_under.coupled)
                 .narrow(0, out_rows.offsets.at(static_cast<size_t>(new_row)), inside_rows)
                 .narrow(1, out_columns.offsets.at(static_cast<size_t>(new_column)), inside_columns)
                 .add_(piece);
@@ -176,14 +183,24 @@ namespace sym
         throw std::logic_error("an outer product takes one operand with its legs above and one with "
                                "its legs below");
       const int64_t closings = cat.n_symbol(above.qtotal(), under.qtotal(), charge);
-      if (closings == 0)
-        throw std::invalid_argument("the charge " + render(charge) + " is not an outcome of " +
-                                    render(above.qtotal()) + " and " + render(under.qtotal()));
       if (closings > 1)
         throw std::invalid_argument("the charges " + render(above.qtotal()) + " and " +
                                     render(under.qtotal()) + " close to " + render(charge) +
                                     " in more than one way, which an outer product does not "
                                     "recouple yet");
+      // A block of an operand is labelled by the roots of its own closing vertex, so a closing that
+      // happens more than one way has no single copy to multiply and the product would drop it.
+      const auto refuse_copies = [&](const Tensor &operand, const char *where) {
+        for (const auto &[key, block] : operand.blocks())
+          if (cat.n_symbol(key.codomain, cat.dual(key.domain), operand.qtotal()) > 1)
+            throw std::invalid_argument("the roots " + render(key.codomain) + " and " +
+                                        render(key.domain) + " of the operand " + where +
+                                        " close to " + render(operand.qtotal()) +
+                                        " in more than one way, which an outer product does not "
+                                        "recouple yet");
+      };
+      refuse_copies(above, "above");
+      refuse_copies(under, "below");
       Tensor out(above.cat(), above.codomain(), under.domain(), charge, above.dtype(),
                  above.device());
       for (const auto &[key, left] : above.blocks())
@@ -192,9 +209,9 @@ namespace sym
       return out;
     }
 
-    // The operands folded left to right, one label glued at a time: a label whose two ends meet on
-    // the folded tensor closes a loop, which is traced away as soon as it appears.  A glue sums over
-    // the charge it lands on and a trace can leave more than one charge, so the fold carries every
+    // The operands folded left to right: each step sums every label the state and the operand share
+    // by one contraction, so a label whose two ends meet is summed in that same move.  A glue sums
+    // over the charge it lands on and can leave more than one charge, so the fold carries every
     // partial result it reaches.
     std::vector<Tensor> along(const std::vector<std::vector<std::string>> &inputs,
                               const std::vector<std::string> &output,
@@ -233,87 +250,67 @@ namespace sym
           std::vector<Tensor> joined;
           for (const Tensor &state : states)
           {
-            const Tensor head = place(state, legs_of(state), {});
-            const Tensor tail = place(operands.at(at), {}, legs_of(operands.at(at)));
+            const Tensor head = state.repartition(legs_of(state));
+            const Tensor tail = operands.at(at).repartition({});
             for (const Sector &closed : closings_of(*state.cat(), state.qtotal(),
                                                     operands.at(at).qtotal()))
               joined.push_back(outer(head, tail, closed));
           }
           labels.insert(labels.end(), next.begin(), next.end());
           states = std::move(joined);
+          if (states.size() > 4096)
+            throw std::invalid_argument("the products of the equation leave more than 4096 charges "
+                                        "to sum, which is more than this takes");
           continue;
         }
 
-        // Glue the first shared label and leave every other leg of the operand below, so the two
-        // ends of each remaining shared label sit on opposite sides of the folded tensor.
+        // The state keeps its unsummed legs above and brings the summed ones below; the operand
+        // brings the summed ones above and keeps the rest below.  One contraction then sums every
+        // shared label, the operand's codomain being exactly the rows of the state's domain.
+        std::vector<int64_t> kept;
+        for (int64_t leg = 0; leg < static_cast<int64_t>(labels.size()); ++leg)
+          if (std::find(shared.begin(), shared.end(), labels.at(leg)) == shared.end())
+            kept.push_back(leg);
+        std::vector<int64_t> summed;
+        std::vector<int64_t> order;
+        for (const std::string &label : shared)
+        {
+          summed.push_back(position_of(labels, label));
+          order.push_back(position_of(next, label));
+        }
+        std::vector<int64_t> loose = legs_of(operands.at(at));
+        for (int64_t leg : order) loose.erase(std::find(loose.begin(), loose.end(), leg));
+        std::vector<int64_t> rows;
+        for (size_t leg = 0; leg < shared.size(); ++leg) rows.push_back(static_cast<int64_t>(leg));
+
         std::vector<Tensor> folded;
         for (const Tensor &state : states)
         {
-          const int64_t glued = position_of(labels, shared.front());
-          std::vector<int64_t> rest = legs_of(state);
-          rest.erase(rest.begin() + glued);
-          const int64_t held = position_of(next, shared.front());
-          std::vector<int64_t> loose = legs_of(operands.at(at));
-          loose.erase(loose.begin() + held);
-          const Tensor head = place(state, rest, {glued});
-          const Tensor tail = place(operands.at(at), {held}, loose);
-          if (!(head.domain().at(0) == tail.codomain().at(0)))
-            throw std::invalid_argument("the label '" + shared.front() + "' of the equation names "
-                                        "two different spaces in the operands " +
-                                        std::to_string(at - 1) + " and " + std::to_string(at) +
-                                        ", and only one space can be summed over a label");
+          const Tensor head = place(state, kept, summed);
+          const Tensor tail = place(operands.at(at), order, loose);
+          for (size_t one = 0; one < shared.size(); ++one)
+            if (!(head.domain().at(one) == tail.codomain().at(one)))
+              throw std::invalid_argument("the label '" + shared.at(one) +
+                                          "' of the equation names two different spaces in the "
+                                          "operands " + std::to_string(at - 1) + " and " +
+                                          std::to_string(at) +
+                                          ", and only one space can be summed over a label");
           for (const Sector &closed : closings_of(*state.cat(), state.qtotal(),
                                                   operands.at(at).qtotal()))
-            folded.push_back(contract(head, tail, {0}, {0}, closed));
+            folded.push_back(contract(head, tail, rows, rows, closed));
         }
 
-        // The glued label is gone. What is left are the labels the state kept above and the ones
-        // the operand brought below.
+        // The summed labels are gone: the state keeps what it kept above and the operand brings
+        // whatever it did not sum below.
         std::vector<std::string> folded_labels;
-        for (const std::string &label : labels)
-          if (label != shared.front()) folded_labels.push_back(label);
-        size_t above_size = folded_labels.size();
-        std::vector<std::string> loose_labels;
-        for (const std::string &label : next)
-          if (label != shared.front()) loose_labels.push_back(label);
-        folded_labels.insert(folded_labels.end(), loose_labels.begin(), loose_labels.end());
-
-        // Every remaining shared label now carries both ends on the folded tensor, and summing it
-        // closes a loop: both of its vertices are removed and the kept roots close to a new charge.
-        for (size_t step = 1; step < shared.size(); ++step)
-        {
-          int64_t first = -1;
-          int64_t second = -1;
-          for (int64_t leg = 0; leg < static_cast<int64_t>(folded_labels.size()); ++leg)
-            if (folded_labels.at(leg) == shared.at(step)) (first < 0 ? first : second) = leg;
-          if (first < 0 || second < 0)
-            throw std::logic_error("the label '" + shared.at(step) + "' of the equation is not on "
-                                   "the folded operands twice");
-          std::vector<Tensor> traced;
-          for (const Tensor &state : folded)
-          {
-            std::vector<int64_t> above;
-            for (int64_t leg = 0; leg < static_cast<int64_t>(above_size); ++leg)
-              if (leg != first) above.push_back(leg);
-            above.push_back(first);
-            std::vector<int64_t> below;
-            for (int64_t leg = static_cast<int64_t>(above_size);
-                 leg < static_cast<int64_t>(folded_labels.size()); ++leg)
-              if (leg != second) below.push_back(leg);
-            below.push_back(second);
-            for (auto &[charge, piece] : partial_trace(place(state, above, below)))
-              traced.push_back(std::move(piece));
-          }
-          folded = std::move(traced);
-          folded_labels.erase(folded_labels.begin() + second);
-          folded_labels.erase(folded_labels.begin() + first);
-          --above_size;
-        }
+        for (int64_t leg : kept) folded_labels.push_back(labels.at(static_cast<size_t>(leg)));
+        for (int64_t leg : loose) folded_labels.push_back(next.at(static_cast<size_t>(leg)));
         labels = std::move(folded_labels);
         states = std::move(folded);
         if (states.size() > 4096)
           throw std::invalid_argument("the loops of the equation leave more than 4096 charges to "
                                       "sum, which is more than this takes");
+        continue;
       }
 
       std::vector<Tensor> out;
@@ -366,8 +363,9 @@ namespace sym
                                         "itself");
           // Two legs of one label on the same side pair through the invariant form of their space:
           // bend one across, which is the recoupling that reads a leg on the other side.
+          const bool opposite = (first < codomain) != (second < codomain);
           int64_t moved = second;
-          if ((first < codomain) == (second < codomain))
+          if (!opposite)
           {
             for (Tensor &alternative : alternatives)
               alternative = alternative.move_across(second, first < codomain);
@@ -384,11 +382,8 @@ namespace sym
           below.push_back(below_leg);
           std::vector<Tensor> traced;
           for (const Tensor &alternative : alternatives)
-            for (auto &[charge, piece] : partial_trace(place(alternative, above, below)))
-            {
-              (void)charge;
-              traced.push_back(std::move(piece));
-            }
+            for (auto &answer : partial_trace(place(alternative, above, below)))
+              traced.push_back(std::move(answer.second));
           alternatives = std::move(traced);
           labels.erase(labels.begin() + second);
           labels.erase(labels.begin() + first);
@@ -432,9 +427,9 @@ namespace sym
       if (!same_group(*operands.at(at).cat(), cat))
         throw std::invalid_argument("an einsum needs every operand over one category");
       if (inputs.at(at).size() != static_cast<size_t>(operands.at(at).nlegs()))
-        throw std::invalid_argument("the group '" + std::string(1, static_cast<char>('a' + at)) +
-                                    "' of '" + spec + "' names " +
-                                    std::to_string(inputs.at(at).size()) + " legs but the tensor has " +
+        throw std::invalid_argument("the group " + std::to_string(at) + " of '" + spec +
+                                    "' names " + std::to_string(inputs.at(at).size()) +
+                                    " legs but the tensor has " +
                                     std::to_string(operands.at(at).nlegs()));
     }
 
@@ -453,7 +448,8 @@ namespace sym
       const auto count = std::count(seen.begin(), seen.end(), label);
       if (count == 1 && !holds(output, label))
         throw std::invalid_argument("the label '" + label + "' of '" + spec +
-                                    "' names one leg, which would be a trace");
+                                    "' names one leg but is not kept in the output, which would "
+                                    "leave it open");
       if (count == 2 && holds(output, label))
         throw std::invalid_argument("the label '" + label + "' of '" + spec +
                                     "' is summed over and still kept");
@@ -486,11 +482,11 @@ namespace sym
     {
       if (alternatives.empty())
         throw std::invalid_argument("the traces of '" + spec + "' leave nothing to sum");
-      combinations *= alternatives.size();
-      if (combinations > 4096)
+      if (alternatives.size() > 4096 / combinations)
         throw std::invalid_argument("the traces of '" + spec +
                                     "' leave more than 4096 combinations of charges, which is more "
                                     "than this sums");
+      combinations *= alternatives.size();
     }
 
     std::optional<Tensor> total;
@@ -504,7 +500,7 @@ namespace sym
       {
         // The folds that land on another charge belong to a different sum.
         if (!(result.qtotal() == charge) || result.blocks().empty()) continue;
-        if (!total || total->blocks().empty()) total = result;
+        if (!total) total = result;
         else *total += result;
       }
       size_t digit = 0;
