@@ -5,6 +5,7 @@
 #include <map>
 #include <numeric>
 #include <stdexcept>
+#include <tuple>
 #include <utility>
 
 namespace sym
@@ -169,10 +170,41 @@ namespace sym
     struct Regrouping
     {
       std::vector<Shift> shifts;
-      // A block off the host names its entries one by one, so it is added through one sparse product
-      // whose matrix is built once and kept for the device it is used on.
-      mutable std::map<std::pair<int64_t, BlockKey>, at::Tensor> matrices;
     };
+
+    // The matrices the plans multiply device blocks with, one per plan, device and target block, and the
+    // bytes they hold.  Every matrix carries a row and a column per entry of a block, so a cache that
+    // keeps them all grows with the number of shapes a sweep walks through and not with the tensor it
+    // serves; past the budget the cache is dropped whole and the matrices are built again on demand.
+    struct MatrixCache
+    {
+      std::map<std::tuple<const Regrouping *, int64_t, BlockKey>, at::Tensor> held;
+      int64_t bytes = 0;
+    };
+
+    constexpr int64_t kMatrixBudget = 1536LL * 1024 * 1024;
+
+    MatrixCache &matrix_cache()
+    {
+      static MatrixCache cache;
+      return cache;
+    }
+
+    // Keeps a matrix unless it would push the cache past its budget, in which case the cache is dropped
+    // whole first: a matrix costs one walk over its plan to build, a cache that never shrinks costs the
+    // device memory of every shape a sweep has walked through.
+    at::Tensor keep_matrix(MatrixCache &cache, const std::tuple<const Regrouping *, int64_t, BlockKey> &name,
+                           const at::Tensor &matrix, int64_t bytes)
+    {
+      if (bytes > kMatrixBudget) return matrix;
+      if (cache.bytes + bytes > kMatrixBudget)
+      {
+        cache.held.clear();
+        cache.bytes = 0;
+      }
+      cache.bytes += bytes;
+      return cache.held.emplace(name, matrix).first->second;
+    }
 
     // Adds the runs of a shift to the block it names.  A block of the engine is a contiguous host
     // matrix of double or complex double, which the walk reads through pointers; anything else — a
@@ -233,12 +265,13 @@ namespace sym
     // The plan's matrix for one target block: one row and one column per entry of the blocks, built as
     // a dense matrix while it is small enough to pay for itself and as a sparse one beyond that, since
     // a sparse product costs a fixed setup on the device that a small block cannot repay.
-    const at::Tensor &matrix_of(const Regrouping &plan, const BlockKey &target, int64_t source_entries,
-                                int64_t target_entries, const at::TensorOptions &options)
+    at::Tensor matrix_of(const Regrouping &plan, const BlockKey &target, int64_t source_entries,
+                         int64_t target_entries, const at::TensorOptions &options, MatrixCache &cache)
     {
-      const std::pair<int64_t, BlockKey> name(static_cast<int64_t>(options.device().index()), target);
-      const auto found = plan.matrices.find(name);
-      if (found != plan.matrices.end()) return found->second;
+      const std::tuple<const Regrouping *, int64_t, BlockKey> name(
+        &plan, static_cast<int64_t>(options.device().index()), target);
+      const auto found = cache.held.find(name);
+      if (found != cache.held.end()) return found->second;
       std::vector<std::pair<int64_t, std::pair<int64_t, std::complex<double>>>> entries;
       for (const Shift &shift : plan.shifts)
       {
@@ -262,7 +295,7 @@ namespace sym
         const at::Tensor dense = at::from_blob(table.data(), {target_entries, source_entries}, at::kComplexDouble)
                                    .to(device)
                                    .clone();
-        return plan.matrices.emplace(name, dense).first->second;
+        return keep_matrix(cache, name, dense, 16 * dense.numel());
       }
       std::vector<int64_t> offsets(static_cast<size_t>(target_entries) + 1, 0), columns;
       std::vector<c10::complex<double>> values;
@@ -282,13 +315,15 @@ namespace sym
         at::from_blob(columns.data(), {static_cast<int64_t>(columns.size())}, at::kLong).to(device).clone(),
         at::from_blob(values.data(), {static_cast<int64_t>(values.size())}, at::kComplexDouble).to(device).clone(),
         {target_entries, source_entries}, dense_options);
-      return plan.matrices.emplace(name, sparse).first->second;
+      return keep_matrix(cache, name, sparse, 16 * sparse.values().numel() + 8 * sparse.col_indices().numel() +
+                                                8 * sparse.crow_indices().numel());
     }
 
     // Adds what one source block sends into one target block: through the pointer walk when both are
     // host blocks, and through one sparse product otherwise, so a move on another device costs one
     // kernel per block and not one per run.
-    void add_into(const Regrouping &plan, const BlockKey &target, const at::Tensor &source, at::Tensor &into)
+    void add_into(const Regrouping &plan, const BlockKey &target, const at::Tensor &source, at::Tensor &into,
+                  MatrixCache &cache)
     {
       const bool host = source.is_contiguous() && into.is_contiguous() && source.device().is_cpu() &&
                         into.device().is_cpu() &&
@@ -300,12 +335,42 @@ namespace sym
         return;
       }
       if (into.numel() == 0) return;
-      const at::Tensor &matrix =
-        matrix_of(plan, target, source.numel(), into.numel(), into.options());
+      const at::Tensor matrix = matrix_of(plan, target, source.numel(), into.numel(), into.options(), cache);
       const at::Tensor added =
         at::matmul(matrix, source.contiguous().reshape({source.numel(), 1})).reshape({into.numel()});
       if (into.is_contiguous()) into.reshape({into.numel()}).add_(added.to(into.scalar_type()));
       else into.copy_((into.contiguous().reshape({into.numel()}) + added.to(into.scalar_type())).reshape(into.sizes()));
+    }
+
+    // The key of a regrouping: the legs and the block decide the trees and the coefficients.
+    std::vector<int64_t> plan_key(const std::vector<Leg> &codomain,
+                                  const std::vector<Leg> &domain,
+                                  const BlockKey &key,
+                                  const Sector &qtotal)
+    {
+      std::vector<int64_t> out;
+      for (const std::vector<Leg> *legs : {&codomain, &domain})
+      {
+        out.push_back(static_cast<int64_t>(legs->size()));
+        for (const Leg &leg : *legs)
+        {
+          out.push_back(leg.nblocks());
+          for (int64_t block = 0; block < leg.nblocks(); ++block)
+          {
+            const Sector &sector = leg.sector(block);
+            out.push_back(static_cast<int64_t>(sector.size()));
+            out.insert(out.end(), sector.begin(), sector.end());
+            out.push_back(leg.multiplicity(block));
+          }
+        }
+      }
+      for (const Sector *charge : {&key.codomain, &key.domain, &qtotal})
+      {
+        out.push_back(static_cast<int64_t>(charge->size()));
+        out.insert(out.end(), charge->begin(), charge->end());
+      }
+      out.push_back(key.copy);
+      return out;
     }
 
     // The charge the codomain legs before the last one fuse to: the root the codomain keeps when its
@@ -321,13 +386,21 @@ namespace sym
     // The regrouping of exchanging the codomain legs `p` and `p + 1` of one block: the trees that
     // agree outside the pair recouple by F and R, and the width the two legs carry is read at the
     // exchanged position on the other side.
-    Regrouping exchange_regrouping(const std::shared_ptr<const FusionCategory> &cat,
-                                   const std::vector<Leg> &codomain,
-                                   const std::vector<Leg> &domain,
-                                   const BlockKey &key,
-                                   const Sector &qtotal,
-                                   int64_t p)
+    const Regrouping &exchange_regrouping(const std::shared_ptr<const FusionCategory> &cat,
+                                          const std::vector<Leg> &codomain,
+                                          const std::vector<Leg> &domain,
+                                          const BlockKey &key,
+                                          const Sector &qtotal,
+                                          int64_t p)
     {
+      using PlanKey = std::pair<std::shared_ptr<const FusionCategory>, std::vector<int64_t>>;
+      static std::map<PlanKey, Regrouping> plans;
+      std::vector<int64_t> fingerprint = plan_key(codomain, domain, key, qtotal);
+      fingerprint.insert(fingerprint.begin(), p);
+      const PlanKey name{cat, fingerprint};
+      const auto held = plans.find(name);
+      if (held != plans.end()) return held->second;
+
       const int64_t count = static_cast<int64_t>(codomain.size());
       std::vector<Leg> exchanged = codomain;
       std::swap(exchanged.at(static_cast<size_t>(p)), exchanged.at(static_cast<size_t>(p + 1)));
@@ -509,19 +582,27 @@ namespace sym
                                      1, 1, stride, factor->second});
           }
       }
-      return plan;
+      return plans.emplace(name, std::move(plan)).first->second;
     }
 
     // The regrouping of bending the last leg of one side onto the other, for one block.  The giving
     // tree keeps everything but its last vertex, the taking tree gains one, and the recoupling of the
     // two vertices carries the copies of the moved leg into the columns of the taking side.
-    Regrouping bend_regrouping(const std::shared_ptr<const FusionCategory> &cat,
-                               const std::vector<Leg> &codomain,
-                               const std::vector<Leg> &domain,
-                               const BlockKey &key,
-                               const Sector &qtotal,
-                               bool from_codomain)
+    const Regrouping &bend_regrouping(const std::shared_ptr<const FusionCategory> &cat,
+                                      const std::vector<Leg> &codomain,
+                                      const std::vector<Leg> &domain,
+                                      const BlockKey &key,
+                                      const Sector &qtotal,
+                                      bool from_codomain)
     {
+      using PlanKey = std::pair<std::shared_ptr<const FusionCategory>, std::vector<int64_t>>;
+      static std::map<PlanKey, Regrouping> plans;
+      std::vector<int64_t> fingerprint = plan_key(codomain, domain, key, qtotal);
+      fingerprint.insert(fingerprint.begin(), from_codomain ? 1 : 0);
+      const PlanKey name{cat, fingerprint};
+      const auto held = plans.find(name);
+      if (held != plans.end()) return held->second;
+
       const std::vector<Leg> &giving = from_codomain ? codomain : domain;
       const std::vector<Leg> &taking = from_codomain ? domain : codomain;
       const Leg moved_leg = giving.back();
@@ -675,7 +756,7 @@ namespace sym
             }
         }
       }
-      return plan;
+      return plans.emplace(name, std::move(plan)).first->second;
     }
 
   } // namespace
@@ -768,9 +849,9 @@ namespace sym
     };
 
     // The regrouping of one block through one step.
-    Regrouping regrouping_of(const Rebase &step, const std::shared_ptr<const FusionCategory> &category,
-                             const std::vector<Leg> &codomain, const std::vector<Leg> &domain,
-                             const BlockKey &key, const Sector &qtotal)
+    const Regrouping &regrouping_of(const Rebase &step, const std::shared_ptr<const FusionCategory> &category,
+                                    const std::vector<Leg> &codomain, const std::vector<Leg> &domain,
+                                    const BlockKey &key, const Sector &qtotal)
     {
       if (step.kind == Rebase::Kind::exchange)
         return exchange_regrouping(category, codomain, domain, key, qtotal, step.position);
@@ -819,6 +900,7 @@ namespace sym
       const at::TensorOptions options = at::TensorOptions().dtype(tensor.dtype()).device(tensor.device());
       Tensor out(tensor.cat(), steps.back().codomain, steps.back().domain, tensor.qtotal(), tensor.dtype(),
                  tensor.device());
+      MatrixCache &matrices = matrix_cache();
       for (const auto &[start, block] : tensor.blocks())
       {
         // The entries of this block as they travel: the blocks of the legs the chain has reached, and
@@ -853,13 +935,13 @@ namespace sym
           };
           for (const auto &[key, buffer] : live)
           {
-            const Regrouping plan =
+            const Regrouping &plan =
               regrouping_of(step, tensor.cat(), *codomain, *domain, key, tensor.qtotal());
             std::vector<BlockKey> targets;
             for (const Shift &shift : plan.shifts)
               if (std::find(targets.begin(), targets.end(), shift.to) == targets.end())
                 targets.push_back(shift.to);
-            for (const BlockKey &target : targets) add_into(plan, target, buffer, target_of(target));
+            for (const BlockKey &target : targets) add_into(plan, target, buffer, target_of(target), matrices);
           }
           codomain = &step.codomain;
           domain = &step.domain;
