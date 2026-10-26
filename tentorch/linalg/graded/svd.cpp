@@ -93,6 +93,31 @@ namespace sym
       if (factor.kept == 0) continue;
       multiplicities[factor.domain] += factor.kept;
     }
+
+    // A leg is bent across a tensor by reading the block of the dual sector, so a sector and its
+    // dual have to carry the same number of multiplets. Only the truncation can break the pairing,
+    // so it is restored here: the values of a sector are ranked with the others, hence keeping the
+    // leading `paired` of them keeps a leading run of every block that survives.
+    std::map<Sector, int64_t> paired;
+    for (const auto &[sector, count] : multiplicities)
+    {
+      const auto other = multiplicities.find(cat->dual(sector));
+      if (other != multiplicities.end()) paired[sector] = std::min(count, other->second);
+    }
+    if (!paired.empty() && paired != multiplicities)
+    {
+      for (Factor &factor : factors) factor.kept = 0;
+      std::map<Sector, int64_t> used;
+      for (const Candidate &candidate : candidates)
+      {
+        Factor &factor = factors.at(static_cast<size_t>(candidate.factor));
+        const auto room = paired.find(factor.domain);
+        if (room == paired.end() || used[factor.domain] >= room->second) continue;
+        ++used[factor.domain];
+        factor.kept = std::max(factor.kept, candidate.index + 1);
+      }
+      multiplicities = std::move(paired);
+    }
     // The offsets inside a block start over with every sector; the flat array of values follows the
     // bond, whose multiplets run through the sectors in order.
     std::map<Sector, int64_t> next;

@@ -308,37 +308,6 @@ namespace sym
       else into.copy_((into.contiguous().reshape({into.numel()}) + added.to(into.scalar_type())).reshape(into.sizes()));
     }
 
-    // The key of a regrouping: the legs and the block decide the trees and the coefficients.
-    std::vector<int64_t> plan_key(const std::vector<Leg> &codomain,
-                                  const std::vector<Leg> &domain,
-                                  const BlockKey &key,
-                                  const Sector &qtotal)
-    {
-      std::vector<int64_t> out;
-      for (const std::vector<Leg> *legs : {&codomain, &domain})
-      {
-        out.push_back(static_cast<int64_t>(legs->size()));
-        for (const Leg &leg : *legs)
-        {
-          out.push_back(leg.nblocks());
-          for (int64_t block = 0; block < leg.nblocks(); ++block)
-          {
-            const Sector &sector = leg.sector(block);
-            out.push_back(static_cast<int64_t>(sector.size()));
-            out.insert(out.end(), sector.begin(), sector.end());
-            out.push_back(leg.multiplicity(block));
-          }
-        }
-      }
-      for (const Sector *charge : {&key.codomain, &key.domain, &qtotal})
-      {
-        out.push_back(static_cast<int64_t>(charge->size()));
-        out.insert(out.end(), charge->begin(), charge->end());
-      }
-      out.push_back(key.copy);
-      return out;
-    }
-
     // The charge the codomain legs before the last one fuse to: the root the codomain keeps when its
     // last leg is bent across.
     Sector before_last(const FusionCategory &category, const FusionTree &tree)
@@ -352,21 +321,13 @@ namespace sym
     // The regrouping of exchanging the codomain legs `p` and `p + 1` of one block: the trees that
     // agree outside the pair recouple by F and R, and the width the two legs carry is read at the
     // exchanged position on the other side.
-    const Regrouping &exchange_regrouping(const std::shared_ptr<const FusionCategory> &cat,
-                                          const std::vector<Leg> &codomain,
-                                          const std::vector<Leg> &domain,
-                                          const BlockKey &key,
-                                          const Sector &qtotal,
-                                          int64_t p)
+    Regrouping exchange_regrouping(const std::shared_ptr<const FusionCategory> &cat,
+                                   const std::vector<Leg> &codomain,
+                                   const std::vector<Leg> &domain,
+                                   const BlockKey &key,
+                                   const Sector &qtotal,
+                                   int64_t p)
     {
-      using PlanKey = std::pair<std::shared_ptr<const FusionCategory>, std::vector<int64_t>>;
-      static std::map<PlanKey, Regrouping> plans;
-      std::vector<int64_t> fingerprint = plan_key(codomain, domain, key, qtotal);
-      fingerprint.insert(fingerprint.begin(), p);
-      const PlanKey name{cat, fingerprint};
-      const auto held = plans.find(name);
-      if (held != plans.end()) return held->second;
-
       const int64_t count = static_cast<int64_t>(codomain.size());
       std::vector<Leg> exchanged = codomain;
       std::swap(exchanged.at(static_cast<size_t>(p)), exchanged.at(static_cast<size_t>(p + 1)));
@@ -548,27 +509,19 @@ namespace sym
                                      1, 1, stride, factor->second});
           }
       }
-      return plans.emplace(name, std::move(plan)).first->second;
+      return plan;
     }
 
     // The regrouping of bending the last leg of one side onto the other, for one block.  The giving
     // tree keeps everything but its last vertex, the taking tree gains one, and the recoupling of the
     // two vertices carries the copies of the moved leg into the columns of the taking side.
-    const Regrouping &bend_regrouping(const std::shared_ptr<const FusionCategory> &cat,
-                                      const std::vector<Leg> &codomain,
-                                      const std::vector<Leg> &domain,
-                                      const BlockKey &key,
-                                      const Sector &qtotal,
-                                      bool from_codomain)
+    Regrouping bend_regrouping(const std::shared_ptr<const FusionCategory> &cat,
+                               const std::vector<Leg> &codomain,
+                               const std::vector<Leg> &domain,
+                               const BlockKey &key,
+                               const Sector &qtotal,
+                               bool from_codomain)
     {
-      using PlanKey = std::pair<std::shared_ptr<const FusionCategory>, std::vector<int64_t>>;
-      static std::map<PlanKey, Regrouping> plans;
-      std::vector<int64_t> fingerprint = plan_key(codomain, domain, key, qtotal);
-      fingerprint.insert(fingerprint.begin(), from_codomain ? 1 : 0);
-      const PlanKey name{cat, fingerprint};
-      const auto held = plans.find(name);
-      if (held != plans.end()) return held->second;
-
       const std::vector<Leg> &giving = from_codomain ? codomain : domain;
       const std::vector<Leg> &taking = from_codomain ? domain : codomain;
       const Leg moved_leg = giving.back();
@@ -722,7 +675,7 @@ namespace sym
             }
         }
       }
-      return plans.emplace(name, std::move(plan)).first->second;
+      return plan;
     }
 
   } // namespace
@@ -815,9 +768,9 @@ namespace sym
     };
 
     // The regrouping of one block through one step.
-    const Regrouping &regrouping_of(const Rebase &step, const std::shared_ptr<const FusionCategory> &category,
-                                    const std::vector<Leg> &codomain, const std::vector<Leg> &domain,
-                                    const BlockKey &key, const Sector &qtotal)
+    Regrouping regrouping_of(const Rebase &step, const std::shared_ptr<const FusionCategory> &category,
+                             const std::vector<Leg> &codomain, const std::vector<Leg> &domain,
+                             const BlockKey &key, const Sector &qtotal)
     {
       if (step.kind == Rebase::Kind::exchange)
         return exchange_regrouping(category, codomain, domain, key, qtotal, step.position);
@@ -900,7 +853,7 @@ namespace sym
           };
           for (const auto &[key, buffer] : live)
           {
-            const Regrouping &plan =
+            const Regrouping plan =
               regrouping_of(step, tensor.cat(), *codomain, *domain, key, tensor.qtotal());
             std::vector<BlockKey> targets;
             for (const Shift &shift : plan.shifts)
