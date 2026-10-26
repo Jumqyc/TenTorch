@@ -28,11 +28,12 @@ namespace sym
    * @details A label that appears twice in one operand is a trace over that pair of legs, which
    * lose both their vertices before the operands are combined; the pair has to name one space and,
    * when both legs sit on the same side, the second is bent over with the F symbol first.  The
-   * operands are then combined left to right: a step whose two operands share a label brings every
-   * shared leg to the domain of the accumulator and the codomain of the next operand in one
-   * contraction, which is a recoupling the contraction hides; a step whose operands share none is an
-   * outer product, which keeps every leg of the accumulator above and every leg of the next operand
-   * below.
+   * operands are then folded into an accumulator in the order that makes the products smallest, which
+   * for up to twelve operands is the exact minimum over the subsets of the operands: a step whose two
+   * operands share a label brings every shared leg to the domain of the accumulator and the codomain
+   * of the next operand in one contraction, which is a recoupling the contraction hides, and it is
+   * taken before any step whose operands share none, since an outer product keeps every leg of both
+   * operands.
    * A charge that several intermediate charges can reach is the sum of those paths, so the result
    * holds every tree of the charges, not just one.
    */

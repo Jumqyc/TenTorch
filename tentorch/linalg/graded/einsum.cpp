@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -18,6 +19,7 @@ namespace sym
 
   namespace
   {
+
 
     std::vector<std::string> letters(const std::string &text)
     {
@@ -209,13 +211,156 @@ namespace sym
       return out;
     }
 
-    // The operands folded left to right: each step sums every label the state and the operand share
-    // by one contraction, so a label whose two ends meet is summed in that same move.  A glue sums
-    // over the charge it lands on and can leave more than one charge, so the fold carries every
-    // partial result it reaches.
-    std::vector<Tensor> along(const std::vector<std::vector<std::string>> &inputs,
-                              const std::vector<std::string> &output,
-                              const std::vector<Tensor> &operands)
+    // The number of components of a leg, which is the size its label contributes to a tensor.
+    double leg_size(const FusionCategory &cat, const Leg &leg)
+    {
+      double out = 0;
+      for (int64_t block = 0; block < leg.nblocks(); ++block)
+        out += static_cast<double>(leg.multiplicity(block)) * cat.q_dim(leg.sector(block));
+      return out;
+    }
+
+    // The size of a tensor over `labels`: the product of their dimensions.
+    double tensor_size(const std::vector<std::string> &labels,
+                       const std::map<std::string, double> &dims)
+    {
+      double out = 1;
+      for (const std::string &label : labels) out *= dims.at(label);
+      return out;
+    }
+
+    // Every label of either list, each once.
+    std::vector<std::string> union_of(const std::vector<std::string> &left,
+                                      const std::vector<std::string> &right)
+    {
+      std::vector<std::string> out = left;
+      for (const std::string &label : right)
+        if (!holds(out, label)) out.push_back(label);
+      return out;
+    }
+
+    // The labels both lists name.
+    std::vector<std::string> shared_of(const std::vector<std::string> &left,
+                                       const std::vector<std::string> &right)
+    {
+      std::vector<std::string> out;
+      for (const std::string &label : left)
+        if (holds(right, label)) out.push_back(label);
+      return out;
+    }
+
+    // The labels only one of the two lists names: the ones the left keeps first, then the ones only
+    // the right brings, which is the order the product reads them.
+    std::vector<std::string> product_labels(const std::vector<std::string> &left,
+                                            const std::vector<std::string> &right)
+    {
+      std::vector<std::string> out;
+      for (const std::string &label : left)
+        if (!holds(right, label)) out.push_back(label);
+      for (const std::string &label : right)
+        if (!holds(left, label)) out.push_back(label);
+      return out;
+    }
+
+    // The order the operands are folded in: the first operand goes into the accumulator and then each
+    // of the others once, the order being the one that makes the products smallest.  Up to twelve
+    // operands that order is found exactly, by a split over every subset of the others; beyond that
+    // the next operand taken is the one whose product with the accumulator is smallest.  A tie goes
+    // to the step that sums more labels at once and then to the order the equation is written in.
+    std::vector<int64_t> fold_order(const std::vector<std::vector<std::string>> &inputs,
+                                    const std::map<std::string, double> &dims)
+    {
+      const int64_t count = static_cast<int64_t>(inputs.size());
+      std::vector<int64_t> order;
+      if (count <= 12)
+      {
+        const int64_t masks = int64_t(1) << (count - 1);
+        std::vector<std::vector<std::string>> labels(masks, inputs.front());
+        for (int64_t mask = 1; mask < masks; ++mask)
+        {
+          const int64_t bit = __builtin_ctzll(static_cast<unsigned long long>(mask));
+          labels.at(mask) = union_of(labels.at(mask ^ (int64_t(1) << bit)), inputs.at(bit + 1));
+        }
+        // A step that sums nothing is taken only when the accumulator shares no label with any
+        // operand left: an outer product keeps every leg of both, so it is the last resort.
+        for (int pass = 0; pass < 2; ++pass)
+        {
+          std::vector<double> cost(masks, std::numeric_limits<double>::infinity());
+          std::vector<int64_t> summed(masks, 0);
+          std::vector<int64_t> last(masks, 0);
+          cost.at(0) = 0;
+          for (int64_t mask = 1; mask < masks; ++mask)
+            for (int64_t bit = 0; bit < count - 1; ++bit)
+              if (mask & (int64_t(1) << bit))
+              {
+                const std::vector<std::string> shared =
+                  shared_of(labels.at(mask ^ (int64_t(1) << bit)), inputs.at(bit + 1));
+                if (pass == 0 && shared.empty()) continue;
+                const double candidate = cost.at(mask ^ (int64_t(1) << bit)) +
+                                         tensor_size(labels.at(mask), dims);
+                // The smallest product first; a tie goes to the step that sums the most labels with
+                // it, which keeps the fewest legs open in the accumulator.
+                const bool better = candidate < cost.at(mask) ||
+                                    (candidate == cost.at(mask) &&
+                                     static_cast<int64_t>(shared.size()) > summed.at(mask)) ||
+                                    (candidate == cost.at(mask) &&
+                                     static_cast<int64_t>(shared.size()) == summed.at(mask) &&
+                                     bit > last.at(mask));
+                if (better)
+                {
+                  cost.at(mask) = candidate;
+                  summed.at(mask) = static_cast<int64_t>(shared.size());
+                  last.at(mask) = bit;
+                }
+              }
+          if (cost.at(masks - 1) == std::numeric_limits<double>::infinity()) continue;
+          for (int64_t mask = masks - 1; mask; mask ^= int64_t(1) << last.at(mask))
+            order.push_back(last.at(mask) + 1);
+          order.push_back(0);
+          std::reverse(order.begin(), order.end());
+          return order;
+        }
+      }
+
+      // Too many operands for every subset: take the smallest product each time, and one that shares
+      // no label with the accumulator only when nothing else is left, since a product without a sum
+      // keeps every leg of both operands.
+      std::vector<bool> taken(inputs.size(), false);
+      std::vector<std::string> live = inputs.front();
+      order.push_back(0);
+      taken.at(0) = true;
+      for (int64_t step = 1; step < count; ++step)
+      {
+        int64_t best = -1;
+        double best_size = 0;
+        bool found = false;
+        for (int pass = 0; pass < 2 && !found; ++pass)
+          for (int64_t at = 0; at < count; ++at)
+          {
+            if (taken.at(at)) continue;
+            if (shared_of(live, inputs.at(at)).empty() != (pass == 1)) continue;
+            const double size = tensor_size(union_of(live, inputs.at(at)), dims);
+            if (!found || size < best_size)
+            {
+              found = true;
+              best = at;
+              best_size = size;
+            }
+          }
+        order.push_back(best);
+        taken.at(best) = true;
+        live = union_of(live, inputs.at(best));
+      }
+      return order;
+    }
+
+    // The product of two slots: every label they share is summed with one contraction, and a pair
+    // that shares none is an outer product.  A sum over a charge can leave more than one charge, so
+    // a slot carries every partial result it reaches.
+    std::vector<Tensor> combine(const std::vector<Tensor> &left_states,
+                                const std::vector<std::string> &left_labels,
+                                const std::vector<Tensor> &right_states,
+                                const std::vector<std::string> &right_labels)
     {
       // Every leg of a tensor, in the order the tensor reads them.
       const auto legs_of = [](const Tensor &tensor)
@@ -234,92 +379,81 @@ namespace sym
         return out;
       };
 
-      std::vector<std::string> labels = inputs.front();
-      std::vector<Tensor> states{operands.front()};
-      for (size_t at = 1; at < operands.size(); ++at)
+      std::vector<Tensor> folded;
+      const std::vector<std::string> shared = shared_of(left_labels, right_labels);
+      if (shared.empty())
       {
-        const std::vector<std::string> &next = inputs.at(at);
-        std::vector<std::string> shared;
-        for (const std::string &label : labels)
-          if (holds(next, label)) shared.push_back(label);
-
-        if (shared.empty())
-        {
-          // Nothing is summed by this step: one operand keeps every leg above, the other brings
-          // every leg below, and no leg has to be recoupled.
-          std::vector<Tensor> joined;
-          for (const Tensor &state : states)
+        // Nothing is summed: one slot keeps every leg above, the other brings every leg below, and
+        // no leg has to be recoupled.
+        for (const Tensor &left : left_states)
+          for (const Tensor &right : right_states)
           {
-            const Tensor head = state.repartition(legs_of(state));
-            const Tensor tail = operands.at(at).repartition({});
-            for (const Sector &closed : closings_of(*state.cat(), state.qtotal(),
-                                                    operands.at(at).qtotal()))
-              joined.push_back(outer(head, tail, closed));
+            const Tensor head = left.repartition(legs_of(left));
+            const Tensor tail = right.repartition({});
+            for (const Sector &closed : closings_of(*left.cat(), left.qtotal(), right.qtotal()))
+              folded.push_back(outer(head, tail, closed));
           }
-          labels.insert(labels.end(), next.begin(), next.end());
-          states = std::move(joined);
-          if (states.size() > 4096)
-            throw std::invalid_argument("the products of the equation leave more than 4096 charges "
-                                        "to sum, which is more than this takes");
-          continue;
-        }
+        return folded;
+      }
 
-        // The state keeps its unsummed legs above and brings the summed ones below; the operand
-        // brings the summed ones above and keeps the rest below.  One contraction then sums every
-        // shared label, the operand's codomain being exactly the rows of the state's domain.
-        std::vector<int64_t> kept;
-        for (int64_t leg = 0; leg < static_cast<int64_t>(labels.size()); ++leg)
-          if (std::find(shared.begin(), shared.end(), labels.at(leg)) == shared.end())
-            kept.push_back(leg);
-        std::vector<int64_t> summed;
-        std::vector<int64_t> order;
-        for (const std::string &label : shared)
-        {
-          summed.push_back(position_of(labels, label));
-          order.push_back(position_of(next, label));
-        }
-        std::vector<int64_t> loose = legs_of(operands.at(at));
-        for (int64_t leg : order) loose.erase(std::find(loose.begin(), loose.end(), leg));
-        std::vector<int64_t> rows;
-        for (size_t leg = 0; leg < shared.size(); ++leg) rows.push_back(static_cast<int64_t>(leg));
+      // The left slot keeps its unsummed legs above and brings the summed ones below; the right slot
+      // brings the summed ones above and keeps the rest below.  One contraction then sums every
+      // shared label, the right slot's codomain being exactly the rows of the left slot's domain.
+      std::vector<int64_t> kept;
+      for (int64_t leg = 0; leg < static_cast<int64_t>(left_labels.size()); ++leg)
+        if (!holds(shared, left_labels.at(leg))) kept.push_back(leg);
+      std::vector<int64_t> summed;
+      std::vector<int64_t> order;
+      for (const std::string &label : shared)
+      {
+        summed.push_back(position_of(left_labels, label));
+        order.push_back(position_of(right_labels, label));
+      }
+      std::vector<int64_t> rows;
+      for (size_t leg = 0; leg < shared.size(); ++leg) rows.push_back(static_cast<int64_t>(leg));
 
-        std::vector<Tensor> folded;
-        for (const Tensor &state : states)
+      for (const Tensor &left : left_states)
+        for (const Tensor &right : right_states)
         {
-          const Tensor head = place(state, kept, summed);
-          const Tensor tail = place(operands.at(at), order, loose);
+          std::vector<int64_t> loose = legs_of(right);
+          for (int64_t leg : order) loose.erase(std::find(loose.begin(), loose.end(), leg));
+          const Tensor head = place(left, kept, summed);
+          const Tensor tail = place(right, order, loose);
           for (size_t one = 0; one < shared.size(); ++one)
             if (!(head.domain().at(one) == tail.codomain().at(one)))
               throw std::invalid_argument("the label '" + shared.at(one) +
-                                          "' of the equation names two different spaces in the "
-                                          "operands " + std::to_string(at - 1) + " and " +
-                                          std::to_string(at) +
-                                          ", and only one space can be summed over a label");
-          for (const Sector &closed : closings_of(*state.cat(), state.qtotal(),
-                                                  operands.at(at).qtotal()))
+                                          "' of the equation names two different spaces in two "
+                                          "operands, and only one space can be summed over a label");
+          for (const Sector &closed : closings_of(*head.cat(), head.qtotal(), tail.qtotal()))
             folded.push_back(contract(head, tail, rows, rows, closed));
         }
+      return folded;
+    }
 
-        // The summed labels are gone: the state keeps what it kept above and the operand brings
-        // whatever it did not sum below.
-        std::vector<std::string> folded_labels;
-        for (int64_t leg : kept) folded_labels.push_back(labels.at(static_cast<size_t>(leg)));
-        for (int64_t leg : loose) folded_labels.push_back(next.at(static_cast<size_t>(leg)));
-        labels = std::move(folded_labels);
-        states = std::move(folded);
-        if (states.size() > 4096)
-          throw std::invalid_argument("the loops of the equation leave more than 4096 charges to "
-                                      "sum, which is more than this takes");
-        continue;
-      }
-
-      std::vector<Tensor> out;
-      for (Tensor &state : states)
+    // The operands folded in the order `order` gives, each step summing every label the accumulator
+    // and the next operand share.  A step that sums a charge can leave more than one charge, so the
+    // fold carries every partial result it reaches.
+    std::vector<Tensor> contract_path(const std::vector<std::vector<std::string>> &inputs,
+                                      const std::vector<std::string> &output,
+                                      const std::vector<Tensor> &operands,
+                                      const std::vector<int64_t> &order)
+    {
+      std::vector<std::string> labels = inputs.front();
+      std::vector<Tensor> states{operands.front()};
+      for (size_t step = 1; step < order.size(); ++step)
       {
-        std::vector<int64_t> order;
-        for (const std::string &label : output) order.push_back(position_of(labels, label));
-        out.push_back(place(state, order, {}));
+        const int64_t at = order.at(step);
+        std::vector<Tensor> folded = combine(states, labels, {operands.at(at)}, inputs.at(at));
+        if (folded.size() > 4096)
+          throw std::invalid_argument("the products of the equation leave more than 4096 charges to "
+                                      "sum, which is more than this takes");
+        labels = product_labels(labels, inputs.at(at));
+        states = std::move(folded);
       }
+      std::vector<int64_t> arrangement;
+      for (const std::string &label : output) arrangement.push_back(position_of(labels, label));
+      std::vector<Tensor> out;
+      for (Tensor &state : states) out.push_back(place(state, arrangement, {}));
       return out;
     }
 
@@ -489,6 +623,17 @@ namespace sym
       combinations *= alternatives.size();
     }
 
+    // The order the operands are contracted in.  A label keeps the space its leg names, so the size
+    // of every partial product is read from the dimensions of the legs.
+    std::map<std::string, double> dims;
+    for (size_t at = 0; at < prepared.labels.size(); ++at)
+    {
+      const std::vector<Leg> legs = prepared.operands.at(at).front().legs();
+      for (size_t leg = 0; leg < prepared.labels.at(at).size(); ++leg)
+        dims[prepared.labels.at(at).at(leg)] = leg_size(cat, legs.at(leg));
+    }
+    const std::vector<int64_t> order = fold_order(prepared.labels, dims);
+
     std::optional<Tensor> total;
     std::vector<size_t> choice(prepared.operands.size(), 0);
     while (true)
@@ -496,7 +641,7 @@ namespace sym
       std::vector<Tensor> operands;
       for (size_t at = 0; at < choice.size(); ++at)
         operands.push_back(prepared.operands.at(at).at(choice.at(at)));
-      for (const Tensor &result : along(prepared.labels, output, operands))
+      for (const Tensor &result : contract_path(prepared.labels, output, operands, order))
       {
         // The folds that land on another charge belong to a different sum.
         if (!(result.qtotal() == charge) || result.blocks().empty()) continue;

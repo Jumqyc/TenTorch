@@ -5,7 +5,10 @@
 
 #include <ATen/ATen.h>
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
+#include <initializer_list>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -16,13 +19,118 @@ namespace sym
 {
 
   /**
-   * @brief One simple object of the category, as the integers that name it in the basis the concrete
-   * category chooses.
-   * @details SU(2) uses one entry, the twice-spin $2j$; SU(3) uses two, the Dynkin labels $(p, q)$;
-   * $Z_N$ uses one residue in $[0, N)$.  Two sectors are the same object exactly when the vectors
-   * are equal, so the vector doubles as the key of a block.
+   * @brief The widest label the engine is built for: a sector holds at most this many integers.
+   * @details SU(2) needs one entry and SU(3) two, so four covers the labels a further category would
+   * plausibly use while keeping the struct small enough to sit in a vector.
    */
-  using Sector = std::vector<int64_t>;
+  constexpr int64_t kMaxSectorRank = 4;
+
+  /**
+   * @brief One simple object of the category, as the integers that name it in the basis the concrete
+   * category chooses, held inside the struct.
+   * @details SU(2) uses one entry, the twice-spin $2j$; SU(3) uses two, the Dynkin labels $(p, q)$;
+   * $Z_N$ uses one residue in $[0, N)$.  Two sectors are the same object exactly when their entries
+   * are equal, so the sector doubles as the key of a block.
+   *
+   * The entries are held inline: a sector is built, copied and compared in the inner loops of the
+   * engine, and a heap vector spent an allocation on every one of those.  `N` is the width the
+   * engine instantiates — naming a sector wider than that throws rather than truncating.
+   */
+  template <int64_t N>
+  class SectorOf
+  {
+  public:
+    SectorOf() = default;
+
+    /**
+     * @brief The sector naming the object whose entries are the given ones.
+     * @param charges The entries of the label.
+     * @throws std::length_error When there are more entries than the width the engine is built for.
+     */
+    SectorOf(std::initializer_list<int64_t> charges) : size_(static_cast<int64_t>(charges.size()))
+    {
+      check_size(size_);
+      std::copy(charges.begin(), charges.end(), charges_.begin());
+    }
+
+    /**
+     * @brief The sector naming the object whose entries are the given ones.
+     * @param charges The entries of the label.
+     * @throws std::length_error When there are more entries than the width the engine is built for.
+     */
+    explicit SectorOf(const std::vector<int64_t> &charges) : size_(static_cast<int64_t>(charges.size()))
+    {
+      check_size(size_);
+      std::copy(charges.begin(), charges.end(), charges_.begin());
+    }
+
+    int64_t size() const { return size_; }
+    bool empty() const { return size_ == 0; }
+
+    /**
+     * @brief One entry of the label.
+     * @param index The position of the entry, counted from zero.
+     * @throws std::out_of_range When the position is not one of the entries.
+     */
+    int64_t at(int64_t index) const
+    {
+      if (index < 0 || index >= size_)
+      {
+        throw std::out_of_range("A sector has " + std::to_string(size_) + " entries, asked for entry " +
+                                std::to_string(index) + ".");
+      }
+      return charges_[static_cast<size_t>(index)];
+    }
+
+    int64_t operator[](int64_t index) const { return charges_[static_cast<size_t>(index)]; }
+
+    const int64_t *begin() const { return charges_.data(); }
+    const int64_t *end() const { return charges_.data() + size_; }
+
+  private:
+    void check_size(int64_t size) const
+    {
+      if (size > N)
+      {
+        throw std::length_error("A sector of " + std::to_string(size) + " entries does not fit the width " +
+                                std::to_string(N) + " the engine is built for.");
+      }
+    }
+
+    std::array<int64_t, N> charges_{};
+    int64_t size_ = 0;
+  };
+
+  /**
+   * @brief Whether two sectors name the same object.
+   */
+  template <int64_t N>
+  bool operator==(const SectorOf<N> &left, const SectorOf<N> &right)
+  {
+    return left.size() == right.size() && std::equal(left.begin(), left.end(), right.begin());
+  }
+
+  /**
+   * @brief The order of the sectors: lexicographic in the entries, and the shorter one first when one
+   * is a prefix of the other.
+   * @details Every map and set of sectors is keyed by this order, and a leg keeps its blocks sorted
+   * by it.
+   */
+  template <int64_t N>
+  bool operator<(const SectorOf<N> &left, const SectorOf<N> &right)
+  {
+    const int64_t common = std::min(left.size(), right.size());
+    for (int64_t entry = 0; entry < common; ++entry)
+    {
+      if (left[entry] != right[entry]) return left[entry] < right[entry];
+    }
+    return left.size() < right.size();
+  }
+
+  /**
+   * @brief The sector type the engine instantiates: every tensor, tree and block key holds this one.
+   */
+  using Sector = SectorOf<kMaxSectorRank>;
 
   /**
    * @brief One term of a fusion: the sector the pair fuses to, and how many distinct vertices

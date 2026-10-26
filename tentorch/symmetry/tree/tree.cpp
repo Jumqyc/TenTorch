@@ -16,7 +16,7 @@ namespace sym
   std::string render(const Sector &sector)
   {
     std::string out = "(";
-    for (size_t i = 0; i < sector.size(); ++i)
+    for (int64_t i = 0; i < sector.size(); ++i)
     {
       if (i != 0)
       {

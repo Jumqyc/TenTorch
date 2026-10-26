@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <complex>
+#include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <numeric>
 #include <stdexcept>
@@ -190,8 +193,8 @@ namespace sym
           {
             const scalar factor = row[step.tree_old.at(old)];
             if (factor == scalar(0)) continue;
-            const scalar *from = source + (step.row_old.at(old) + step.width_of.at(static_cast<size_t>(width))) * source_stride;
-            scalar *to = target + (step.row_new.at(at) + width) * target_stride;
+            const scalar *from = source + (step.row_old.at(old) + width) * source_stride;
+            scalar *to = target + (step.row_new.at(at) + step.width_of.at(static_cast<size_t>(width))) * target_stride;
             for (int64_t entry = 0; entry < step.columns; ++entry) to[entry] += factor * from[entry];
           }
       }
@@ -215,6 +218,8 @@ namespace sym
     {
       int64_t before = 0;
       int64_t after = 0;
+      int64_t rows_before = 0;
+      int64_t rows_after = 0;
       int64_t columns = 0;
       at::Tensor recoupling;
       std::vector<ExchangeClass> classes;
@@ -271,6 +276,8 @@ namespace sym
       ExchangePlan plan;
       plan.before = static_cast<int64_t>(source.trees.size());
       plan.after = static_cast<int64_t>(target.trees.size());
+      plan.rows_before = source.rows();
+      plan.rows_after = target.rows();
       plan.columns = matrix.size(1);
       const at::TensorOptions index_options = at::TensorOptions().dtype(at::kLong).device(matrix.device());
 
@@ -299,15 +306,18 @@ namespace sym
         return out;
       };
 
-      // The multiplicities of the legs of a tree, in the same reading order.
-      const auto widths = [&](const FusionTree &tree, const std::vector<Leg> &legs, bool exchanged_tree)
+      // Where the axis of a side ends up in the other order.
+      const auto moved = [p](int64_t axis)
+      { return axis == p ? p + 1 : axis == p + 1 ? p : axis; };
+
+      // The multiplicities the legs of a tree carry, one per axis of `legs`.
+      const auto shape_of = [&](const FusionTree &tree, const std::vector<Leg> &legs)
       {
         std::vector<int64_t> out;
         for (int64_t axis = 0; axis < count; ++axis)
         {
-          const int64_t from = exchanged_tree && (axis == p || axis == p + 1) ? (axis == p ? p + 1 : p) : axis;
-          const Leg &leg = legs.at(static_cast<size_t>(from));
-          out.push_back(leg.multiplicity(block_of(leg, tree.sectors.at(static_cast<size_t>(from)))));
+          const Leg &leg = legs.at(static_cast<size_t>(axis));
+          out.push_back(leg.multiplicity(block_of(leg, tree.sectors.at(static_cast<size_t>(axis)))));
         }
         return out;
       };
@@ -396,14 +406,25 @@ namespace sym
       plan.recoupling = at::zeros({plan.after, plan.before}, matrix.options());
       plan.recoupling.index_copy_(1, at::tensor(column_order, index_options), stacked);
 
-      // Trees whose legs carry the same multiplicities move in one piece: the width index is then a
-      // mixed radix whose two digits the exchange swaps.
+      // Trees whose legs carry the same multiplicities move in one piece: the width index is a mixed
+      // radix over those multiplicities, and the exchange only moves its digits, which keeps the size
+      // of a class the same on both sides even when the two legs carry different numbers of copies.
       std::map<std::vector<int64_t>, std::vector<int64_t>> before_classes;
       std::map<std::vector<int64_t>, std::vector<int64_t>> after_classes;
+      std::vector<std::vector<int64_t>> after_shapes(static_cast<size_t>(plan.after));
       for (int64_t at = 0; at < plan.before; ++at)
-        before_classes[widths(source.trees.at(static_cast<size_t>(at)), codomain, false)].push_back(at);
+        before_classes[shape_of(source.trees.at(static_cast<size_t>(at)), codomain)].push_back(at);
       for (int64_t at = 0; at < plan.after; ++at)
-        after_classes[widths(target.trees.at(static_cast<size_t>(at)), exchanged, true)].push_back(at);
+      {
+        // A partner carries the same sector on the same leg, so its shape is read back in the order
+        // the legs had before the exchange.
+        const std::vector<int64_t> shape = shape_of(target.trees.at(static_cast<size_t>(at)), exchanged);
+        std::vector<int64_t> back(shape.size(), 0);
+        for (int64_t axis = 0; axis < count; ++axis)
+          back.at(static_cast<size_t>(moved(axis))) = shape.at(static_cast<size_t>(axis));
+        after_shapes.at(static_cast<size_t>(at)) = shape;
+        after_classes[back].push_back(at);
+      }
       for (const auto &[shape, olds] : before_classes)
       {
         const auto partner = after_classes.find(shape);
@@ -416,12 +437,84 @@ namespace sym
         for (const int64_t tree : klass.old_trees) klass.old_rows.push_back(source.offsets.at(static_cast<size_t>(tree)));
         for (const int64_t tree : klass.new_trees) klass.new_rows.push_back(target.offsets.at(static_cast<size_t>(tree)));
         for (const int64_t factor : shape) klass.width *= factor;
+        // The width of a class reads the copies of a leg in the order of the legs, so an index moves
+        // its digits to the positions the exchanged legs put them at, under that side's radices.
+        const std::vector<int64_t> &target_shape = after_shapes.at(static_cast<size_t>(klass.new_trees.front()));
         klass.width_of.resize(static_cast<size_t>(klass.width));
         for (int64_t at = 0; at < klass.width; ++at)
-          klass.width_of.at(static_cast<size_t>(at)) = exchanged_width(shape, p, at);
+        {
+          std::vector<int64_t> digits(shape.size(), 0);
+          std::vector<int64_t> placed(shape.size(), 0);
+          int64_t left = at;
+          for (size_t axis = shape.size(); axis-- > 0;)
+          {
+            digits.at(axis) = left % shape.at(axis);
+            left /= shape.at(axis);
+          }
+          for (int64_t axis = 0; axis < count; ++axis)
+            placed.at(static_cast<size_t>(moved(axis))) = digits.at(static_cast<size_t>(axis));
+          int64_t index = 0;
+          for (int64_t axis = 0; axis < count; ++axis)
+            index = index * target_shape.at(static_cast<size_t>(axis)) + placed.at(static_cast<size_t>(axis));
+          klass.width_of.at(static_cast<size_t>(at)) = index;
+        }
         plan.classes.push_back(std::move(klass));
       }
       return plans.emplace(name, std::move(plan)).first->second;
+    }
+
+    // The exchange of two adjacent codomain legs as a square matrix over the rows of a block: the
+    // entry (new row, old row) is the coefficient the exchange copies that pair with.
+    at::Tensor exchange_matrix(const ExchangePlan &plan, const at::TensorOptions &options)
+    {
+      const at::TensorOptions index_options = at::TensorOptions().dtype(at::kLong).device(options.device());
+      at::Tensor out = at::zeros({plan.rows_after, plan.rows_before}, options);
+      for (const ExchangeClass &klass : plan.classes)
+      {
+        const at::Tensor piece =
+          plan.recoupling
+            .index_select(0, at::tensor(klass.new_trees, index_options))
+            .index_select(1, at::tensor(klass.old_trees, index_options));
+        std::vector<int64_t> rows_at, columns_at;
+        for (int64_t width = 0; width < klass.width; ++width)
+          for (size_t at = 0; at < klass.new_trees.size(); ++at)
+            for (size_t old = 0; old < klass.old_trees.size(); ++old)
+            {
+              rows_at.push_back(klass.new_rows.at(at) + klass.width_of.at(static_cast<size_t>(width)));
+              columns_at.push_back(klass.old_rows.at(old) + width);
+            }
+        out.index_put_({at::tensor(rows_at, index_options), at::tensor(columns_at, index_options)},
+                       piece.flatten().repeat({klass.width}));
+      }
+      return out;
+    }
+
+    // The key of a permutation: the leg structures and the block decide the trees and the
+    // coefficients, the order decides where each tree lands.
+    // One exchange of a block, walked over its entries: each class of trees is a small recoupling
+    // applied to the rows of the trees it joins, so the cost is the size of the block and not the
+    // square of its rows.
+    template <typename scalar>
+    void exchange_walk(const ExchangePlan &plan, const at::Tensor &source, at::Tensor &target)
+    {
+      const int64_t columns = source.size(1);
+      const int64_t before = plan.recoupling.size(0);
+      const scalar *from = source.data_ptr<scalar>();
+      scalar *to = target.data_ptr<scalar>();
+      for (const ExchangeClass &klass : plan.classes)
+      {
+        const SwapClass step{klass.old_trees, klass.new_trees, klass.old_rows, klass.new_rows,
+                             klass.width_of, plan.recoupling, before, klass.width, columns};
+        add_class(step, from, to, source.stride(0), target.stride(0));
+      }
+    }
+
+    // One exchange of a block, written into `target`, which is cleared first.
+    void exchanged(const ExchangePlan &plan, const at::Tensor &matrix, at::Tensor &target)
+    {
+      target.zero_();
+      if (matrix.scalar_type() == at::kComplexDouble) exchange_walk<c10::complex<double>>(plan, matrix, target);
+      else exchange_walk<double>(plan, matrix, target);
     }
 
   } // namespace
@@ -463,33 +556,29 @@ namespace sym
                       result.stride(0));
           continue;
         }
+        // The rows of a class land on other rows of the same class: gather the old rows in the
+        // order the widths are walked, recouple every width at once, and scatter the new rows.
         std::vector<int64_t> gather;
-        gather.reserve(klass.old_trees.size() * static_cast<size_t>(klass.width));
-        for (size_t at = 0; at < klass.old_trees.size(); ++at)
-          for (int64_t width = 0; width < klass.width; ++width) gather.push_back(klass.old_rows.at(at) + width);
+        std::vector<int64_t> scatter;
+        const int64_t trees_old = static_cast<int64_t>(klass.old_trees.size());
+        const int64_t trees_new = static_cast<int64_t>(klass.new_trees.size());
+        for (int64_t width = 0; width < klass.width; ++width)
+        {
+          for (const int64_t row : klass.old_rows) gather.push_back(row + width);
+          for (size_t at = 0; at < klass.new_rows.size(); ++at)
+            scatter.push_back(klass.new_rows.at(at) + klass.width_of.at(static_cast<size_t>(width)));
+        }
         const at::Tensor piece = matrix.index_select(0, at::tensor(gather, index_options))
-                                   .reshape({static_cast<int64_t>(klass.old_trees.size()),
-                                             klass.width * plan.columns});
+                                   .reshape({klass.width, trees_old, plan.columns});
         const at::Tensor selected = plan.recoupling.index_select(0, at::tensor(klass.new_trees, index_options))
                                       .index_select(1, at::tensor(klass.old_trees, index_options));
-        at::Tensor moved = at::matmul(selected, piece)
-                             .reshape({static_cast<int64_t>(klass.new_trees.size()), klass.width, plan.columns});
-        if (klass.width > 1)
-        {
-          std::vector<int64_t> digits{static_cast<int64_t>(klass.new_trees.size())};
-          digits.insert(digits.end(), klass.shape.begin(), klass.shape.end());
-          digits.push_back(plan.columns);
-          moved = moved.view(digits).transpose(p + 1, p + 2).contiguous()
-                    .reshape({static_cast<int64_t>(klass.new_trees.size()), klass.width, plan.columns});
-        }
-        for (size_t at = 0; at < klass.new_trees.size(); ++at)
-          result.narrow(0, klass.new_rows.at(at), klass.width)
-            .copy_(moved.select(0, static_cast<int64_t>(at)));
+        const at::Tensor moved = at::matmul(selected.unsqueeze(0).expand({klass.width, -1, -1}), piece)
+                                   .reshape({klass.width * trees_new, plan.columns});
+        result.index_copy_(0, at::tensor(scatter, index_options), moved);
       }
     }
     return out;
   }
-
 
   namespace
   {
@@ -806,20 +895,53 @@ namespace sym
                                     " does not name a distinct codomain leg");
       seen.at(static_cast<size_t>(leg)) = true;
     }
-    // Bring the wanted leg to each position in turn, one exchange at a time.
+    // The exchanges the permutation takes, read off a bubble sort: `steps` holds the position of each
+    // exchange and `layouts` the codomain legs as they stand before it.
     std::vector<int64_t> which(static_cast<size_t>(count));
     std::iota(which.begin(), which.end(), 0);
-    Tensor out = *this;
+    std::vector<std::vector<Leg>> layouts{codomain_};
+    std::vector<int64_t> steps;
     for (int64_t position = 0; position < count; ++position)
     {
       int64_t at = position;
       while (which.at(static_cast<size_t>(at)) != order.at(static_cast<size_t>(position))) ++at;
       while (at > position)
       {
-        out = out.swap(at - 1);
+        std::vector<Leg> next = layouts.back();
+        std::swap(next.at(static_cast<size_t>(at - 1)), next.at(static_cast<size_t>(at)));
+        layouts.push_back(std::move(next));
+        steps.push_back(at - 1);
         std::swap(which.at(static_cast<size_t>(at - 1)), which.at(static_cast<size_t>(at)));
         --at;
       }
+    }
+    std::vector<Leg> codomain;
+    for (const int64_t leg : order) codomain.push_back(codomain_.at(static_cast<size_t>(leg)));
+    if (steps.empty()) return *this;
+    // A contiguous host block is carried through the exchanges in place, one walk per exchange;
+    // anything else keeps them one at a time through `swap`.
+    bool walked = true;
+    for (const auto &[key, matrix] : blocks_)
+      walked = walked && matrix.is_contiguous() && matrix.device().is_cpu() &&
+               (matrix.scalar_type() == at::kComplexDouble || matrix.scalar_type() == at::kDouble);
+    if (!walked)
+    {
+      Tensor carried = *this;
+      for (const int64_t position : steps) carried = carried.swap(position);
+      return carried;
+    }
+    Tensor out(cat_, codomain, domain_, qtotal_, dtype(), device());
+    for (const auto &[key, matrix] : blocks_)
+    {
+      at::Tensor carried = matrix;
+      at::Tensor scratch = at::empty({carried.size(0), carried.size(1)}, matrix.options());
+      for (size_t at = 0; at < steps.size(); ++at)
+      {
+        exchanged(exchange_plan(cat_, layouts.at(at), domain_, key, steps.at(at), matrix), carried,
+                  scratch);
+        std::swap(carried, scratch);
+      }
+      out.block(key.codomain, key.domain, key.copy).copy_(carried);
     }
     return out;
   }

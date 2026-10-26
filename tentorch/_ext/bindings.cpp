@@ -52,6 +52,35 @@ namespace pybind11
         return out.release();
       }
     };
+
+    /**
+     * @brief The sector as a Python tuple.
+     * @details A sector is the key of a block, so it has to hash: a list would make
+     * `{(0, 0): block}` impossible.  Loading accepts a tuple or a list, so a Python caller can write
+     * either.
+     */
+    template <int64_t N>
+    struct type_caster<sym::SectorOf<N>>
+    {
+      PYBIND11_TYPE_CASTER(sym::SectorOf<N>, const_name("tuple"));
+
+      bool load(handle source, bool)
+      {
+        if (!isinstance<tuple>(source) && !isinstance<list>(source)) return false;
+        std::vector<int64_t> charges;
+        for (const handle item : reinterpret_borrow<iterable>(source))
+          charges.push_back(item.cast<int64_t>());
+        value = sym::SectorOf<N>(charges);
+        return true;
+      }
+
+      static handle cast(const sym::SectorOf<N> &source, return_value_policy, handle)
+      {
+        tuple out(static_cast<size_t>(source.size()));
+        for (int64_t at = 0; at < source.size(); ++at) out[static_cast<size_t>(at)] = pybind11::cast(source[at]);
+        return out.release();
+      }
+    };
   } // namespace detail
 } // namespace pybind11
 
