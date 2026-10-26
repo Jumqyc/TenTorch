@@ -34,7 +34,7 @@ at::Tensor FibonacciCategory::F_symbol(const Sector& a, const Sector& b, const S
   const int64_t side = static_cast<int64_t>(rows.size());
   const int64_t other = static_cast<int64_t>(columns.size());
   at::Tensor value = at::zeros({side, other}, at::TensorOptions().dtype(dtype()));
-  if (side == 0 || other == 0) return value.to(device());
+  if (side == 0 || other == 0) return value;
   if (a.at(0) == kTau && b.at(0) == kTau && c.at(0) == kTau && d.at(0) == kTau) {
     // The golden matrix, the only recoupling of this category that is not the identity.
     const double phi = golden_ratio();
@@ -46,10 +46,10 @@ at::Tensor FibonacciCategory::F_symbol(const Sector& a, const Sector& b, const S
                             [columns.at(static_cast<size_t>(j)).sector.at(0)];
       }
     }
-    return value.to(device());
+    return value;
   }
   // Every other matrix has one entry per coupling, and each of those is the identity.
-  return value.fill_(1.0).to(device());
+  return value.fill_(1.0);
 }
 
 at::Tensor FibonacciCategory::R_symbol(const Sector& b, const Sector& c) const {
@@ -65,7 +65,7 @@ at::Tensor FibonacciCategory::R_symbol(const Sector& b, const Sector& c) const {
     }
     value[at][at] = phase;
   }
-  return value.to(device());
+  return value;
 }
 
 double FibonacciCategory::q_dim(Sector a) const {

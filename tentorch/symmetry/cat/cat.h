@@ -266,6 +266,9 @@ namespace sym
      * $\|\text{tree}\|^2 = d_r$ and two different trees are orthogonal.  The phase of each
      * multiplicity index is the one the concrete category chose; a change of gauge multiplies the
      * matrix by diagonal unitaries and leaves the pentagon equation invariant.
+     *
+     * The matrix lives on the host: the recoupling plans read it entry by entry, so a device copy
+     * would only be copied back.
      */
     virtual at::Tensor F_symbol(const Sector &a,
                                 const Sector &b,
@@ -284,6 +287,7 @@ namespace sym
      * $(b, c, e)$ axis order.  It is block diagonal in $e$, one block of shape
      * $N^e_{bc} \times N^e_{cb}$ per outcome, and it is unitary in the standard normalisation.  For a
      * multiplicity-free category every block is a single entry, which is the usual phase $R^c_{bc}$.
+     * The matrix lives on the host, like `F_symbol`.
      */
     virtual at::Tensor R_symbol(const Sector &b, const Sector &c) const = 0;
 

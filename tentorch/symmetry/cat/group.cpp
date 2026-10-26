@@ -36,7 +36,9 @@ namespace sym
     const std::tuple<Sector, Sector, Sector, Sector> key{a, b, c, d};
     const auto held = f_cache_.find(key);
     if (held != f_cache_.end()) return held->second;
-    return f_cache_.emplace(key, compute_F_symbol(a, b, c, d)).first->second;
+    // The recoupling plans read the symbols coefficient by coefficient on the host, so each symbol
+    // is copied off the device once, when it is built, and not at every use.
+    return f_cache_.emplace(key, compute_F_symbol(a, b, c, d).to(at::kCPU).contiguous()).first->second;
   }
 
   at::Tensor Group::compute_F_symbol(const Sector &a, const Sector &b, const Sector &c,
@@ -85,7 +87,7 @@ namespace sym
     const std::pair<Sector, Sector> key{b, c};
     const auto held = r_cache_.find(key);
     if (held != r_cache_.end()) return held->second;
-    return r_cache_.emplace(key, compute_R_symbol(b, c)).first->second;
+    return r_cache_.emplace(key, compute_R_symbol(b, c).to(at::kCPU).contiguous()).first->second;
   }
 
   at::Tensor Group::compute_R_symbol(const Sector &b, const Sector &c) const

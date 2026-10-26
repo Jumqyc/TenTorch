@@ -34,7 +34,7 @@ class DMRG:
     '''
 
     def __init__(self, model: Model, max_bond_dim: int = 50, svd_tol: float = 1e-14,
-                 n_iter: int = 20, seed: int = 0) -> None:
+                 n_iter: int = 5, seed: int = 0) -> None:
         self.model = model
         self.max_bond_dim = max_bond_dim
         self.svd_tol = svd_tol
@@ -108,11 +108,14 @@ class DMRG:
         first, second = self.state.tensors[at], self.state.tensors[at + 1]
         two = contract(first, second.repartition([0]), [0], [0]).repartition([0, 1, 2])
         site, following = self.operator.tensors[at], self.operator.tensors[at + 1]
+        # The two halves of the effective Hamiltonian do not depend on the vector, so they are taken
+        # once per window instead of once per Krylov step.
+        head = einsum('eia,iPQj->ePaQj', self.left[at], site).repartition([0, 1])
+        tail = einsum('jRSk,fkb->jRSfb', following, self.right[at + 2]).repartition([0, 1, 2, 3])
 
         def action(vector: Tensor) -> Tensor:
             '''The Hamiltonian of the window applied to a two site tensor.'''
-            return einsum('eia,iPQj,jRSk,fkb,aQSb->ePRf', self.left[at], site, following,
-                          self.right[at + 2], vector).repartition([0, 1, 2])
+            return einsum('ePaQj,jRSfb,aQSb->ePRf', head, tail, vector).repartition([0, 1, 2])
 
         energy, vector = lanczos(action, two, self.n_iter)
         # the singular values go into the factor the sweep carries, so that the site left behind is

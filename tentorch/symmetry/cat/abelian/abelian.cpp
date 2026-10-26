@@ -87,14 +87,14 @@ at::Tensor FermionParity::F_symbol(const Sector& a, const Sector& b, const Secto
   // One vertex per triple, so the associator is the single entry 1 exactly when the outer sector is
   // the one the three legs fuse to, and an empty matrix otherwise.
   const int64_t side = residue(a.at(0) + b.at(0) + c.at(0), 2) == d.at(0) ? 1 : 0;
-  return at::ones({side, side}, at::TensorOptions().dtype(dtype()).device(device()));
+  return at::ones({side, side}, at::TensorOptions().dtype(dtype()));
 }
 
 at::Tensor FermionParity::R_symbol(const Sector& b, const Sector& c) const {
   // The braiding is the Koszul sign: a fermion passes another fermion with -1, and nothing else
   // picks up a sign.
   const double sign = b.at(0) == 1 && c.at(0) == 1 ? -1.0 : 1.0;
-  return at::full({1, 1}, sign, at::TensorOptions().dtype(dtype()).device(device()));
+  return at::full({1, 1}, sign, at::TensorOptions().dtype(dtype()));
 }
 
 double FermionParity::q_dim(Sector) const { return 1.0; }

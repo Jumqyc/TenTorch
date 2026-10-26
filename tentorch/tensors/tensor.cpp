@@ -166,7 +166,6 @@ namespace sym
       std::vector<Piece> pieces;
     };
 
-    // One re-reading of a tensor: the result starts at zero and every shift adds to it.
     struct Regrouping
     {
       std::vector<Shift> shifts;
@@ -335,7 +334,10 @@ namespace sym
         return;
       }
       if (into.numel() == 0) return;
-      const at::Tensor matrix = matrix_of(plan, target, source.numel(), into.numel(), into.options(), cache);
+      at::Tensor matrix;
+      {
+        matrix = matrix_of(plan, target, source.numel(), into.numel(), into.options(), cache);
+      }
       const at::Tensor added =
         at::matmul(matrix, source.contiguous().reshape({source.numel(), 1})).reshape({into.numel()});
       if (into.is_contiguous()) into.reshape({into.numel()}).add_(added.to(into.scalar_type()));
@@ -399,8 +401,10 @@ namespace sym
       fingerprint.insert(fingerprint.begin(), p);
       const PlanKey name{cat, fingerprint};
       const auto held = plans.find(name);
-      if (held != plans.end()) return held->second;
-
+      if (held != plans.end())
+      {
+        return held->second;
+      }
       const int64_t count = static_cast<int64_t>(codomain.size());
       std::vector<Leg> exchanged = codomain;
       std::swap(exchanged.at(static_cast<size_t>(p)), exchanged.at(static_cast<size_t>(p + 1)));
@@ -472,8 +476,8 @@ namespace sym
         const Sector d = chain_at(*cat, sample, p + 1);
         const Sector &b = sample.sectors.at(static_cast<size_t>(p));
         const Sector &c = sample.sectors.at(static_cast<size_t>(p + 1));
-        const at::Tensor straight = cat->F_symbol(y, b, c, d);
-        const at::Tensor braided = cat->F_symbol(y, c, b, d);
+        const at::Tensor straight = cat->F_symbol(y, b, c, d).to(at::kComplexDouble);
+        const at::Tensor braided = cat->F_symbol(y, c, b, d).to(at::kComplexDouble);
         TORCH_CHECK(straight.size(0) == static_cast<int64_t>(olds.size()) &&
                       braided.size(0) == static_cast<int64_t>(news.size()),
                     "the exchange does not match the trees of the block");
@@ -486,35 +490,47 @@ namespace sym
         }
         const std::vector<FIndex> from = cat->f_columns(y, b, c, d);
         const std::vector<FIndex> to = cat->f_columns(y, c, b, d);
-        const at::Tensor braid = cat->R_symbol(b, c);
-        std::vector<int64_t> places;
-        std::vector<int64_t> sources;
-        for (int64_t i = 0; i < static_cast<int64_t>(to.size()); ++i)
-          for (int64_t j = 0; j < static_cast<int64_t>(from.size()); ++j)
-          {
-            if (to.at(static_cast<size_t>(i)).sector != from.at(static_cast<size_t>(j)).sector) continue;
-            if (to.at(static_cast<size_t>(i)).outer != from.at(static_cast<size_t>(j)).outer) continue;
-            places.push_back(i * static_cast<int64_t>(from.size()) + j);
-            sources.push_back((offset.at(to.at(static_cast<size_t>(i)).sector) + to.at(static_cast<size_t>(i)).inner) *
-                                braid.size(1) +
-                              offset.at(from.at(static_cast<size_t>(j)).sector) + from.at(static_cast<size_t>(j)).inner);
-          }
-        const at::TensorOptions index_options = at::TensorOptions().dtype(at::kLong).device(braid.device());
-        at::Tensor middle = at::zeros({static_cast<int64_t>(to.size()) * static_cast<int64_t>(from.size())},
-                                      braid.options());
-        middle.index_put_({at::tensor(places, index_options)},
-                          braid.flatten().index_select(0, at::tensor(sources, index_options)));
-        middle = middle.reshape({static_cast<int64_t>(to.size()), static_cast<int64_t>(from.size())});
-        const at::Tensor coupled =
-          at::matmul(braided, at::matmul(middle, straight.conj().transpose(0, 1)))
-            .to(at::kCPU)
-            .to(at::kComplexDouble)
-            .contiguous();
-        const c10::complex<double> *entry = coupled.data_ptr<c10::complex<double>>();
+        const at::Tensor braid = cat->R_symbol(b, c).to(at::kComplexDouble);
+        // Where the braiding is read: a row is a tree of the right bracketing and a column one of the
+        // left, addressed by the outcome and the copy, so a bracketing the braiding does not see has
+        // no entry.
+        const auto braid_at = [&](const FIndex &index)
+        {
+          const auto found = offset.find(index.sector);
+          return found == offset.end() ? -1 : found->second + index.inner;
+        };
+        std::vector<int64_t> rows;
+        for (const FIndex &index : to) rows.push_back(braid_at(index));
+        std::vector<int64_t> columns;
+        for (const FIndex &index : from) columns.push_back(braid_at(index));
+        // The coupled coefficient is `braided . middle . straight^dagger`, where `middle` is the
+        // braiding scattered onto the pairs of bracketings that agree on the intermediate sector and
+        // on the vertex above it.  The matrices are a few entries wide, so the product is summed here
+        // instead of assembled out of tensor operations.
+        const int64_t to_size = static_cast<int64_t>(to.size());
+        const int64_t from_size = static_cast<int64_t>(from.size());
+        const int64_t braid_columns = braid.size(1);
+        const c10::complex<double> *braided_entry = braided.data_ptr<c10::complex<double>>();
+        const c10::complex<double> *straight_entry = straight.data_ptr<c10::complex<double>>();
+        const c10::complex<double> *braid_entry = braid.data_ptr<c10::complex<double>>();
         for (size_t one = 0; one < news.size(); ++one)
           for (size_t other = 0; other < olds.size(); ++other)
           {
-            const c10::complex<double> value = entry[one * olds.size() + other];
+            c10::complex<double> value{0.0, 0.0};
+            for (int64_t i = 0; i < to_size; ++i)
+            {
+              if (rows.at(static_cast<size_t>(i)) < 0) continue;
+              for (int64_t j = 0; j < from_size; ++j)
+              {
+                if (columns.at(static_cast<size_t>(j)) < 0) continue;
+                if (to.at(static_cast<size_t>(i)).sector != from.at(static_cast<size_t>(j)).sector) continue;
+                if (to.at(static_cast<size_t>(i)).outer != from.at(static_cast<size_t>(j)).outer) continue;
+                value += braided_entry[static_cast<int64_t>(one) * to_size + i] *
+                         braid_entry[rows.at(static_cast<size_t>(i)) * braid_columns +
+                                     columns.at(static_cast<size_t>(j))] *
+                         std::conj(straight_entry[static_cast<int64_t>(other) * from_size + j]);
+              }
+            }
             if (value.real() == 0.0 && value.imag() == 0.0) continue;
             factors.emplace(std::make_pair(news.at(one), olds.at(other)),
                             std::complex<double>(value.real(), value.imag()));
@@ -575,11 +591,20 @@ namespace sym
           {
             const auto factor = factors.find(std::make_pair(one, other));
             if (factor == factors.end()) continue;
-            for (int64_t at = 0; at < width; ++at)
+            // Digits the exchange leaves in place stay adjacent on both sides, so a stretch of width
+            // indices that moves without a gap is read and written as one run.
+            for (int64_t at = 0; at < width;)
+            {
+              int64_t run = 1;
+              while (at + run < width &&
+                     width_of.at(static_cast<size_t>(at + run)) == width_of.at(static_cast<size_t>(at)) + run)
+                ++run;
               pieces.push_back(Piece{(source.offsets.at(static_cast<size_t>(other)) + at) * stride,
                                      (target.offsets.at(static_cast<size_t>(one)) +
                                       width_of.at(static_cast<size_t>(at))) * stride,
-                                     1, 1, stride, factor->second});
+                                     1, 1, run * stride, factor->second});
+              at += run;
+            }
           }
       }
       return plans.emplace(name, std::move(plan)).first->second;
@@ -601,8 +626,10 @@ namespace sym
       fingerprint.insert(fingerprint.begin(), from_codomain ? 1 : 0);
       const PlanKey name{cat, fingerprint};
       const auto held = plans.find(name);
-      if (held != plans.end()) return held->second;
-
+      if (held != plans.end())
+      {
+        return held->second;
+      }
       const std::vector<Leg> &giving = from_codomain ? codomain : domain;
       const std::vector<Leg> &taking = from_codomain ? domain : codomain;
       const Leg moved_leg = giving.back();
@@ -662,8 +689,7 @@ namespace sym
           const Sector first = from_codomain ? prefix : gains_root;
           const Sector middle = from_codomain ? charge : cat->dual(charge);
           const Sector last = from_codomain ? cat->dual(gains_root) : cat->dual(prefix);
-          const at::Tensor coefficients =
-            cat->F_symbol(first, middle, last, qtotal).to(at::kCPU).to(at::kComplexDouble).contiguous();
+          const at::Tensor coefficients = cat->F_symbol(first, middle, last, qtotal).to(at::kComplexDouble);
           const c10::complex<double> *entry = coefficients.data_ptr<c10::complex<double>>();
           const int64_t width = coefficients.size(1);
           const std::vector<FIndex> across = cat->f_rows(first, middle, last, qtotal);
@@ -931,7 +957,8 @@ namespace sym
               reused.zero_();
               return next.emplace(key, std::move(reused)).first->second;
             }
-            return next.emplace(key, at::zeros({rows, columns}, options)).first->second;
+            at::Tensor fresh_block = at::zeros({rows, columns}, options);
+            return next.emplace(key, std::move(fresh_block)).first->second;
           };
           for (const auto &[key, buffer] : live)
           {
