@@ -169,6 +169,9 @@ namespace sym
     struct Regrouping
     {
       std::vector<Shift> shifts;
+      // A block off the host names its entries one by one, so it is added through one sparse product
+      // whose matrix is built once and kept for the device it is used on.
+      mutable std::map<std::pair<int64_t, BlockKey>, at::Tensor> matrices;
     };
 
     // Adds the runs of a shift to the block it names.  A block of the engine is a contiguous host
@@ -225,6 +228,84 @@ namespace sym
                                 scale.to(target.device()).to(target.scalar_type());
       to.index_put_({at::tensor(writes, index_options)}, values, true);
       if (!plain) target.copy_(to.reshape(target.sizes()));
+    }
+
+    // The plan's matrix for one target block: one row and one column per entry of the blocks, built as
+    // a dense matrix while it is small enough to pay for itself and as a sparse one beyond that, since
+    // a sparse product costs a fixed setup on the device that a small block cannot repay.
+    const at::Tensor &matrix_of(const Regrouping &plan, const BlockKey &target, int64_t source_entries,
+                                int64_t target_entries, const at::TensorOptions &options)
+    {
+      const std::pair<int64_t, BlockKey> name(static_cast<int64_t>(options.device().index()), target);
+      const auto found = plan.matrices.find(name);
+      if (found != plan.matrices.end()) return found->second;
+      std::vector<std::pair<int64_t, std::pair<int64_t, std::complex<double>>>> entries;
+      for (const Shift &shift : plan.shifts)
+      {
+        if (shift.to != target) continue;
+        for (const Piece &piece : shift.pieces)
+          for (int64_t at = 0; at < piece.run; ++at)
+            entries.emplace_back(piece.last + at * piece.to_step,
+                                 std::make_pair(piece.first + at * piece.from_step, piece.coefficient));
+      }
+      std::sort(entries.begin(), entries.end(),
+                [](const auto &left, const auto &right) { return left.first < right.first; });
+      const auto device = options.device();
+      const at::TensorOptions dense_options = at::TensorOptions().dtype(at::kComplexDouble).device(device);
+      if (source_entries * target_entries <= 65536)
+      {
+        std::vector<c10::complex<double>> table(static_cast<size_t>(source_entries * target_entries),
+                                                c10::complex<double>(0.0, 0.0));
+        for (const auto &entry : entries)
+          table.at(static_cast<size_t>(entry.first) * source_entries + entry.second.first) +=
+            c10::complex<double>(entry.second.second.real(), entry.second.second.imag());
+        const at::Tensor dense = at::from_blob(table.data(), {target_entries, source_entries}, at::kComplexDouble)
+                                   .to(device)
+                                   .clone();
+        return plan.matrices.emplace(name, dense).first->second;
+      }
+      std::vector<int64_t> offsets(static_cast<size_t>(target_entries) + 1, 0), columns;
+      std::vector<c10::complex<double>> values;
+      for (const auto &entry : entries) ++offsets.at(static_cast<size_t>(entry.first) + 1);
+      for (int64_t row = 0; row < target_entries; ++row) offsets.at(row + 1) += offsets.at(row);
+      columns.reserve(entries.size());
+      values.reserve(entries.size());
+      for (const auto &entry : entries)
+      {
+        columns.push_back(entry.second.first);
+        values.push_back(c10::complex<double>(entry.second.second.real(), entry.second.second.imag()));
+      }
+      // The indices are built dense and sorted here, so the checked constructor has nothing left to
+      // verify and would only warn that the format is still beta.
+      const auto sparse = at::_sparse_csr_tensor_unsafe(
+        at::from_blob(offsets.data(), {static_cast<int64_t>(offsets.size())}, at::kLong).to(device).clone(),
+        at::from_blob(columns.data(), {static_cast<int64_t>(columns.size())}, at::kLong).to(device).clone(),
+        at::from_blob(values.data(), {static_cast<int64_t>(values.size())}, at::kComplexDouble).to(device).clone(),
+        {target_entries, source_entries}, dense_options);
+      return plan.matrices.emplace(name, sparse).first->second;
+    }
+
+    // Adds what one source block sends into one target block: through the pointer walk when both are
+    // host blocks, and through one sparse product otherwise, so a move on another device costs one
+    // kernel per block and not one per run.
+    void add_into(const Regrouping &plan, const BlockKey &target, const at::Tensor &source, at::Tensor &into)
+    {
+      const bool host = source.is_contiguous() && into.is_contiguous() && source.device().is_cpu() &&
+                        into.device().is_cpu() &&
+                        (into.scalar_type() == at::kComplexDouble || into.scalar_type() == at::kDouble);
+      if (host)
+      {
+        for (const Shift &shift : plan.shifts)
+          if (shift.to == target) add_pieces(shift.pieces, source, into);
+        return;
+      }
+      if (into.numel() == 0) return;
+      const at::Tensor &matrix =
+        matrix_of(plan, target, source.numel(), into.numel(), into.options());
+      const at::Tensor added =
+        at::matmul(matrix, source.contiguous().reshape({source.numel(), 1})).reshape({into.numel()});
+      if (into.is_contiguous()) into.reshape({into.numel()}).add_(added.to(into.scalar_type()));
+      else into.copy_((into.contiguous().reshape({into.numel()}) + added.to(into.scalar_type())).reshape(into.sizes()));
     }
 
     // The key of a regrouping: the legs and the block decide the trees and the coefficients.
@@ -646,6 +727,200 @@ namespace sym
 
   } // namespace
 
+  namespace
+  {
+
+    // One step of a chain: the legs the tensor has after it and the kind of regrouping that takes the
+    // tensor there.
+    struct Rebase
+    {
+      enum class Kind
+      {
+        exchange,
+        to_codomain,
+        to_domain,
+      };
+
+      Kind kind = Kind::exchange;
+      int64_t position = 0;
+      std::vector<Leg> codomain;
+      std::vector<Leg> domain;
+    };
+
+    // A chain of steps together with the legs the tensor has after each of them, built by the moves
+    // that compose to it.
+    struct Chain
+    {
+      std::vector<Rebase> steps;
+      std::vector<Leg> codomain;
+      std::vector<Leg> domain;
+
+      Chain(std::vector<Leg> codomain, std::vector<Leg> domain)
+          : codomain(std::move(codomain)), domain(std::move(domain))
+      {
+      }
+
+      // Two adjacent codomain legs trade places.
+      void exchange(int64_t position)
+      {
+        std::swap(codomain.at(static_cast<size_t>(position)), codomain.at(static_cast<size_t>(position + 1)));
+        add(Rebase::Kind::exchange, position);
+      }
+
+      // The last leg of one side is bent onto the end of the other side.
+      void fold(bool from_codomain)
+      {
+        if (from_codomain)
+        {
+          domain.push_back(codomain.back());
+          codomain.pop_back();
+        }
+        else
+        {
+          codomain.push_back(domain.back());
+          domain.pop_back();
+        }
+        add(from_codomain ? Rebase::Kind::to_domain : Rebase::Kind::to_codomain, 0);
+      }
+
+      // The exchanges a bubble sort takes to reach `order`, which leaves the codomain legs in that
+      // order.
+      void sort(const std::vector<int64_t> &order)
+      {
+        std::vector<int64_t> which(codomain.size());
+        std::iota(which.begin(), which.end(), 0);
+        for (int64_t at = 0; at < static_cast<int64_t>(order.size()); ++at)
+        {
+          int64_t from = at;
+          while (which.at(static_cast<size_t>(from)) != order.at(static_cast<size_t>(at))) ++from;
+          while (from > at)
+          {
+            exchange(from - 1);
+            std::swap(which.at(static_cast<size_t>(from - 1)), which.at(static_cast<size_t>(from)));
+            --from;
+          }
+        }
+      }
+
+    private:
+      void add(Rebase::Kind kind, int64_t position)
+      {
+        Rebase step;
+        step.kind = kind;
+        step.position = position;
+        step.codomain = codomain;
+        step.domain = domain;
+        steps.push_back(std::move(step));
+      }
+    };
+
+    // The regrouping of one block through one step.
+    const Regrouping &regrouping_of(const Rebase &step, const std::shared_ptr<const FusionCategory> &category,
+                                    const std::vector<Leg> &codomain, const std::vector<Leg> &domain,
+                                    const BlockKey &key, const Sector &qtotal)
+    {
+      if (step.kind == Rebase::Kind::exchange)
+        return exchange_regrouping(category, codomain, domain, key, qtotal, step.position);
+      return bend_regrouping(category, codomain, domain, key, qtotal, step.kind == Rebase::Kind::to_domain);
+    }
+
+    // A shape of a side, written so that two sides with the same legs and root share one key.
+    std::vector<int64_t> shape_key(const std::vector<Leg> &legs, const Sector &root)
+    {
+      std::vector<int64_t> key;
+      key.push_back(static_cast<int64_t>(root.size()));
+      key.insert(key.end(), root.begin(), root.end());
+      for (const Leg &leg : legs)
+      {
+        key.push_back(leg.nblocks());
+        for (int64_t block = 0; block < leg.nblocks(); ++block)
+        {
+          const Sector &sector = leg.sector(block);
+          key.push_back(static_cast<int64_t>(sector.size()));
+          key.insert(key.end(), sector.begin(), sector.end());
+          key.push_back(leg.multiplicity(block));
+        }
+      }
+      return key;
+    }
+
+    // The rows a root gives on a side, built once per shape: a layout is a search over the fusion
+    // trees, which is dearer than the walk it sizes, and a chain asks for the same shapes again.
+    int64_t rows_of(const std::shared_ptr<const FusionCategory> &category, const std::vector<Leg> &legs,
+                    const Sector &root)
+    {
+      static std::map<std::pair<std::shared_ptr<const FusionCategory>, std::vector<int64_t>>, int64_t> cache;
+      const auto found = cache.find({category, shape_key(legs, root)});
+      if (found != cache.end()) return found->second;
+      return cache.emplace(std::pair<const std::shared_ptr<const FusionCategory>, std::vector<int64_t>>(
+                             category, shape_key(legs, root)),
+                           layout_of(*category, legs, root).rows())
+        .first->second;
+    }
+
+    // Runs a chain of steps over every block of a tensor: the entries of a block are carried in
+    // buffers from step to step, so the chain builds one tensor and not one per step.
+    Tensor carried(const Tensor &tensor, const std::vector<Rebase> &steps)
+    {
+      if (steps.empty()) return tensor;
+      const at::TensorOptions options = at::TensorOptions().dtype(tensor.dtype()).device(tensor.device());
+      Tensor out(tensor.cat(), steps.back().codomain, steps.back().domain, tensor.qtotal(), tensor.dtype(),
+                 tensor.device());
+      for (const auto &[start, block] : tensor.blocks())
+      {
+        // The entries of this block as they travel: the blocks of the legs the chain has reached, and
+        // the buffers of the step before, which the next step wipes and uses again.
+        std::map<BlockKey, at::Tensor> live;
+        live.emplace(start, block.contiguous());
+        std::map<BlockKey, at::Tensor> spare;
+        // The legs of the step, which the chain owns: the entries only need to read them.
+        const std::vector<Leg> *codomain = &tensor.codomain();
+        const std::vector<Leg> *domain = &tensor.domain();
+        for (size_t at = 0; at < steps.size(); ++at)
+        {
+          const Rebase &step = steps.at(at);
+          const bool last = at + 1 == steps.size();
+          std::map<BlockKey, at::Tensor> next;
+          // The block a shift lands in: the result on the last step, a wiped buffer before it.
+          const auto target_of = [&](const BlockKey &key) -> at::Tensor & {
+            if (last) return out.block(key.codomain, key.domain, key.copy);
+            const auto found = next.find(key);
+            if (found != next.end()) return found->second;
+            const int64_t rows = rows_of(tensor.cat(), step.codomain, key.codomain);
+            const int64_t columns = rows_of(tensor.cat(), step.domain, key.domain);
+            for (auto spare_at = spare.begin(); spare_at != spare.end(); ++spare_at)
+            {
+              if (spare_at->second.size(0) != rows || spare_at->second.size(1) != columns) continue;
+              at::Tensor reused = std::move(spare_at->second);
+              spare.erase(spare_at);
+              reused.zero_();
+              return next.emplace(key, std::move(reused)).first->second;
+            }
+            return next.emplace(key, at::zeros({rows, columns}, options)).first->second;
+          };
+          for (const auto &[key, buffer] : live)
+          {
+            const Regrouping &plan =
+              regrouping_of(step, tensor.cat(), *codomain, *domain, key, tensor.qtotal());
+            std::vector<BlockKey> targets;
+            for (const Shift &shift : plan.shifts)
+              if (std::find(targets.begin(), targets.end(), shift.to) == targets.end())
+                targets.push_back(shift.to);
+            for (const BlockKey &target : targets) add_into(plan, target, buffer, target_of(target));
+          }
+          codomain = &step.codomain;
+          domain = &step.domain;
+          // The buffer of the first step is the block of the tensor itself, so it is never recycled.
+          if (at > 0)
+            for (auto &entry : live) spare.emplace(entry.first, std::move(entry.second));
+          live = std::move(next);
+        }
+      }
+      return out;
+    }
+
+  } // namespace
+
   Tensor Tensor::swap(int64_t position) const
   {
     const int64_t count = static_cast<int64_t>(codomain_.size());
@@ -654,83 +929,52 @@ namespace sym
       throw std::invalid_argument("a swap needs two adjacent codomain legs, got position " +
                                   std::to_string(position));
     }
-    std::vector<Leg> codomain = codomain_;
-    std::swap(codomain.at(static_cast<size_t>(position)), codomain.at(static_cast<size_t>(position + 1)));
-    Tensor out(cat_, codomain, domain_, qtotal_, dtype(), device());
-    for (const auto &[key, matrix] : blocks_)
-    {
-      const Regrouping &plan = exchange_regrouping(cat_, codomain_, domain_, key, qtotal_, position);
-      for (const Shift &shift : plan.shifts)
-        add_pieces(shift.pieces, matrix, out.block(shift.to.codomain, shift.to.domain, shift.to.copy));
-    }
-    return out;
+    Chain chain(codomain_, domain_);
+    chain.exchange(position);
+    return carried(*this, chain.steps);
   }
-
-  namespace
-  {
-
-    // Bends the last leg of one side onto the end of the other side.
-    // `from_codomain` names the side that gives the leg and nothing else: a tree is a tree, so the
-    // two directions run the same recoupling with the roles of the two trees exchanged.
-    Tensor bend(const Tensor &tensor, bool from_codomain)
-    {
-      const std::vector<Leg> &giving = from_codomain ? tensor.codomain() : tensor.domain();
-      const std::vector<Leg> &taking = from_codomain ? tensor.domain() : tensor.codomain();
-      const std::vector<Leg> kept_giving(giving.begin(), giving.end() - 1);
-      std::vector<Leg> kept_taking = taking;
-      kept_taking.push_back(giving.back());
-      const std::vector<Leg> out_codomain = from_codomain ? kept_giving : kept_taking;
-      const std::vector<Leg> out_domain = from_codomain ? kept_taking : kept_giving;
-      Tensor out(tensor.cat(), out_codomain, out_domain, tensor.qtotal(), tensor.dtype(), tensor.device());
-      for (const auto &[key, matrix] : tensor.blocks())
-      {
-        const Regrouping &plan =
-          bend_regrouping(tensor.cat(), tensor.codomain(), tensor.domain(), key, tensor.qtotal(), from_codomain);
-        for (const Shift &shift : plan.shifts)
-          add_pieces(shift.pieces, matrix, out.block(shift.to.codomain, shift.to.domain, shift.to.copy));
-      }
-      return out;
-    }
-
-  } // namespace
 
   Tensor Tensor::move_across(int64_t position, bool from_codomain) const
   {
     const int64_t count = static_cast<int64_t>((from_codomain ? codomain_ : domain_).size());
     if (position < 0 || position >= count)
       throw std::invalid_argument("there is no leg on that side at position " + std::to_string(position));
-    if (position + 1 == count) return bend(*this, from_codomain);
-    if (from_codomain)
+    Chain chain(codomain_, domain_);
+    if (from_codomain || position + 1 == count)
     {
-      // Bring the leg to the end of the codomain, so the bend always sees it there.
-      std::vector<int64_t> order;
-      for (int64_t at = 0; at < count; ++at)
-        if (at != position) order.push_back(at);
-      order.push_back(position);
-      return bend(permute(order), true);
+      // The leg is brought to the end of its side, so the bend always sees it there.
+      if (position + 1 != count)
+      {
+        std::vector<int64_t> order;
+        for (int64_t at = 0; at < count; ++at)
+          if (at != position) order.push_back(at);
+        order.push_back(position);
+        chain.sort(order);
+      }
+      chain.fold(from_codomain);
+      return carried(*this, chain.steps);
     }
     // A domain leg is always bent from the end of its side, so the legs behind it are parked on the
-    // codomain one at a time and brought back afterwards, which keeps their order.
-    Tensor walked = *this;
+    // codomain and brought back afterwards, which keeps their order.
     int64_t parked = 0;
-    while (static_cast<int64_t>(walked.domain().size()) > position + 1)
+    while (static_cast<int64_t>(chain.domain.size()) > position + 1)
     {
-      walked = bend(walked, false);
+      chain.fold(false);
       ++parked;
     }
-    walked = bend(walked, false);
+    chain.fold(false);
     ++parked;
     // The bent leg was taken last, so it is the end of the tail; it goes back in front of the parked
     // ones, whose order is kept, so that bringing them back appends them in the order they had.
-    const int64_t count_codomain = static_cast<int64_t>(walked.codomain().size());
+    const int64_t count_codomain = static_cast<int64_t>(chain.codomain.size());
     const int64_t kept = count_codomain - parked;
     std::vector<int64_t> order;
     for (int64_t at = 0; at < kept; ++at) order.push_back(at);
     order.push_back(count_codomain - 1);
     for (int64_t at = kept; at + 1 < count_codomain; ++at) order.push_back(at);
-    walked = walked.permute(order);
-    for (int64_t back = 1; back < parked; ++back) walked = bend(walked, true);
-    return walked;
+    chain.sort(order);
+    for (int64_t back = 1; back < parked; ++back) chain.fold(true);
+    return carried(*this, chain.steps);
   }
 
   Tensor Tensor::permute(const std::vector<int64_t> &order) const
@@ -749,46 +993,9 @@ namespace sym
                                     " does not name a distinct codomain leg");
       seen.at(static_cast<size_t>(leg)) = true;
     }
-    // The exchanges the permutation takes, read off a bubble sort: `steps` holds the position of each
-    // exchange and `layouts` the codomain legs as they stand before it.
-    std::vector<int64_t> which(static_cast<size_t>(count));
-    std::iota(which.begin(), which.end(), 0);
-    std::vector<std::vector<Leg>> layouts{codomain_};
-    std::vector<int64_t> steps;
-    for (int64_t position = 0; position < count; ++position)
-    {
-      int64_t at = position;
-      while (which.at(static_cast<size_t>(at)) != order.at(static_cast<size_t>(position))) ++at;
-      while (at > position)
-      {
-        std::vector<Leg> next = layouts.back();
-        std::swap(next.at(static_cast<size_t>(at - 1)), next.at(static_cast<size_t>(at)));
-        layouts.push_back(std::move(next));
-        steps.push_back(at - 1);
-        std::swap(which.at(static_cast<size_t>(at - 1)), which.at(static_cast<size_t>(at)));
-        --at;
-      }
-    }
-    std::vector<Leg> codomain;
-    for (const int64_t leg : order) codomain.push_back(codomain_.at(static_cast<size_t>(leg)));
-    if (steps.empty()) return *this;
-    // Every block is carried through the exchanges in one pair of buffers, so a permutation costs the
-    // walks and no intermediate tensor.
-    Tensor out(cat_, codomain, domain_, qtotal_, dtype(), device());
-    for (const auto &[key, matrix] : blocks_)
-    {
-      at::Tensor carried = matrix.contiguous().clone();
-      at::Tensor scratch = at::empty_like(carried);
-      for (size_t at = 0; at < steps.size(); ++at)
-      {
-        const Regrouping &plan = exchange_regrouping(cat_, layouts.at(at), domain_, key, qtotal_, steps.at(at));
-        scratch.zero_();
-        for (const Shift &shift : plan.shifts) add_pieces(shift.pieces, carried, scratch);
-        std::swap(carried, scratch);
-      }
-      out.block(key.codomain, key.domain, key.copy).copy_(carried);
-    }
-    return out;
+    Chain chain(codomain_, domain_);
+    chain.sort(order);
+    return carried(*this, chain.steps);
   }
 
   Tensor Tensor::repartition(const std::vector<int64_t> &codomain) const
@@ -810,26 +1017,24 @@ namespace sym
     bool kept = static_cast<int64_t>(codomain.size()) == given;
     for (int64_t at = 0; kept && at < given; ++at) kept = codomain.at(static_cast<size_t>(at)) == at;
     if (kept) return *this;
-    // Every leg is bent onto the codomain, which is the side that can be permuted, so the legs can
-    // be put in any order there.  The domain legs are taken off from its end, so they arrive in the
+    // Every leg is bent onto the codomain, which is the side that can be permuted, so the legs can be
+    // put in any order there; the domain legs are taken off from its end, so they arrive in the
     // reverse of their original order.
-    Tensor out = *this;
-    while (!out.domain_.empty())
-      out = out.move_across(static_cast<int64_t>(out.domain_.size()) - 1, false);
+    Chain chain(codomain_, domain_);
+    while (!chain.domain.empty()) chain.fold(false);
     auto position_of = [given, count](int64_t leg) {
       return leg < given ? leg : given + (count - 1 - (leg - given));
     };
-    // The legs that stay on the codomain keep the order they were named in; the legs that go back
-    // to the domain are put there last one first, so they land in their original order.
+    // The legs that stay on the codomain keep the order they were named in; the legs that go back to
+    // the domain are put there last one first, so they land in their original order.
     std::vector<int64_t> order;
     order.reserve(static_cast<size_t>(total));
     for (const int64_t leg : codomain) order.push_back(position_of(leg));
     for (int64_t leg = total - 1; leg >= 0; --leg)
       if (!wanted.at(static_cast<size_t>(leg))) order.push_back(position_of(leg));
-    out = out.permute(order);
-    for (int64_t at = 0; at < total - static_cast<int64_t>(codomain.size()); ++at)
-      out = out.move_across(static_cast<int64_t>(out.codomain_.size()) - 1, true);
-    return out;
+    chain.sort(order);
+    for (int64_t at = 0; at < total - static_cast<int64_t>(codomain.size()); ++at) chain.fold(true);
+    return carried(*this, chain.steps);
   }
 
   Tensor Tensor::conj() const
