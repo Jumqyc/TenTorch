@@ -19,8 +19,13 @@ class MPO:
       ValueError: when no site is given, or when a site does not have four legs.
     '''
 
-    def __init__(self, sites: Sequence[Tensor], physical: Leg, cat: FusionCategory,
-                 sector: Optional[Sector] = None, dtype = None, device = None) -> None:
+    def __init__(self, 
+                 sites: Sequence[Tensor], 
+                 physical: Leg, 
+                 cat: FusionCategory,
+                 sector: Optional[Sector] = None, 
+                 dtype = None, 
+                 device = None) -> None:
         self.tensors = list(sites)
         if not self.tensors:
             raise ValueError('an operator needs at least one site')

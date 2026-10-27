@@ -7,6 +7,7 @@ name = "tentorch"
 version = "0.1.0"
 description = "Block-sparse tensor networks: MPS, MPO, the DMRG sweep, the symmetry behind them, and the Gaussian fermion states built on the same pieces"
 requires-python = ">=3.12"
+dependencies = ["torch"]
 
 [tool.setuptools.packages.find]
 where = ["."]

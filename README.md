@@ -75,10 +75,15 @@ every run below matching the dense value to $10^{-11}$:
 
 | chain | bond | CPU s/sweep | GPU s/sweep |
 | --- | --- | --- | --- |
-| $L=16$ | 32 | 0.36 / 0.31 / 0.22 | 2.90 / 2.63 / 2.39 |
-| $L=32$ | 64 | 1.90 / 2.04 / 1.69 | 11.16 / 13.15 / 9.47 |
+| $L=16$ | 32 | 0.30 / 0.32 / 0.28 | 2.90 / 2.63 / 2.39 |
+| $L=32$ | 64 | 1.42 / 2.17 / 2.49 | 11.16 / 13.15 / 9.47 |
 
-The GPU is six to nine times slower here, as a contraction of these bonds is a few hundred small matrices, one per block pair, so a kernel launch costs more than the multiplication. `TENTORCH_DEVICE=cpu` forces the CPU while the bond is small. 
+The CPU column is the current engine. The GPU column was measured before the leg moves were folded
+into one pass and has not been measured since.
+
+The GPU is six to nine times slower here, as a contraction of these bonds is a few hundred small
+matrices, one per block pair, so a kernel launch costs more than the multiplication.
+`TENTORCH_DEVICE=cpu` forces the CPU while the bond is small. 
 
 - For reference, TeNPy on the same chains and the same settings takes
 0.08/0.22/0.29 s ($L=16$, $\chi = 32$) and 0.15/0.39/0.52 s ($L=32$, $\chi = 64$). The difference is that TenPy uses Group theory Clebsch-Gordan coefficients and fully utilize block structure of tensor, where as the categorical approach creates sparser block, and permutes the trees sequentially, making it less computational friendly.  
@@ -90,7 +95,7 @@ C++ engine benchmarks. `bench/README.md` records what each one measures.
 
 ```shell
 .venv/bin/python -m pytest tests -q                    # 26 tests, about two seconds
-TENTORCH_SLOW=1 .venv/bin/python -m pytest tests -q    # adds the long chain, about 25 s
+TENTORCH_SLOW=1 .venv/bin/python -m pytest tests -q    # adds the long chain, about 45 s
 ```
 
 `tests/README.md` says what is covered and what is not.

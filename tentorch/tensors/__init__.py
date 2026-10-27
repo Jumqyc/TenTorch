@@ -9,7 +9,9 @@ from tentorch._ext import (
     BlockKey,
     Tensor,
     block_keys,
+    codomain_legs,
     contract,
+    domain_legs,
     einsum,
     inner,
     is_close,
@@ -18,5 +20,6 @@ from tentorch._ext import (
 from tentorch.symmetry import Leg
 
 __all__ = [
-    'BlockKey', 'Leg', 'Tensor', 'block_keys', 'contract', 'einsum', 'inner', 'is_close', 'norm'
+    'BlockKey', 'Leg', 'Tensor', 'block_keys', 'codomain_legs', 'contract', 'domain_legs', 'einsum',
+    'inner', 'is_close', 'norm'
 ]

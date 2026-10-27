@@ -241,9 +241,16 @@ class Tensor:
         '''A copy that shares no storage with this tensor.'''
         ...
 
-    def repartition(self, codomain: Sequence[int]) -> Tensor:
+    @overload
+    def place(self, above: Sequence[int]) -> Tensor:
         '''The same tensor with the named legs on the codomain, in that order; the other legs keep
         their relative order on the domain.'''
+        ...
+
+    @overload
+    def place(self, above: Sequence[int], below: Sequence[int]) -> Tensor:
+        '''The same tensor with the legs the two lists name on the codomain and the domain; the two
+        lists together name every leg once, and the value and total charge do not change.'''
         ...
 
     def to_tuple(self) -> tuple[list[Leg], list[Leg], Sector, dict[BlockKey, torch.Tensor]]:
@@ -289,15 +296,26 @@ def block_keys(category: FusionCategory, codomain: Sequence[Leg], domain: Sequen
     '''The key of every block a tensor over those legs and that charge holds.'''
     ...
 
+def codomain_legs(tensor: Tensor) -> list[int]:
+    '''The positions of the codomain legs in the numbering of `Tensor.legs`.'''
+    ...
+
+def domain_legs(tensor: Tensor) -> list[int]:
+    '''The positions of the domain legs in the numbering of `Tensor.legs`.'''
+    ...
+
 @overload
-def contract(first: Tensor, other: Tensor, first_domain: Sequence[int],
-             other_codomain: Sequence[int]) -> Tensor: ...
 @overload
-def contract(first: Tensor, other: Tensor, first_domain: Sequence[int],
-             other_codomain: Sequence[int], charge: Sector) -> Tensor: ...
-def contract(first: Tensor, other: Tensor, first_domain: Sequence[int],
-             other_codomain: Sequence[int], charge: Sector) -> Tensor:
-    '''Contract the named legs of the two tensors, the charge of the result given explicitly.'''
+def contract(left: Tensor, right: Tensor, left_legs: Sequence[int],
+             right_legs: Sequence[int]) -> Tensor: ...
+@overload
+def contract(left: Tensor, right: Tensor, left_legs: Sequence[int],
+             right_legs: Sequence[int], charge: Sector) -> Tensor: ...
+def contract(left: Tensor, right: Tensor, left_legs: Sequence[int],
+             right_legs: Sequence[int], charge: Optional[Sector] = ...) -> Tensor:
+    '''Contract the legs the two lists name in pairs, summing one space per pair; the unpaired legs
+    keep the side they are on.  `charge` defaults to the charge of the left tensor, which requires
+    the right one to be neutral.'''
     ...
 
 def einsum(spec: str, *tensors: Tensor, outcharge: Optional[Sector] = ...) -> Tensor:

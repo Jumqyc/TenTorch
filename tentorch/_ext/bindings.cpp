@@ -270,7 +270,13 @@ namespace sym
           .def("keys", &Tensor::keys)
           .def("conj", &Tensor::conj)
           .def("clone", &Tensor::clone)
-          .def("repartition", &Tensor::repartition, py::arg("codomain"))
+          .def("place",
+               py::overload_cast<const std::vector<int64_t> &>(&Tensor::place, py::const_),
+               py::arg("above"))
+          .def("place",
+               py::overload_cast<const std::vector<int64_t> &, const std::vector<int64_t> &>(
+                 &Tensor::place, py::const_),
+               py::arg("above"), py::arg("below"))
           .def("__iadd__", &Tensor::operator+=, py::is_operator())
           .def("__isub__", &Tensor::operator-=, py::is_operator())
           .def("__imul__",
@@ -323,22 +329,21 @@ namespace sym
 
       m.def("block_keys", &block_keys, py::arg("category"), py::arg("codomain"), py::arg("domain"),
             py::arg("qtotal"));
+      m.def("codomain_legs", &codomain_legs, py::arg("tensor"));
+      m.def("domain_legs", &domain_legs, py::arg("tensor"));
     }
 
     void bind_linalg(py::module_ &m)
     {
       m.def(
         "contract",
-        [](const Tensor &first, const Tensor &other, const std::vector<int64_t> &first_domain,
-           const std::vector<int64_t> &other_codomain) {
-          return contract(first, other, first_domain, other_codomain);
+        [](const Tensor &left, const Tensor &right, const std::vector<int64_t> &left_legs,
+           const std::vector<int64_t> &right_legs, const std::optional<Sector> &charge) {
+          if (charge.has_value()) return contract(left, right, left_legs, right_legs, *charge);
+          return contract(left, right, left_legs, right_legs);
         },
-        py::arg("first"), py::arg("other"), py::arg("first_domain"), py::arg("other_codomain"));
-      m.def("contract",
-            py::overload_cast<const Tensor &, const Tensor &, const std::vector<int64_t> &,
-                              const std::vector<int64_t> &, const Sector &>(&contract),
-            py::arg("first"), py::arg("other"), py::arg("first_domain"), py::arg("other_codomain"),
-            py::arg("charge"));
+        py::arg("left"), py::arg("right"), py::arg("left_legs"), py::arg("right_legs"),
+        py::arg("charge") = py::none());
       m.def(
         "einsum",
         [](const std::string &spec, const py::args &args, const py::kwargs &options) {

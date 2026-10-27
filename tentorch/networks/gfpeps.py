@@ -9,7 +9,7 @@ from tentorch.linalg.freefermion.covariance import RandPureCov, symplectic_form
 from typing import Optional
 
 '''
-Based on arxiv:2012.04666: C.-M. Jian, B. Bauer, A. Keselman and A. W. W. Ludwig,"Criticality and entanglement in non-unitary quantum circuits and tensor networks of non-interacting fermions", Phys. Rev. B 106, 054309 (2022), Sec. III:fermionic Gaussian tensor networks.
+Based on arxiv:2012.04666: C.-M. Jian, B. Bauer, A. Keselman and A. W. W. Ludwig,"Criticality and entanglement in non-unitary quantum circuits and tensor networks of non-interacting fermions", Sec. III:fermionic Gaussian tensor networks.
 
 A node carries ``dim_of_node(node)`` Majorana modes and is described by its covariance matrix ``Gamma_ij = < i/2 [gamma_i, gamma_j] >`` that are grouped into blocks by the legs of the graph. 
 '''
@@ -626,20 +626,11 @@ class Sandwich:
 
     def contract(self)-> float:
         '''
-        Contract the state with the operator along the connecting points and
-        return the normalized value of ``<psi|O|psi>``.
+        Contract the state with the operator along the connecting points and return the normalized value of ``<psi|O|psi>``.
 
-        Both networks are contracted internally first, so every node contributes a
-        covariance matrix on its external modes. A connecting point ``(s, o)``
-        pairs the external modes of the state node ``s`` with those of the
-        operator node ``o`` in their layout order, so every state mode and every
-        operator mode has to appear in exactly one connecting point and the paired
-        dimensions have to agree; otherwise the contraction would leave open modes.
+        Both networks are contracted internally first, so every node contributes a covariance matrix on its external modes. A connecting point ``(s, o)`` pairs the external modes of the state node ``s`` with those of the operator node ``o`` in their layout order, so every state mode and every operator mode has to appear in exactly one connecting point and the paired dimensions have to agree; otherwise the contraction would leave open modes.
 
-        A covariance matrix fixes its Gaussian tensor only up to the normalization
-        and phase of that tensor, so the value that the networks determine is the
-        normalized magnitude ``|<psi|O|psi>| = det((1 - G_state G_operator)/2)**(1/4)``
-        of the two contracted pure Gaussian tensors.
+        A covariance matrix fixes its Gaussian tensor only up to the normalization and phase of that tensor, so the value that the networks determine is the normalized magnitude ``|<psi|O|psi>| = det((1 - G_state G_operator)/2)**(1/4)`` of the two contracted pure Gaussian tensors.
         '''
         state, state_modes = _contract_all(self.state)
         operator, operator_modes = _contract_all(self.operator)
@@ -667,11 +658,7 @@ class Sandwich:
         '''
         Reduce the state to the sites that connect to the operator.
 
-        Repeatedly a site that is not a connecting point but still has a neighbour
-        is contracted into that neighbour (preferring a connecting point), and the
-        connecting points are relabelled as the labels change. This leaves exactly
-        the connecting points, and shrinks a component without a connecting point
-        to a single site. ``self.state`` is left unchanged.
+        Repeatedly a site that is not a connecting point but still has a neighbour is contracted into that neighbour (preferring a connecting point), and the connecting points are relabelled as the labels change. This leaves exactly the connecting points, and shrinks a component without a connecting point to a single site. ``self.state`` is left unchanged.
         '''
         state = self.state
         keep = {point[0] for point in self.connecting_pts}

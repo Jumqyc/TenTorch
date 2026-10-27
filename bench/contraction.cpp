@@ -105,10 +105,10 @@ int main(int argc, char **argv)
       fill(right, 1.3);
       describe("left", left);
       describe("right", right);
-      const Tensor product = contract(left, right, {0, 1}, {0, 1}, neutral);
+      const Tensor product = contract(left, right, domain_legs(left), codomain_legs(right), neutral);
       describe("product", product);
       bench::run_for("contract(two bond legs)", seconds,
-                     [&] { (void) contract(left, right, {0, 1}, {0, 1}, neutral); });
+                     [&] { (void) contract(left, right, domain_legs(left), codomain_legs(right), neutral); });
     }
   }
   return 0;

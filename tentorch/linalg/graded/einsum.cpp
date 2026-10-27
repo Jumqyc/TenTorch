@@ -57,64 +57,6 @@ namespace sym
       return std::find(labels.begin(), labels.end(), label) != labels.end();
     }
 
-    // The tensor with every leg on the codomain: its codomain in place and then its domain, last one
-    // first, which is where a bend puts a leg every time.
-    Tensor all_up(const Tensor &tensor)
-    {
-      Tensor out = tensor;
-      for (int64_t at = static_cast<int64_t>(out.domain().size()); at > 0; --at)
-        out = out.move_across(at - 1, false);
-      return out;
-    }
-
-    // Where a leg of `tensor` sits once every leg is on the codomain, numbered as `legs()` numbers.
-    int64_t raised(const Tensor &tensor, int64_t leg)
-    {
-      const int64_t codomain = static_cast<int64_t>(tensor.codomain().size());
-      return leg < codomain ? leg : codomain + (static_cast<int64_t>(tensor.domain().size()) - 1 -
-                                                (leg - codomain));
-    }
-
-    // The tensor over the legs `above` on the codomain and `below` under them on the domain, each
-    // list in the order it is to read, every leg of the tensor named by one of them.  This is the
-    // general form of Tensor::repartition, which asks for the legs above in the order they already
-    // have and leaves the rest under them; the order below has to be spelled out here because a
-    // traced leg is put last on both sides.  A tensor that already sits that way costs nothing, one
-    // whose sides hold costs a permutation, and only the legs that have to change side are bent.
-    Tensor place(const Tensor &tensor, const std::vector<int64_t> &above,
-                 const std::vector<int64_t> &below)
-    {
-      const int64_t codomain = static_cast<int64_t>(tensor.codomain().size());
-      std::vector<int64_t> cod;
-      std::vector<int64_t> dom;
-      for (int64_t at = 0; at < tensor.nlegs(); ++at) (at < codomain ? cod : dom).push_back(at);
-      // A list is only the layout the tensor already has when it splits the legs the way the tensor
-      // does: the same count on each side and the same order.
-      bool held = static_cast<int64_t>(above.size()) == codomain &&
-                  static_cast<int64_t>(below.size()) == static_cast<int64_t>(tensor.domain().size());
-      for (size_t at = 0; at < above.size() && held; ++at) held = above.at(at) == static_cast<int64_t>(at);
-      for (size_t at = 0; at < below.size() && held; ++at)
-        held = below.at(at) == codomain + static_cast<int64_t>(at);
-      if (held) return tensor;
-      // The sides already hold: the domain is the one the tensor has and the codomain is a permutation
-      // of it, which exchanges alone reach.
-      bool sided = static_cast<int64_t>(above.size()) == codomain &&
-                   static_cast<int64_t>(below.size()) == static_cast<int64_t>(tensor.domain().size());
-      for (size_t at = 0; at < above.size() && sided; ++at) sided = above.at(at) < codomain;
-      for (size_t at = 0; at < below.size() && sided; ++at)
-        sided = below.at(at) == codomain + static_cast<int64_t>(at);
-      if (sided) return tensor.permute(above);
-      std::vector<int64_t> order;
-      for (const int64_t leg : above) order.push_back(raised(tensor, leg));
-      for (auto at = below.rbegin(); at != below.rend(); ++at) order.push_back(raised(tensor, *at));
-      Tensor out = all_up(tensor).permute(order);
-      for (size_t at = 0; at < below.size(); ++at)
-      {
-        out = out.move_across(static_cast<int64_t>(out.codomain().size()) - 1, true);
-      }
-      return out;
-    }
-
     // The tensor with every leg the equation sums left where it sits and every leg it keeps on the
     // side its case declares, together with the labels in the order the legs then read them.  A
     // summed leg is paired with the leg it meets in the other operand, so which side it takes is the
@@ -135,22 +77,7 @@ namespace sym
       std::vector<std::string> labels;
       for (const int64_t leg : above) labels.push_back(side.labels.at(static_cast<size_t>(leg)));
       for (const int64_t leg : below) labels.push_back(side.labels.at(static_cast<size_t>(leg)));
-      return {place(tensor, above, below), std::move(labels)};
-    }
-
-    // The fusion tree with its last vertex removed: one leg fewer, the root the remaining legs
-    // couple to.  The side with one leg leaves the unit tree.
-    FusionTree trimmed(const FusionCategory &cat, const FusionTree &tree)
-    {
-      const int64_t count = tree.size();
-      FusionTree out = tree;
-      out.sectors.pop_back();
-      if (!out.inner.empty()) out.inner.pop_back();
-      if (!out.copies.empty()) out.copies.pop_back();
-      if (count <= 1) out.coupled = cat.trivial();
-      else if (count == 2) out.coupled = tree.sectors.at(0);
-      else out.coupled = tree.inner.at(static_cast<size_t>(count - 3));
-      return out;
+      return {tensor.place(above, below), std::move(labels)};
     }
 
     // Where a tree sits in the layout of its own root; the layouts list the trees in a fixed order.
@@ -175,10 +102,7 @@ namespace sym
       for (const auto &[key, matrix] : tensor.blocks())
       {
         // A block whose own roots close in more than one way leaves the coefficient undetermined.
-        if (cat->n_symbol(key.codomain, cat->dual(key.domain), qtotal) > 1)
-          throw std::invalid_argument("the roots " + render(key.codomain) + " and " +
-                                      render(key.domain) + " of a trace close to " + render(qtotal) +
-                                      " in more than one way, which a trace does not recouple yet");
+        require_single_closing(*cat, key.codomain, key.domain, qtotal, "the roots", "a trace");
         const SideLayout &rows = tensor.rows_of(key.codomain);
         const SideLayout &columns = tensor.columns_of(key.domain);
         for (size_t row_at = 0; row_at < rows.trees.size(); ++row_at)
@@ -218,11 +142,8 @@ namespace sym
             for (const Outcome &closing :
                  cat->outcomes(kept_above.coupled, cat->dual(kept_under.coupled)))
             {
-              if (closing.multiplicity > 1)
-                throw std::invalid_argument(
-                  "the kept roots " + render(kept_above.coupled) + " and " +
-                  render(kept_under.coupled) + " of a trace close to " + render(closing.sector) +
-                  " in more than one way, which a trace does not recouple yet");
+              require_single_closing(*cat, kept_above.coupled, kept_under.coupled, closing.sector,
+                                     "the kept roots", "a trace");
               const auto slot = out.try_emplace(closing.sector, cat, out_codomain, out_domain,
                                                 closing.sector, tensor.dtype(), tensor.device());
               slot.first->second.block(kept_above.coupled, kept_under.coupled)
@@ -235,41 +156,6 @@ namespace sym
       }
       return std::vector<std::pair<Sector, Tensor>>(std::make_move_iterator(out.begin()),
                                                     std::make_move_iterator(out.end()));
-    }
-
-    // The product of two operands that share no label: one keeps every leg above and the other
-    // brings every leg below, so the block of the product is one block product with nothing summed.
-    Tensor outer(const Tensor &above, const Tensor &under, const Sector &charge)
-    {
-      const FusionCategory &cat = *above.cat();
-      if (!above.domain().empty() || !under.codomain().empty())
-        throw std::logic_error("an outer product takes one operand with its legs above and one with "
-                               "its legs below");
-      const int64_t closings = cat.n_symbol(above.qtotal(), under.qtotal(), charge);
-      if (closings > 1)
-        throw std::invalid_argument("the charges " + render(above.qtotal()) + " and " +
-                                    render(under.qtotal()) + " close to " + render(charge) +
-                                    " in more than one way, which an outer product does not "
-                                    "recouple yet");
-      // A block of an operand is labelled by the roots of its own closing vertex, so a closing that
-      // happens more than one way has no single copy to multiply and the product would drop it.
-      const auto refuse_copies = [&](const Tensor &operand, const char *where) {
-        for (const auto &[key, block] : operand.blocks())
-          if (cat.n_symbol(key.codomain, cat.dual(key.domain), operand.qtotal()) > 1)
-            throw std::invalid_argument("the roots " + render(key.codomain) + " and " +
-                                        render(key.domain) + " of the operand " + where +
-                                        " close to " + render(operand.qtotal()) +
-                                        " in more than one way, which an outer product does not "
-                                        "recouple yet");
-      };
-      refuse_copies(above, "above");
-      refuse_copies(under, "below");
-      Tensor out(above.cat(), above.codomain(), under.domain(), charge, above.dtype(),
-                 above.device());
-      for (const auto &[key, left] : above.blocks())
-        for (const auto &[held, right] : under.blocks())
-          out.block(key.codomain, held.domain).addmm_(left, right);
-      return out;
     }
 
     // The number of components of a leg, which is the size its label contributes to a tensor.
@@ -423,13 +309,6 @@ namespace sym
                                 const std::vector<Tensor> &right_states,
                                 const std::vector<std::string> &right_labels)
     {
-      // Every leg of a tensor, in the order the tensor reads them.
-      const auto legs_of = [](const Tensor &tensor)
-      {
-        std::vector<int64_t> out;
-        for (int64_t leg = 0; leg < tensor.nlegs(); ++leg) out.push_back(leg);
-        return out;
-      };
       // The sectors the two charges can close to, each listed once.
       const auto closings_of = [](const FusionCategory &cat, const Sector &first, const Sector &second)
       {
@@ -440,53 +319,28 @@ namespace sym
         return out;
       };
 
-      std::vector<Tensor> folded;
+      // Every shared label is summed, so its leg of the left slot pairs with its leg of the right
+      // one; a slot that shares nothing has no pair and the product is the outer one.
       const std::vector<std::string> shared = shared_of(left_labels, right_labels);
-      if (shared.empty())
-      {
-        // Nothing is summed: one slot keeps every leg above, the other brings every leg below, and
-        // no leg has to be recoupled.
-        for (const Tensor &left : left_states)
-          for (const Tensor &right : right_states)
-          {
-            const Tensor head = left.repartition(legs_of(left));
-            const Tensor tail = right.repartition({});
-            for (const Sector &closed : closings_of(*left.cat(), left.qtotal(), right.qtotal()))
-              folded.push_back(outer(head, tail, closed));
-          }
-        return folded;
-      }
-
-      // The left slot keeps its unsummed legs above and brings the summed ones below; the right slot
-      // brings the summed ones above and keeps the rest below.  One contraction then sums every
-      // shared label, the right slot's codomain being exactly the rows of the left slot's domain.
-      std::vector<int64_t> kept;
-      for (int64_t leg = 0; leg < static_cast<int64_t>(left_labels.size()); ++leg)
-        if (!holds(shared, left_labels.at(leg))) kept.push_back(leg);
-      std::vector<int64_t> summed;
-      std::vector<int64_t> order;
+      std::vector<int64_t> left_legs;
+      std::vector<int64_t> right_legs;
       for (const std::string &label : shared)
       {
-        summed.push_back(position_of(left_labels, label));
-        order.push_back(position_of(right_labels, label));
+        left_legs.push_back(position_of(left_labels, label));
+        right_legs.push_back(position_of(right_labels, label));
       }
-      std::vector<int64_t> rows;
-      for (size_t leg = 0; leg < shared.size(); ++leg) rows.push_back(static_cast<int64_t>(leg));
 
+      std::vector<Tensor> folded;
       for (const Tensor &left : left_states)
         for (const Tensor &right : right_states)
         {
-          std::vector<int64_t> loose = legs_of(right);
-          for (int64_t leg : order) loose.erase(std::find(loose.begin(), loose.end(), leg));
-          const Tensor head = place(left, kept, summed);
-          const Tensor tail = place(right, order, loose);
-          for (size_t one = 0; one < shared.size(); ++one)
-            if (!(head.domain().at(one) == tail.codomain().at(one)))
-              throw std::invalid_argument("the label '" + shared.at(one) +
-                                          "' of the equation names two different spaces in two "
-                                          "operands, and only one space can be summed over a label");
-          for (const Sector &closed : closings_of(*head.cat(), head.qtotal(), tail.qtotal()))
-            folded.push_back(contract(head, tail, rows, rows, closed));
+          // Which charge the pair closes to does not change the layout, so the two are laid out once
+          // and every closing only redoes the product over the blocks.
+          const auto [above, under] = align(left, right, left_legs, right_legs);
+          const std::vector<int64_t> above_legs = domain_legs(above);
+          const std::vector<int64_t> under_legs = codomain_legs(under);
+          for (const Sector &closed : closings_of(*left.cat(), left.qtotal(), right.qtotal()))
+            folded.push_back(contract(above, under, above_legs, under_legs, closed));
         }
       return folded;
     }
@@ -517,7 +371,7 @@ namespace sym
       for (size_t at = 0; at < output.labels.size(); ++at)
         (output.above.at(at) ? above : below).push_back(position_of(labels, output.labels.at(at)));
       std::vector<Tensor> out;
-      for (Tensor &state : states) out.push_back(place(state, above, below));
+      for (Tensor &state : states) out.push_back(state.place(above, below));
       return out;
     }
 
@@ -559,28 +413,20 @@ namespace sym
                                         "' names two different spaces in the operand " +
                                         std::to_string(at) + ", and a trace sums a space with "
                                         "itself");
-          // Two legs of one label on the same side pair through the invariant form of their space:
-          // bend one across, which is the recoupling that reads a leg on the other side.
-          const bool opposite = (first < codomain) != (second < codomain);
-          int64_t moved = second;
-          if (!opposite)
-          {
-            for (Tensor &alternative : alternatives)
-              alternative = alternative.move_across(second, first < codomain);
-            moved = alternatives.front().nlegs() - 1;
-          }
-          const int64_t above_leg = first < codomain ? first : moved;
-          const int64_t below_leg = first < codomain ? moved : first;
-          const int64_t sides = static_cast<int64_t>(alternatives.front().codomain().size());
+          // A trace reads one leg of the label above and the other below, and the placement does the
+          // recoupling when the two sit on one side: the leg already above is the upper one, so only
+          // the order the two are trimmed from changes when it is the second.
+          const int64_t above_leg = first < codomain ? first : second;
+          const int64_t below_leg = first < codomain ? second : first;
           std::vector<int64_t> above;
           std::vector<int64_t> below;
           for (int64_t leg = 0; leg < alternatives.front().nlegs(); ++leg)
-            if (leg != above_leg && leg != below_leg) (leg < sides ? above : below).push_back(leg);
+            if (leg != above_leg && leg != below_leg) (leg < codomain ? above : below).push_back(leg);
           above.push_back(above_leg);
           below.push_back(below_leg);
           std::vector<Tensor> traced;
           for (const Tensor &alternative : alternatives)
-            for (auto &answer : partial_trace(place(alternative, above, below)))
+            for (auto &answer : partial_trace(alternative.place(above, below)))
               traced.push_back(std::move(answer.second));
           alternatives = std::move(traced);
           labels.erase(labels.begin() + second);
@@ -593,6 +439,7 @@ namespace sym
     }
 
   } // namespace
+
 
   Tensor einsum(const std::string &spec, const std::vector<Tensor> &operands, const Sector &charge)
   {

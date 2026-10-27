@@ -4,8 +4,10 @@
 #include <complex>
 #include <map>
 #include <numeric>
+#include <set>
 #include <stdexcept>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 
 namespace sym
@@ -174,11 +176,14 @@ namespace sym
       std::complex<double> coefficient{0.0, 0.0};
     };
 
-    // Where the entries of one block go: the runs that land in one block of the result.
+    // Where the entries of one block go: the runs that land in one block of the result, and the shape
+    // of that block, so that a step need not look the layout up again for every block it fills.
     struct Shift
     {
       BlockKey from;
       BlockKey to;
+      int64_t rows = 0;
+      int64_t columns = 0;
       std::vector<Piece> pieces;
     };
 
@@ -360,75 +365,148 @@ namespace sym
       else into.copy_((into.contiguous().reshape({into.numel()}) + added.to(into.scalar_type())).reshape(into.sizes()));
     }
 
-    // The key of a regrouping: the legs and the block decide the trees and the coefficients.
-    std::vector<int64_t> plan_key(const std::vector<Leg> &codomain,
-                                  const std::vector<Leg> &domain,
-                                  const BlockKey &key,
-                                  const Sector &qtotal)
+    // One side of a step, written out: the legs and the blocks they carry.
+    void write_legs(std::vector<int64_t> &out, const std::vector<Leg> &legs)
     {
-      std::vector<int64_t> out;
-      for (const std::vector<Leg> *legs : {&codomain, &domain})
+      out.push_back(static_cast<int64_t>(legs.size()));
+      for (const Leg &leg : legs)
       {
-        out.push_back(static_cast<int64_t>(legs->size()));
-        for (const Leg &leg : *legs)
+        out.push_back(leg.nblocks());
+        for (int64_t block = 0; block < leg.nblocks(); ++block)
         {
-          out.push_back(leg.nblocks());
-          for (int64_t block = 0; block < leg.nblocks(); ++block)
-          {
-            const Sector &sector = leg.sector(block);
-            out.push_back(static_cast<int64_t>(sector.size()));
-            out.insert(out.end(), sector.begin(), sector.end());
-            out.push_back(leg.multiplicity(block));
-          }
+          const Sector &sector = leg.sector(block);
+          out.push_back(static_cast<int64_t>(sector.size()));
+          out.insert(out.end(), sector.begin(), sector.end());
+          out.push_back(leg.multiplicity(block));
         }
       }
-      for (const Sector *charge : {&key.codomain, &key.domain, &qtotal})
-      {
-        out.push_back(static_cast<int64_t>(charge->size()));
-        out.insert(out.end(), charge->begin(), charge->end());
-      }
-      out.push_back(key.copy);
-      return out;
     }
 
-    // The charge the codomain legs before the last one fuse to: the root the codomain keeps when its
-    // last leg is bent across.
-    Sector before_last(const FusionCategory &category, const FusionTree &tree)
+    // The interned sides of a step: equal legs give the same vector, and the vector stays where it is
+    // for as long as the program runs, so a plan can be named by where it sits.
+    const std::vector<int64_t> *interned_sides(const std::vector<Leg> &codomain, const std::vector<Leg> &domain)
     {
-      const int64_t count = tree.size();
-      if (count <= 1) return category.trivial();
-      if (count == 2) return tree.sectors.at(0);
-      return tree.inner.at(static_cast<size_t>(count - 3));
+      static std::set<std::vector<int64_t>> held;
+      std::vector<int64_t> key;
+      write_legs(key, codomain);
+      write_legs(key, domain);
+      return &*held.insert(std::move(key)).first;
     }
+
+    // The interned legs of one side, for the same reason.
+    const std::vector<int64_t> *interned_legs(const std::vector<Leg> &legs)
+    {
+      static std::set<std::vector<int64_t>> held;
+      std::vector<int64_t> key;
+      write_legs(key, legs);
+      return &*held.insert(std::move(key)).first;
+    }
+
+    // The layout of one side at one root.  A plan needs the layout of every side it starts from and
+    // ends at, and those repeat for every block of a tensor and every sweep, so the walk over the
+    // fusion trees is done once per (side, root) instead of once per block.
+    const SideLayout &cached_layout(const FusionCategory &cat,
+                                    const std::vector<Leg> &legs,
+                                    const Sector &root)
+    {
+      static std::map<std::tuple<const void *, const std::vector<int64_t> *, Sector>, SideLayout> held;
+      const auto asked = std::make_tuple(static_cast<const void *>(&cat), interned_legs(legs), root);
+      const auto found = held.find(asked);
+      if (found != held.end()) return found->second;
+      return held.emplace(asked, layout_of(cat, legs, root)).first->second;
+    }
+
+    // The name of a plan: the two sides of the step, the block it acts on, and which of the
+    // elementary moves it is.  The sides compare by address, which is what the interning buys.
+    struct PlanName
+    {
+      std::shared_ptr<const FusionCategory> cat;
+      const std::vector<int64_t> *sides = nullptr;
+      BlockKey key;
+      Sector qtotal;
+      // Which plan of the two builders this is, and where in the step: the two builders share the cache,
+      // so the kind is part of the name rather than implied by the one that is asking.
+      int64_t kind = 0;
+      int64_t arm = 0;
+
+      bool operator==(const PlanName &other) const
+      {
+        return std::tie(cat, sides, key, qtotal, kind, arm) ==
+               std::tie(other.cat, other.sides, other.key, other.qtotal, other.kind, other.arm);
+      }
+    };
+
+    // A probe beats a walk down a tree: a plan is found by hashing the name, and the name compares by
+    // address for the two sides, so a hit costs about as much as reading the block key.
+    struct PlanNameHash
+    {
+      static void mix(size_t &state, size_t value)
+      {
+        state ^= value + 0x9e3779b97f4a7c15ULL + (state << 6) + (state >> 2);
+      }
+
+      size_t operator()(const PlanName &name) const
+      {
+        size_t state = std::hash<const void *>()(name.cat.get());
+        mix(state, std::hash<const void *>()(name.sides));
+        for (const Sector *charge : {&name.key.codomain, &name.key.domain, &name.qtotal})
+          for (const int64_t value : *charge) mix(state, std::hash<int64_t>()(value));
+        mix(state, std::hash<int64_t>()(name.key.copy));
+        mix(state, std::hash<int64_t>()(name.kind));
+        mix(state, std::hash<int64_t>()(name.arm));
+        return state;
+      }
+    };
+
+    // The plans a run needs, keyed by leg structure, block and step, and the bytes their piece lists
+    // hold.  The set grows while the bond is still ramping and then stops — a 32 site chain at bond 64
+    // settles at about 800 MB after four sweeps and grows no further — so the budget is a ceiling for
+    // the case where it does keep growing, not a target.  Past it the whole cache goes and the plans
+    // are rebuilt on demand: at bond 64 a ceiling of 256 MB costs about a sixth of a sweep and saves
+    // 600 MB, while one much below a sweep's working set rebuilds every plan of every sweep.
+    constexpr int64_t kPlanBudget = 256LL * 1024 * 1024;
+
+    struct PlanCache
+    {
+      std::unordered_map<PlanName, Regrouping, PlanNameHash> plans;
+      int64_t bytes = 0;
+    };
+
+    PlanCache &plan_cache()
+    {
+      static PlanCache cache;
+      return cache;
+    }
+
 
     // The regrouping of exchanging the codomain legs `p` and `p + 1` of one block: the trees that
     // agree outside the pair recouple by F and R, and the width the two legs carry is read at the
     // exchanged position on the other side.
     const Regrouping &exchange_regrouping(const std::shared_ptr<const FusionCategory> &cat,
+                                          const std::vector<int64_t> *sides,
                                           const std::vector<Leg> &codomain,
                                           const std::vector<Leg> &domain,
                                           const BlockKey &key,
                                           const Sector &qtotal,
                                           int64_t p)
     {
-      using PlanKey = std::pair<std::shared_ptr<const FusionCategory>, std::vector<int64_t>>;
-      static std::map<PlanKey, Regrouping> plans;
-      std::vector<int64_t> fingerprint = plan_key(codomain, domain, key, qtotal);
-      fingerprint.insert(fingerprint.begin(), p);
-      const PlanKey name{cat, fingerprint};
-      const auto held = plans.find(name);
-      if (held != plans.end())
+      PlanCache &cache = plan_cache();
+      const PlanName name{cat, sides, key, qtotal, 0, p};
+      const auto held = cache.plans.find(name);
+      if (held != cache.plans.end())
       {
         return held->second;
       }
       const int64_t count = static_cast<int64_t>(codomain.size());
       std::vector<Leg> exchanged = codomain;
       std::swap(exchanged.at(static_cast<size_t>(p)), exchanged.at(static_cast<size_t>(p + 1)));
-      const SideLayout source = layout_of(*cat, codomain, key.codomain);
-      const SideLayout target = layout_of(*cat, exchanged, key.codomain);
-      const int64_t stride = layout_of(*cat, domain, key.domain).rows();
+      const SideLayout &source = cached_layout(*cat, codomain, key.codomain);
+      const SideLayout &target = cached_layout(*cat, exchanged, key.codomain);
+      const int64_t stride = cached_layout(*cat, domain, key.domain).rows();
       Regrouping plan;
-      plan.shifts.push_back(Shift{key, key, {}});
+      // An exchange moves entries about inside a block and leaves the block the same size, so the
+      // shape is the one the step already has.
+      plan.shifts.push_back(Shift{key, key, 0, 0, {}});
 
       // Everything about a tree that the exchange leaves alone.  A tree of the exchanged side is read
       // in the order before the exchange, so that the two sides meet on the same key.
@@ -497,11 +575,13 @@ namespace sym
         TORCH_CHECK(straight.size(0) == static_cast<int64_t>(olds.size()) &&
                       braided.size(0) == static_cast<int64_t>(news.size()),
                     "the exchange does not match the trees of the block");
-        std::map<Sector, int64_t> offset;
+        // The outcomes are a handful of sectors, so their offsets are read from a flat list: a map
+        // here would allocate on every group for no reason.
+        std::vector<std::pair<Sector, int64_t>> offset;
         int64_t at = 0;
         for (const Outcome &outcome : cat->outcomes(b, c))
         {
-          offset.emplace(outcome.sector, at);
+          offset.emplace_back(outcome.sector, at);
           at += outcome.multiplicity;
         }
         const std::vector<FIndex> from = cat->f_columns(y, b, c, d);
@@ -512,8 +592,9 @@ namespace sym
         // no entry.
         const auto braid_at = [&](const FIndex &index)
         {
-          const auto found = offset.find(index.sector);
-          return found == offset.end() ? -1 : found->second + index.inner;
+          for (const auto &[sector, start] : offset)
+            if (sector == index.sector) return start + index.inner;
+          return static_cast<int64_t>(-1);
         };
         std::vector<int64_t> rows;
         for (const FIndex &index : to) rows.push_back(braid_at(index));
@@ -529,24 +610,41 @@ namespace sym
         const c10::complex<double> *braided_entry = braided.data_ptr<c10::complex<double>>();
         const c10::complex<double> *straight_entry = straight.data_ptr<c10::complex<double>>();
         const c10::complex<double> *braid_entry = braid.data_ptr<c10::complex<double>>();
+        // The entries the product visits, read once: which row of the braided matrix, which entry of
+        // the braiding, and which column of the straight matrix.  Only the two tree indices are left
+        // to the loop below, so its body is arithmetic and no longer a scan of matching sectors.
+        struct Term
+        {
+          int64_t braided_at;
+          int64_t braid_at;
+          int64_t straight_at;
+        };
+        std::vector<Term> terms;
+        for (int64_t i = 0; i < to_size; ++i)
+        {
+          if (rows.at(static_cast<size_t>(i)) < 0) continue;
+          for (int64_t j = 0; j < from_size; ++j)
+          {
+            if (columns.at(static_cast<size_t>(j)) < 0) continue;
+            if (to.at(static_cast<size_t>(i)).sector != from.at(static_cast<size_t>(j)).sector) continue;
+            if (to.at(static_cast<size_t>(i)).outer != from.at(static_cast<size_t>(j)).outer) continue;
+            terms.push_back(Term{i,
+                                 rows.at(static_cast<size_t>(i)) * braid_columns +
+                                   columns.at(static_cast<size_t>(j)),
+                                 j});
+          }
+        }
         for (size_t one = 0; one < news.size(); ++one)
           for (size_t other = 0; other < olds.size(); ++other)
           {
+            const c10::complex<double> *braided_row =
+              braided_entry + static_cast<int64_t>(one) * to_size;
+            const c10::complex<double> *straight_row =
+              straight_entry + static_cast<int64_t>(other) * from_size;
             c10::complex<double> value{0.0, 0.0};
-            for (int64_t i = 0; i < to_size; ++i)
-            {
-              if (rows.at(static_cast<size_t>(i)) < 0) continue;
-              for (int64_t j = 0; j < from_size; ++j)
-              {
-                if (columns.at(static_cast<size_t>(j)) < 0) continue;
-                if (to.at(static_cast<size_t>(i)).sector != from.at(static_cast<size_t>(j)).sector) continue;
-                if (to.at(static_cast<size_t>(i)).outer != from.at(static_cast<size_t>(j)).outer) continue;
-                value += braided_entry[static_cast<int64_t>(one) * to_size + i] *
-                         braid_entry[rows.at(static_cast<size_t>(i)) * braid_columns +
-                                     columns.at(static_cast<size_t>(j))] *
-                         std::conj(straight_entry[static_cast<int64_t>(other) * from_size + j]);
-              }
-            }
+            for (const Term &term : terms)
+              value += braided_row[term.braided_at] * braid_entry[term.braid_at] *
+                       std::conj(straight_row[term.straight_at]);
             if (value.real() == 0.0 && value.imag() == 0.0) continue;
             factors.emplace(std::make_pair(news.at(one), olds.at(other)),
                             std::complex<double>(value.real(), value.imag()));
@@ -623,26 +721,36 @@ namespace sym
             }
           }
       }
-      return plans.emplace(name, std::move(plan)).first->second;
+      int64_t added = 0;
+      for (const Shift &shift : plan.shifts)
+        added += static_cast<int64_t>(shift.pieces.size()) * static_cast<int64_t>(sizeof(Piece));
+      if (kPlanBudget < cache.bytes + added)
+      {
+        cache.plans.clear();
+        cache.bytes = 0;
+        // The matrices are keyed by the address of the plan they came from, so they go with the plans.
+        matrix_cache().held.clear();
+        matrix_cache().bytes = 0;
+      }
+      cache.bytes += added;
+      return cache.plans.emplace(name, std::move(plan)).first->second;
     }
 
     // The regrouping of bending the last leg of one side onto the other, for one block.  The giving
     // tree keeps everything but its last vertex, the taking tree gains one, and the recoupling of the
     // two vertices carries the copies of the moved leg into the columns of the taking side.
     const Regrouping &bend_regrouping(const std::shared_ptr<const FusionCategory> &cat,
+                                      const std::vector<int64_t> *sides,
                                       const std::vector<Leg> &codomain,
                                       const std::vector<Leg> &domain,
                                       const BlockKey &key,
                                       const Sector &qtotal,
                                       bool from_codomain)
     {
-      using PlanKey = std::pair<std::shared_ptr<const FusionCategory>, std::vector<int64_t>>;
-      static std::map<PlanKey, Regrouping> plans;
-      std::vector<int64_t> fingerprint = plan_key(codomain, domain, key, qtotal);
-      fingerprint.insert(fingerprint.begin(), from_codomain ? 1 : 0);
-      const PlanKey name{cat, fingerprint};
-      const auto held = plans.find(name);
-      if (held != plans.end())
+      PlanCache &cache = plan_cache();
+      const PlanName name{cat, sides, key, qtotal, 1, from_codomain ? 1 : 0};
+      const auto held = cache.plans.find(name);
+      if (held != cache.plans.end())
       {
         return held->second;
       }
@@ -654,10 +762,10 @@ namespace sym
       kept_taking.push_back(moved_leg);
       const std::vector<Leg> out_codomain = from_codomain ? kept_giving : kept_taking;
       const std::vector<Leg> out_domain = from_codomain ? kept_taking : kept_giving;
-      const SideLayout moved_side = from_codomain ? layout_of(*cat, codomain, key.codomain)
-                                                  : layout_of(*cat, domain, key.domain);
-      const SideLayout gains_side = from_codomain ? layout_of(*cat, domain, key.domain)
-                                                  : layout_of(*cat, codomain, key.codomain);
+      const SideLayout &moved_side = cached_layout(*cat, from_codomain ? codomain : domain,
+                                                   from_codomain ? key.codomain : key.domain);
+      const SideLayout &gains_side = cached_layout(*cat, from_codomain ? domain : codomain,
+                                                   from_codomain ? key.domain : key.codomain);
       const Sector moved_root = from_codomain ? key.codomain : key.domain;
       const Sector gains_root = from_codomain ? key.domain : key.codomain;
       const int64_t source_stride = (from_codomain ? gains_side : moved_side).rows();
@@ -666,21 +774,21 @@ namespace sym
       // a recoupling finds them without a scan.
       struct OutputLayout
       {
-        SideLayout rows;
-        SideLayout columns;
+        const SideLayout *rows = nullptr;
+        const SideLayout *columns = nullptr;
         std::map<FusionTree, int64_t> row_of;
         std::map<FusionTree, int64_t> column_of;
       };
 
       Regrouping plan;
       std::map<BlockKey, size_t> at_of;
-      const auto index_of = [&](const BlockKey &to) -> size_t
+      const auto index_of = [&](const BlockKey &to, int64_t rows, int64_t columns) -> size_t
       {
         const auto found = at_of.find(to);
         if (found != at_of.end()) return found->second;
         const size_t index = plan.shifts.size();
         at_of.emplace(to, index);
-        plan.shifts.push_back(Shift{key, to, {}});
+        plan.shifts.push_back(Shift{key, to, rows, columns, {}});
         return index;
       };
       std::map<std::pair<Sector, Sector>, OutputLayout> out_layouts;
@@ -697,7 +805,9 @@ namespace sym
           const int64_t copies = moved_leg.multiplicity(leg_block);
           const int64_t span = moved_side.offsets.at(moved_at + 1) - moved_side.offsets.at(moved_at);
           const int64_t inside = span / copies;
-          const Sector prefix = before_last(*cat, moved_tree);
+          // The tree the giving side keeps: its last vertex is gone.
+          const FusionTree kept_tree = trimmed(*cat, moved_tree);
+          const Sector prefix = kept_tree.coupled;
           const int64_t copy = moved_tree.size() >= 2 ? moved_tree.copies.back() : 0;
           // The vertex the leg bends through: on the codomain it is (prefix, leg) and the other root
           // closes last, on the domain the roles swap, which is the same recoupling read from the
@@ -720,15 +830,6 @@ namespace sym
                 named.at(at).outer == key.copy)
               taken.push_back(static_cast<int64_t>(at));
           if (taken.empty()) continue;
-          // The tree the giving side keeps: its last vertex is gone.
-          FusionTree trimmed;
-          trimmed.sectors = moved_tree.sectors;
-          trimmed.sectors.pop_back();
-          trimmed.inner = moved_tree.inner;
-          if (!trimmed.inner.empty()) trimmed.inner.pop_back();
-          trimmed.copies = moved_tree.copies;
-          if (!trimmed.copies.empty()) trimmed.copies.pop_back();
-          trimmed.coupled = prefix;
           const int64_t source_row = moved_side.offsets.at(moved_at);
           const int64_t source_column = gains_side.offsets.at(gains_at);
           for (const int64_t index : taken)
@@ -757,24 +858,27 @@ namespace sym
               if (found == out_layouts.end())
               {
                 OutputLayout fresh;
-                fresh.rows = layout_of(*cat, out_codomain, out_codomain_root);
-                fresh.columns = layout_of(*cat, out_domain, out_domain_root);
-                for (size_t at = 0; at < fresh.rows.trees.size(); ++at)
-                  fresh.row_of.emplace(fresh.rows.trees.at(at), static_cast<int64_t>(at));
-                for (size_t at = 0; at < fresh.columns.trees.size(); ++at)
-                  fresh.column_of.emplace(fresh.columns.trees.at(at), static_cast<int64_t>(at));
+                fresh.rows = &cached_layout(*cat, out_codomain, out_codomain_root);
+                fresh.columns = &cached_layout(*cat, out_domain, out_domain_root);
+                for (size_t at = 0; at < fresh.rows->trees.size(); ++at)
+                  fresh.row_of.emplace(fresh.rows->trees.at(at), static_cast<int64_t>(at));
+                for (size_t at = 0; at < fresh.columns->trees.size(); ++at)
+                  fresh.column_of.emplace(fresh.columns->trees.at(at), static_cast<int64_t>(at));
                 found = out_layouts.emplace(roots, std::move(fresh)).first;
               }
               const OutputLayout &layout = found->second;
-              const auto row_at = layout.row_of.find(from_codomain ? trimmed : extended);
-              const auto column_at = layout.column_of.find(from_codomain ? extended : trimmed);
+              const auto row_at = layout.row_of.find(from_codomain ? kept_tree : extended);
+              const auto column_at = layout.column_of.find(from_codomain ? extended : kept_tree);
               if (row_at == layout.row_of.end() || column_at == layout.column_of.end()) continue;
-              const int64_t row = layout.rows.offsets.at(static_cast<size_t>(row_at->second));
-              const int64_t column_offset = layout.columns.offsets.at(static_cast<size_t>(column_at->second));
-              const int64_t target_stride = layout.columns.rows();
+              const int64_t row = layout.rows->offsets.at(static_cast<size_t>(row_at->second));
+              const int64_t column_offset = layout.columns->offsets.at(static_cast<size_t>(column_at->second));
+              const int64_t block_rows = layout.rows->rows();
+              const int64_t block_columns = layout.columns->rows();
+              const int64_t target_stride = block_columns;
               std::vector<Piece> &pieces =
                 plan.shifts
-                  .at(index_of(BlockKey{out_codomain_root, out_domain_root, taken_side.outer}))
+                  .at(index_of(BlockKey{out_codomain_root, out_domain_root, taken_side.outer}, block_rows,
+                               block_columns))
                   .pieces;
               const std::complex<double> factor(value.real(), value.imag());
               if (from_codomain)
@@ -798,7 +902,19 @@ namespace sym
             }
         }
       }
-      return plans.emplace(name, std::move(plan)).first->second;
+      int64_t added = 0;
+      for (const Shift &shift : plan.shifts)
+        added += static_cast<int64_t>(shift.pieces.size()) * static_cast<int64_t>(sizeof(Piece));
+      if (kPlanBudget < cache.bytes + added)
+      {
+        cache.plans.clear();
+        cache.bytes = 0;
+        // The matrices are keyed by the address of the plan they came from, so they go with the plans.
+        matrix_cache().held.clear();
+        matrix_cache().bytes = 0;
+      }
+      cache.bytes += added;
+      return cache.plans.emplace(name, std::move(plan)).first->second;
     }
 
   } // namespace
@@ -821,6 +937,7 @@ namespace sym
       int64_t position = 0;
       std::vector<Leg> codomain;
       std::vector<Leg> domain;
+      const std::vector<int64_t> *sides = nullptr;
     };
 
     // A chain of steps together with the legs the tensor has after each of them, built by the moves
@@ -860,7 +977,9 @@ namespace sym
       }
 
       // The exchanges a bubble sort takes to reach `order`, which leaves the codomain legs in that
-      // order.
+      // order.  A number in `order` is a position in the codomain as it stands now, not a leg
+      // number: the two agree only while no leg has been lifted off the domain, so a caller that
+      // has already folded legs up has to map its leg numbers through the layout it built.
       void sort(const std::vector<int64_t> &order)
       {
         std::vector<int64_t> which(codomain.size());
@@ -886,6 +1005,7 @@ namespace sym
         step.position = position;
         step.codomain = codomain;
         step.domain = domain;
+        step.sides = interned_sides(codomain, domain);
         steps.push_back(std::move(step));
       }
     };
@@ -896,8 +1016,9 @@ namespace sym
                                     const BlockKey &key, const Sector &qtotal)
     {
       if (step.kind == Rebase::Kind::exchange)
-        return exchange_regrouping(category, codomain, domain, key, qtotal, step.position);
-      return bend_regrouping(category, codomain, domain, key, qtotal, step.kind == Rebase::Kind::to_domain);
+        return exchange_regrouping(category, step.sides, codomain, domain, key, qtotal, step.position);
+      return bend_regrouping(category, step.sides, codomain, domain, key, qtotal,
+                             step.kind == Rebase::Kind::to_domain);
     }
 
     // A shape of a side, written so that two sides with the same legs and root share one key.
@@ -933,6 +1054,47 @@ namespace sym
         .first->second;
     }
 
+    // The buffers a chain fills and drops again. Every elementary move writes a fresh block, so
+    // without this each step asks the allocator for one and the allocator costs more than the move.
+    struct BufferPool
+    {
+      std::map<std::pair<int64_t, int64_t>, std::vector<at::Tensor>> held;
+      int64_t bytes = 0;
+    };
+
+    constexpr int64_t kBufferBudget = 64LL * 1024 * 1024;
+
+    BufferPool &buffer_pool()
+    {
+      thread_local BufferPool pool;
+      return pool;
+    }
+
+    // A zeroed buffer of the shape asked for, reused from the pool when one is held.
+    at::Tensor borrow_buffer(const at::TensorOptions &options, int64_t rows, int64_t columns)
+    {
+      BufferPool &pool = buffer_pool();
+      const auto found = pool.held.find({rows, columns});
+      if (found == pool.held.end() || found->second.empty())
+      {
+        return at::zeros({rows, columns}, options);
+      }
+      at::Tensor taken = std::move(found->second.back());
+      found->second.pop_back();
+      pool.bytes -= taken.numel() * taken.element_size();
+      return taken.zero_();
+    }
+
+    // Hands a buffer back, unless the pool already holds as much as it will.
+    void return_buffer(at::Tensor buffer)
+    {
+      BufferPool &pool = buffer_pool();
+      const int64_t size = buffer.numel() * buffer.element_size();
+      if (pool.bytes + size > kBufferBudget) return;
+      pool.bytes += size;
+      pool.held[{buffer.size(0), buffer.size(1)}].push_back(std::move(buffer));
+    }
+
     // Runs a chain of steps over every block of a tensor: the entries of a block are carried in
     // buffers from step to step, so the chain builds one tensor and not one per step.
     Tensor carried(const Tensor &tensor, const std::vector<Rebase> &steps)
@@ -945,10 +1107,9 @@ namespace sym
       for (const auto &[start, block] : tensor.blocks())
       {
         // The entries of this block as they travel: the blocks of the legs the chain has reached, and
-        // the buffers of the step before, which the next step wipes and uses again.
+        // the buffers it borrows for the step it is on.
         std::map<BlockKey, at::Tensor> live;
         live.emplace(start, block.contiguous());
-        std::map<BlockKey, at::Tensor> spare;
         // The legs of the step, which the chain owns: the entries only need to read them.
         const std::vector<Leg> *codomain = &tensor.codomain();
         const std::vector<Leg> *domain = &tensor.domain();
@@ -958,38 +1119,33 @@ namespace sym
           const bool last = at + 1 == steps.size();
           std::map<BlockKey, at::Tensor> next;
           // The block a shift lands in: the result on the last step, a wiped buffer before it.
-          const auto target_of = [&](const BlockKey &key) -> at::Tensor & {
+          const auto target_of = [&](const BlockKey &key, int64_t rows, int64_t columns) -> at::Tensor & {
             if (last) return out.block(key.codomain, key.domain, key.copy);
             const auto found = next.find(key);
             if (found != next.end()) return found->second;
-            const int64_t rows = side_rows(tensor.cat(), step.codomain, key.codomain);
-            const int64_t columns = side_rows(tensor.cat(), step.domain, key.domain);
-            for (auto spare_at = spare.begin(); spare_at != spare.end(); ++spare_at)
-            {
-              if (spare_at->second.size(0) != rows || spare_at->second.size(1) != columns) continue;
-              at::Tensor reused = std::move(spare_at->second);
-              spare.erase(spare_at);
-              reused.zero_();
-              return next.emplace(key, std::move(reused)).first->second;
-            }
-            at::Tensor fresh_block = at::zeros({rows, columns}, options);
-            return next.emplace(key, std::move(fresh_block)).first->second;
+            return next.emplace(key, borrow_buffer(options, rows, columns)).first->second;
           };
           for (const auto &[key, buffer] : live)
           {
             const Regrouping &plan =
               regrouping_of(step, tensor.cat(), *codomain, *domain, key, tensor.qtotal());
-            std::vector<BlockKey> targets;
+            // Every target block of the plan, with the shape the plan recorded for it; an exchange
+            // leaves a block the size it already has.
+            std::vector<std::pair<BlockKey, std::pair<int64_t, int64_t>>> targets;
             for (const Shift &shift : plan.shifts)
-              if (std::find(targets.begin(), targets.end(), shift.to) == targets.end())
-                targets.push_back(shift.to);
-            for (const BlockKey &target : targets) add_into(plan, target, buffer, target_of(target), matrices);
+              if (std::none_of(targets.begin(), targets.end(),
+                               [&](const auto &seen) { return seen.first == shift.to; }))
+                targets.emplace_back(shift.to, std::make_pair(shift.rows == 0 ? buffer.size(0) : shift.rows,
+                                                              shift.columns == 0 ? buffer.size(1) : shift.columns));
+            for (const auto &[target, shape] : targets)
+              add_into(plan, target, buffer, target_of(target, shape.first, shape.second), matrices);
           }
           codomain = &step.codomain;
           domain = &step.domain;
-          // The buffer of the first step is the block of the tensor itself, so it is never recycled.
+          // The buffer of the first step is the block of the tensor itself or a view of it, so it is
+          // the one buffer the chain did not borrow.
           if (at > 0)
-            for (auto &entry : live) spare.emplace(entry.first, std::move(entry.second));
+            for (auto &entry : live) return_buffer(std::move(entry.second));
           live = std::move(next);
         }
       }
@@ -998,119 +1154,89 @@ namespace sym
 
   } // namespace
 
-  Tensor Tensor::swap(int64_t position) const
+  Tensor Tensor::place(const std::vector<int64_t> &above) const
   {
-    const int64_t count = static_cast<int64_t>(codomain_.size());
-    if (position < 0 || position + 1 >= count)
-    {
-      throw std::invalid_argument("a swap needs two adjacent codomain legs, got position " +
-                                  std::to_string(position));
-    }
-    Chain chain(codomain_, domain_);
-    chain.exchange(position);
-    return carried(*this, chain.steps);
-  }
-
-  Tensor Tensor::move_across(int64_t position, bool from_codomain) const
-  {
-    const int64_t count = static_cast<int64_t>((from_codomain ? codomain_ : domain_).size());
-    if (position < 0 || position >= count)
-      throw std::invalid_argument("there is no leg on that side at position " + std::to_string(position));
-    Chain chain(codomain_, domain_);
-    if (from_codomain || position + 1 == count)
-    {
-      // The leg is brought to the end of its side, so the bend always sees it there.
-      if (position + 1 != count)
-      {
-        std::vector<int64_t> order;
-        for (int64_t at = 0; at < count; ++at)
-          if (at != position) order.push_back(at);
-        order.push_back(position);
-        chain.sort(order);
-      }
-      chain.fold(from_codomain);
-      return carried(*this, chain.steps);
-    }
-    // A domain leg is always bent from the end of its side, so the legs behind it are parked on the
-    // codomain and brought back afterwards, which keeps their order.
-    int64_t parked = 0;
-    while (static_cast<int64_t>(chain.domain.size()) > position + 1)
-    {
-      chain.fold(false);
-      ++parked;
-    }
-    chain.fold(false);
-    ++parked;
-    // The bent leg was taken last, so it is the end of the tail; it goes back in front of the parked
-    // ones, whose order is kept, so that bringing them back appends them in the order they had.
-    const int64_t count_codomain = static_cast<int64_t>(chain.codomain.size());
-    const int64_t kept = count_codomain - parked;
-    std::vector<int64_t> order;
-    for (int64_t at = 0; at < kept; ++at) order.push_back(at);
-    order.push_back(count_codomain - 1);
-    for (int64_t at = kept; at + 1 < count_codomain; ++at) order.push_back(at);
-    chain.sort(order);
-    for (int64_t back = 1; back < parked; ++back) chain.fold(true);
-    return carried(*this, chain.steps);
-  }
-
-  Tensor Tensor::permute(const std::vector<int64_t> &order) const
-  {
-    const int64_t count = static_cast<int64_t>(codomain_.size());
-    if (static_cast<int64_t>(order.size()) != count)
-    {
-      throw std::invalid_argument("a permutation needs one entry per codomain leg, got " +
-                                  std::to_string(order.size()));
-    }
-    std::vector<bool> seen(static_cast<size_t>(count), false);
-    for (const int64_t leg : order)
-    {
-      if (leg < 0 || leg >= count || seen.at(static_cast<size_t>(leg)))
-        throw std::invalid_argument("the entry " + std::to_string(leg) +
-                                    " does not name a distinct codomain leg");
-      seen.at(static_cast<size_t>(leg)) = true;
-    }
-    Chain chain(codomain_, domain_);
-    chain.sort(order);
-    return carried(*this, chain.steps);
-  }
-
-  Tensor Tensor::repartition(const std::vector<int64_t> &codomain) const
-  {
-    const int64_t given = static_cast<int64_t>(codomain_.size());
-    const int64_t count = static_cast<int64_t>(domain_.size());
-    const int64_t total = given + count;
-    std::vector<bool> wanted(static_cast<size_t>(total), false);
-    for (const int64_t leg : codomain)
+    const int64_t total = nlegs();
+    std::vector<bool> named(static_cast<size_t>(total), false);
+    for (const int64_t leg : above)
     {
       if (leg < 0 || leg >= total)
         throw std::invalid_argument("the leg " + std::to_string(leg) + " does not exist, the tensor has " +
                                     std::to_string(total) + " legs");
-      if (wanted.at(static_cast<size_t>(leg)))
+      if (named.at(static_cast<size_t>(leg)))
         throw std::invalid_argument("the leg " + std::to_string(leg) + " is named twice");
-      wanted.at(static_cast<size_t>(leg)) = true;
+      named.at(static_cast<size_t>(leg)) = true;
     }
-    // A split that already holds costs nothing, which is the common case inside a sweep.
-    bool kept = static_cast<int64_t>(codomain.size()) == given;
-    for (int64_t at = 0; kept && at < given; ++at) kept = codomain.at(static_cast<size_t>(at)) == at;
-    if (kept) return *this;
-    // Every leg is bent onto the codomain, which is the side that can be permuted, so the legs can be
-    // put in any order there; the domain legs are taken off from its end, so they arrive in the
-    // reverse of their original order.
+    std::vector<int64_t> below;
+    below.reserve(static_cast<size_t>(total - static_cast<int64_t>(above.size())));
+    for (int64_t leg = 0; leg < total; ++leg)
+      if (!named.at(static_cast<size_t>(leg))) below.push_back(leg);
+    return place(above, below);
+  }
+
+  Tensor Tensor::place(const std::vector<int64_t> &above, const std::vector<int64_t> &below) const
+  {
+    const int64_t height = static_cast<int64_t>(codomain_.size());
+    const int64_t depth = static_cast<int64_t>(domain_.size());
+    const int64_t total = height + depth;
+    // A layout names every leg once: a number that is out of range or repeated, or a leg that is
+    // named on neither side, leaves the result without a meaning.
+    std::vector<bool> named(static_cast<size_t>(total), false);
+    for (const std::vector<int64_t> *side : {&above, &below})
+      for (const int64_t leg : *side)
+      {
+        if (leg < 0 || leg >= total)
+          throw std::invalid_argument("the leg " + std::to_string(leg) + " does not exist, the tensor has " +
+                                      std::to_string(total) + " legs");
+        if (named.at(static_cast<size_t>(leg)))
+          throw std::invalid_argument("the leg " + std::to_string(leg) + " is named twice");
+        named.at(static_cast<size_t>(leg)) = true;
+      }
+    if (static_cast<int64_t>(above.size() + below.size()) != total)
+    {
+      int64_t left_out = 0;
+      while (named.at(static_cast<size_t>(left_out))) ++left_out;
+      throw std::invalid_argument("the leg " + std::to_string(left_out) + " is named on neither side");
+    }
     Chain chain(codomain_, domain_);
+    // The front of the domain can be left alone when nothing has to come down and the legs named
+    // below start with the legs that are already there: then only the back of the domain is lifted,
+    // and every leg in front of it is neither lifted nor folded back.
+    bool descends = false;
+    for (size_t at = 0; !descends && at < below.size(); ++at) descends = below.at(at) < height;
+    int64_t kept = 0;
+    while (!descends && kept < depth && kept < static_cast<int64_t>(below.size()) &&
+           below.at(static_cast<size_t>(kept)) == height + kept)
+      ++kept;
+    if (kept > 0)
+    {
+      // The legs behind the ones that stay are lifted off the end of the domain, one fold each; the
+      // folds take the end of the codomain first, so the legs that come back down are named last
+      // first, and they land on the domain in the order the caller named them in.
+      for (int64_t at = kept; at < depth; ++at) chain.fold(false);
+      const auto position_of = [height, depth](const int64_t leg) {
+        return leg < height ? leg : height + (depth - 1 - (leg - height));
+      };
+      std::vector<int64_t> order;
+      order.reserve(static_cast<size_t>(total - kept));
+      for (const int64_t leg : above) order.push_back(position_of(leg));
+      for (auto leg = below.rbegin(); leg != below.rend() - kept; ++leg) order.push_back(position_of(*leg));
+      chain.sort(order);
+      for (int64_t at = kept; at < static_cast<int64_t>(below.size()); ++at) chain.fold(true);
+      return carried(*this, chain.steps);
+    }
+    // Otherwise every leg is bent onto the codomain, the only side that can be ordered; a leg taken
+    // off its end goes back last named first, so the folds below land the domain in the named order.
     while (!chain.domain.empty()) chain.fold(false);
-    auto position_of = [given, count](int64_t leg) {
-      return leg < given ? leg : given + (count - 1 - (leg - given));
+    const auto position_of = [height, depth](const int64_t leg) {
+      return leg < height ? leg : height + (depth - 1 - (leg - height));
     };
-    // The legs that stay on the codomain keep the order they were named in; the legs that go back to
-    // the domain are put there last one first, so they land in their original order.
     std::vector<int64_t> order;
     order.reserve(static_cast<size_t>(total));
-    for (const int64_t leg : codomain) order.push_back(position_of(leg));
-    for (int64_t leg = total - 1; leg >= 0; --leg)
-      if (!wanted.at(static_cast<size_t>(leg))) order.push_back(position_of(leg));
+    for (const int64_t leg : above) order.push_back(position_of(leg));
+    for (auto leg = below.rbegin(); leg != below.rend(); ++leg) order.push_back(position_of(*leg));
     chain.sort(order);
-    for (int64_t at = 0; at < total - static_cast<int64_t>(codomain.size()); ++at) chain.fold(true);
+    for (int64_t at = 0; at < static_cast<int64_t>(below.size()); ++at) chain.fold(true);
     return carried(*this, chain.steps);
   }
 
@@ -1122,6 +1248,22 @@ namespace sym
     for (const auto &[key, block] : blocks_)
       out.block(key.domain, key.codomain, key.copy).copy_(block.conj().transpose(0, 1));
     return out;
+  }
+
+  std::vector<int64_t> codomain_legs(const Tensor &tensor)
+  {
+    std::vector<int64_t> legs(static_cast<size_t>(tensor.codomain().size()));
+    for (int64_t at = 0; at < static_cast<int64_t>(legs.size()); ++at) legs.at(static_cast<size_t>(at)) = at;
+    return legs;
+  }
+
+  std::vector<int64_t> domain_legs(const Tensor &tensor)
+  {
+    const int64_t above = static_cast<int64_t>(tensor.codomain().size());
+    std::vector<int64_t> legs(static_cast<size_t>(tensor.domain().size()));
+    for (int64_t at = 0; at < static_cast<int64_t>(legs.size()); ++at)
+      legs.at(static_cast<size_t>(at)) = above + at;
+    return legs;
   }
 
   Tensor Tensor::clone() const

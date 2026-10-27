@@ -87,6 +87,8 @@ validate = _extension.validate
 reachable_charges = _extension.reachable_charges
 fusion_trees = _extension.fusion_trees
 block_keys = _extension.block_keys
+codomain_legs = _extension.codomain_legs
+domain_legs = _extension.domain_legs
 
 # the contraction, the scalar products and the splittings
 contract = _extension.contract

@@ -28,14 +28,7 @@ namespace sym
    * @details The blocks are held sorted by sector, so two legs over the same space hold identical
    * storage and compare equal without a search.
    *
-   * The sectors a leg stores are the charges of the space it indexes, so a leg reads the same
-   * whichever side of a tensor it sits on and two legs over one space are one value.  The arrow is
-   * not stored: a domain leg carries a bra index, so the charge it contributes to the fusion is the
-   * dual of what it stores, and that dual is taken where the total charge is compared.
-   *
-   * `dim` counts components and `multiplets` counts copies.  A block of multiplicity $m$ in sector
-   * $c$ contributes $m \dim c$ components and $m$ multiplets; a bond dimension is counted in
-   * multiplets, which is the quantity a truncation is expressed in.
+   * The sectors a leg stores are the charges of the space it indexes, so a leg reads the same whichever side of a tensor it sits on and two legs over one space are one value.  The arrow is not stored: a domain leg carries a bra index, so the charge it contributes to the fusion is the dual of what it stores, and that dual is taken where the total charge is compared. `dim` counts components and `multiplets` counts copies.  A block of multiplicity $m$ in sector $c$ contributes $m \dim c$ components and $m$ multiplets; a bond dimension is counted in multiplets, which is the quantity a truncation is expressed in.
    */
   class Leg
   {
@@ -192,6 +185,18 @@ namespace sym
   std::vector<FusionTree> fusion_trees(const FusionCategory &category,
                                        const std::vector<Leg> &legs,
                                        const Sector &coupled);
+
+  /**
+   * @brief The tree with its last vertex removed, which is the tree of the side that loses a leg.
+   * @param category The category, which decides what the remaining legs couple to.
+   * @param tree The tree to trim; it has to have at least one leg.
+   * @return The tree over one leg fewer whose root is the charge the remaining legs fuse to.
+   * @details The last vertex is the one the leg hangs from, so the leg's sector, the copy it runs
+   * over and the charge through it are the three entries that go, and the root of the result is the
+   * charge the vertex before it carries: the trivial charge for a side that had one leg, the sector
+   * of the first leg for one that had two, and the last inner charge otherwise.
+   */
+  FusionTree trimmed(const FusionCategory &category, const FusionTree &tree);
 
   // The sector as it is written in a message, `(0,)` for one component and `(0, 0)` for two.
   std::string render(const Sector &sector);

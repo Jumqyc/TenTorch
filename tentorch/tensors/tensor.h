@@ -175,57 +175,36 @@ namespace sym
     std::vector<BlockKey> keys() const;
 
     /**
-     * @brief The same tensor with two adjacent codomain legs exchanged.
-     * @param position The left of the two legs, in $[0, n - 2]$.
-     * @return The tensor whose legs at `position` and `position + 1` are exchanged.
-     * @throws std::invalid_argument When the position is out of range.
-     * @details The charge content of the blocks does not change, because the set of trees that reach
-     * a root does not change: what changes is which basis vector each tree is.  The exchange of two
-     * adjacent legs is the recoupling
-     * $S = F^{d}_{y c b} \cdot R^{f}_{bc} \cdot (F^{d}_{y b c})^{\dagger}$ on the pair, where $y$ is
-     * the charge of the legs before it and $d$ the charge of the legs through it, applied to every
-     * tree the pair leaves free.  The $R$ factor is what carries the sign: exchanging the two legs
-     * of a singlet multiplies it by $R^{0}_{1/2\,1/2} = -1$.
+     * @brief The same tensor with `above` on the codomain and `below` on the domain.
+     * @param above The legs to read as codomain, in the order they are to appear; a leg is numbered
+     * over the codomain legs followed by the domain legs, as `legs()` numbers them.
+     * @param below The legs to read as domain, in the order they are to appear.  The two lists name
+     * every leg exactly once.
+     * @return The same entries read with that layout.
+     * @throws std::invalid_argument When a number is out of range, is named twice, or is left out.
+     * @details A leg stores the space it indexes and not the side it sits on, so a leg that crosses
+     * keeps both its value and the total charge: only the basis of the trees holding it changes.
+     * The codomain is the side whose legs can be ordered, so every leg is bent onto the codomain,
+     * the order there is reached by exchanging neighbours, and the legs that end on the domain are
+     * taken off its end last named first, which is what lands them in the order they were named in.
+     * A layout whose sides already hold the right legs costs those exchanges alone.
+     *
+     * A bend is one $F$ recoupling at the root of the two trees it touches and an exchange is
+     * $F^{d}_{y c b} \, R^{f}_{bc} \, (F^{d}_{y b c})^{\dagger}$ on the pair, where $y$ is the charge
+     * of the legs before the pair and $d$ the charge of those through it; either is applied to every
+     * tree the step leaves free, so the whole chain costs one pass per step but a single output
+     * tensor, whose buffers are reused from one step to the next.
      */
-    Tensor swap(int64_t position) const;
+    Tensor place(const std::vector<int64_t> &above, const std::vector<int64_t> &below) const;
 
     /**
-     * @brief The same tensor with one leg bent onto the other side.
-     * @param position The leg of the chosen side to move; it becomes the last leg of the other
-     * side.
-     * @param from_codomain Which side gives the leg: `true` moves a codomain leg onto the domain,
-     * `false` moves a domain leg onto the codomain.
-     * @return The same map read with that leg on the other side, so the leg stores the dual of the
-     * space it indexed and the total charge does not change.
-     * @throws std::invalid_argument When the position does not name a leg of that side.
-     * @details The leg is brought to the end of its side and then bent across by one recoupling of
-     * the vertex at the root: the tree of the side that gives the leg loses its last vertex, the
-     * tree of the side that takes it gains one, and every deeper vertex is left alone, which keeps
-     * the layout of the untouched legs unchanged.  A tree is a tree, so both directions run the
-     * same recoupling with the roles of the two trees exchanged.
+     * @brief The same tensor with `above` on the codomain and every other leg on the domain.
+     * @param above The legs to read as codomain, in the order they are to appear.
+     * @return The same entries read with that layout, the legs `above` leaves out on the domain in
+     * their original relative order.
+     * @throws std::invalid_argument When a number is out of range or is named twice.
      */
-    Tensor move_across(int64_t position, bool from_codomain = true) const;
-
-    /**
-     * @brief The same tensor with its codomain legs in another order.
-     * @param order The new order: `order[j]` is the codomain leg that moves to position `j`.
-     * @return The permuted tensor.
-     * @throws std::invalid_argument When `order` is not a permutation of the codomain legs.
-     */
-    Tensor permute(const std::vector<int64_t> &order) const;
-
-    /**
-     * @brief The same tensor with the named legs on the codomain.
-     * @param codomain The legs to put there, numbered over the codomain legs followed by the domain
-     * legs, listed in the order they are to appear.
-     * @return The tensor with exactly those legs on its codomain, in that order, and the other legs
-     * on its domain in their original relative order.
-     * @throws std::invalid_argument When a number is out of range or named twice.
-     * @details Only the codomain can be permuted, so every leg is first bent onto the codomain,
-     * ordered there, and the legs that are not named are bent back last to first, which lands them
-     * on the domain in their original relative order.
-     */
-    Tensor repartition(const std::vector<int64_t> &codomain) const;
+    Tensor place(const std::vector<int64_t> &above) const;
 
     /**
      * @brief The conjugate of the tensor, read as the bra.
@@ -310,5 +289,19 @@ namespace sym
     c10::Device device_ = c10::Device(c10::DeviceType::CPU);
     std::map<BlockKey, at::Tensor> blocks_;
   };
+
+  /**
+   * @brief The positions in `legs()` of every leg of the codomain, in order.
+   * @param tensor The tensor.
+   * @return `0, 1, ..., codomain().size() - 1`.
+   */
+  std::vector<int64_t> codomain_legs(const Tensor &tensor);
+
+  /**
+   * @brief The positions in `legs()` of every leg of the domain, in order.
+   * @param tensor The tensor.
+   * @return `codomain().size(), ..., nlegs() - 1`.
+   */
+  std::vector<int64_t> domain_legs(const Tensor &tensor);
 
 } // namespace sym

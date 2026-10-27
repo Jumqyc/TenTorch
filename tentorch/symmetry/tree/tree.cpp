@@ -470,4 +470,17 @@ namespace sym
     return out;
   }
 
+  FusionTree trimmed(const FusionCategory &category, const FusionTree &tree)
+  {
+    FusionTree out = tree;
+    out.sectors.pop_back();
+    if (!out.inner.empty()) out.inner.pop_back();
+    if (!out.copies.empty()) out.copies.pop_back();
+    const int64_t count = tree.size();
+    out.coupled = count <= 1 ? category.trivial()
+                             : count == 2 ? tree.sectors.at(0)
+                                          : tree.inner.at(static_cast<size_t>(count - 3));
+    return out;
+  }
+
 } // namespace sym

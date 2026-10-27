@@ -15,13 +15,13 @@ namespace sym
     if (first.qtotal() != second.qtotal()) return false;
     if (first.codomain() != second.codomain()) return false;
     if (first.domain() != second.domain()) return false;
-    const std::map<BlockKey, at::Tensor> &mine = first.blocks();
-    const std::map<BlockKey, at::Tensor> &theirs = second.blocks();
-    if (mine.size() != theirs.size()) return false;
-    for (const auto &[key, block] : mine)
+    const std::map<BlockKey, at::Tensor> &self = first.blocks();
+    const std::map<BlockKey, at::Tensor> &other = second.blocks();
+    if (self.size() != other.size()) return false;
+    for (const auto &[key, block] : self)
     {
-      const auto found = theirs.find(key);
-      if (found == theirs.end()) return false;
+      const auto found = other.find(key);
+      if (found == other.end()) return false;
       if (block.sizes() != found->second.sizes()) return false;
       if (!at::allclose(block, found->second, rtol, atol)) return false;
     }

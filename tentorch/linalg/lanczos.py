@@ -7,7 +7,7 @@ from tentorch._ext import Tensor, inner, norm
 
 def lanczos(action: Callable[[Tensor], Tensor],
             start: Tensor,
-            n_iter: int = 20,
+            n_iter: int = 5,
             tol: float = 1e-12) -> tuple[float, Tensor]:
     '''
     The lowest eigenpair of a Hermitian action on the block-sparse tensors, by the Lanczos iteration

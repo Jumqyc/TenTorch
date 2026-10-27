@@ -4,7 +4,7 @@ from typing import Optional, Sequence
 import torch
 
 from tentorch._ext import (FusionCategory, FusionTree, Leg, Sector, Tensor, contract,
-                           einsum, inner, reachable_charges)
+                           domain_legs, einsum, inner, reachable_charges)
 from tentorch.linalg.graded import qr, rq
 from tentorch.tensors.tree import entered
 
@@ -122,16 +122,17 @@ class MPS:
             raise IndexError(f'index {at} has no site to its right in a chain of {self.L} sites')
         factor, rest = qr(self.tensors[at], [0, 1])
         self.tensors[at] = factor
-        self.tensors[at + 1] = contract(rest, self.tensors[at + 1].repartition([0]), [0],
-                                        [0]).repartition([0, 1])
+        joined = contract(rest, self.tensors[at + 1], domain_legs(rest), [0])
+        self.tensors[at + 1] = joined.place([0, 1])
         self.center = at + 1
 
     def _right_canonicalize(self, at: int) -> None:
         if at <= 0 or at >= self.L:
             raise IndexError(f'index {at} has no site to its left in a chain of {self.L} sites')
         factor, rest = rq(self.tensors[at], [0])
-        self.tensors[at] = rest.repartition([0, 1])
-        self.tensors[at - 1] = contract(self.tensors[at - 1], factor, [0], [0])
+        self.tensors[at] = rest.place([0, 1])
+        self.tensors[at - 1] = contract(self.tensors[at - 1], factor,
+                                        domain_legs(self.tensors[at - 1]), [0])
         self.center = at - 1
 
     def move_center(self, at: int) -> None:
@@ -163,12 +164,10 @@ class MPS:
 
     def norm(self) -> float:
         '''The norm of the state, the Frobenius norm of the centre tensor.'''
-        return math.sqrt(self._weight())
-
-    def _weight(self) -> float:
-        '''The squared norm, read off the centre tensor of the mixed canonical form.'''
-        return sum(float((block.abs() ** 2).sum())
-                   for block in self.tensors[self.center].to_tuple()[3].values())
+        return math.sqrt(
+            sum(
+                float((block.abs() ** 2).sum())
+                for block in self.tensors[self.center].to_tuple()[3].values()))
 
     def normalize(self) -> None:
         '''Scale the state to unit norm.'''
@@ -185,10 +184,15 @@ class MPS:
         '''
         left = _identity(self.cat, self.tensors[0].codomain[0], operator.tensors[0].codomain[0])
         for at, tensor in enumerate(self.tensors):
-            left = einsum('AIe,aPb,Feq,IPqj->BJf', left, tensor, tensor.conj(),
+            left = einsum('AIe,aPb,Feq,IPqj->BJf', 
+                          left, 
+                          tensor, 
+                          tensor.conj(),
                           operator.tensors[at])
         return inner(
-            _identity(self.cat, self.tensors[-1].domain[0], operator.tensors[-1].domain[1]), left)
+            _identity(self.cat, 
+                      self.tensors[-1].domain[0], 
+                      operator.tensors[-1].domain[1]), left)
 
     def __len__(self) -> int:
         '''The number of sites.'''

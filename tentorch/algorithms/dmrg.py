@@ -2,7 +2,7 @@ from typing import Literal, Optional
 
 import torch
 
-from tentorch._ext import Tensor, contract, einsum, inner
+from tentorch._ext import Tensor, contract, domain_legs, einsum, inner
 from tentorch.linalg.graded import svd
 from tentorch.linalg.lanczos import lanczos
 from tentorch.models.heisenberg import heisenberg
@@ -106,7 +106,7 @@ class DMRG:
         first, second = self.state.tensors[at], self.state.tensors[at + 1]
         # the side boundary of the window sits between the two sites, so the contraction that joins
         # them already lands on the split the singular value decomposition makes below
-        two = contract(first, second.repartition([0]), [0], [0])
+        two = contract(first, second, domain_legs(first), [0])
         site, following = self.operator.tensors[at], self.operator.tensors[at + 1]
         # The two halves of the effective Hamiltonian do not depend on the vector, so they are taken
         # once per window instead of once per Krylov step.
@@ -122,7 +122,7 @@ class DMRG:
         # isometric and the two site tensor is the centre of the chain
         factor = 2 if direction == 'right' else 1
         left, values, right = svd(vector, self.max_bond_dim, self.svd_tol, factor)
-        self.state.tensors[at], self.state.tensors[at + 1] = left, right.repartition([0, 1])
+        self.state.tensors[at], self.state.tensors[at + 1] = left, right.place([0, 1])
         self.center = at + 1 if direction == 'right' else at
         # the block entries carry the tree basis, not the state norm, so the centre is gauged back
         self.state.normalize()
@@ -172,7 +172,8 @@ class DMRG:
         if not self.left:
             raise RuntimeError('the energy needs the environments of a sweep, and none has run')
         at = min(self.center, self.L - 2)
-        two = contract(self.state.tensors[at], self.state.tensors[at + 1].repartition([0]), [0], [0])
+        two = contract(self.state.tensors[at], self.state.tensors[at + 1],
+                       domain_legs(self.state.tensors[at]), [0])
         image = einsum('AIe,IPqj,JRsk,Dkf,EQSf->APrd', self.left[at], self.operator.tensors[at],
                        self.operator.tensors[at + 1], self.right[at + 2], two)
         return complex(inner(two, image) / inner(two, two))

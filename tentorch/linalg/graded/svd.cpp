@@ -50,7 +50,7 @@ namespace sym
       throw std::invalid_argument("a bond needs at least one multiplet, got " +
                                   std::to_string(*max_bond));
 
-    const Tensor arranged = left ? tensor.repartition(*left) : tensor;
+    const Tensor arranged = left ? tensor.place(*left) : tensor;
     const std::shared_ptr<const FusionCategory> cat = arranged.cat();
     std::vector<Factor> factors;
     for (const auto &[key, matrix] : arranged.blocks())
@@ -232,7 +232,7 @@ namespace sym
 
   static Decomposition qr_over(const Tensor &tensor, std::optional<std::vector<int64_t>> left)
   {
-    const Tensor arranged = left ? tensor.repartition(*left) : tensor;
+    const Tensor arranged = left ? tensor.place(*left) : tensor;
     std::vector<Piece> pieces;
     for (const auto &[key, matrix] : arranged.blocks())
     {
@@ -245,7 +245,7 @@ namespace sym
 
   static Decomposition rq_over(const Tensor &tensor, std::optional<std::vector<int64_t>> left)
   {
-    const Tensor arranged = left ? tensor.repartition(*left) : tensor;
+    const Tensor arranged = left ? tensor.place(*left) : tensor;
     std::vector<Piece> pieces;
     for (const auto &[key, matrix] : arranged.blocks())
     {

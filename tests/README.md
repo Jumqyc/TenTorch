@@ -2,7 +2,7 @@
 
 ```shell
 .venv/bin/python -m pytest tests -q                    # 26 tests, about two seconds
-TENTORCH_SLOW=1 .venv/bin/python -m pytest tests -q    # adds the long chain, about 150 s
+TENTORCH_SLOW=1 .venv/bin/python -m pytest tests -q    # adds the long chain, about 45 s
 ```
 
 `conftest.py` seeds the global torch generator before every test, so a random state is reproducible.
