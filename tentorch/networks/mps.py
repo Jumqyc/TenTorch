@@ -252,8 +252,8 @@ class MPS:
         '''
         left = _identity(self.cat, self.tensors[0].codomain[0], operator.tensors[0].codomain[0])
         for at, tensor in enumerate(self.tensors):
-            left = einsum('aie,aPb,feQ,iPQj->bfj', left, tensor, tensor.conj(),
-                          operator.tensors[at]).repartition([0, 2])
+            left = einsum('AIe,aPb,Feq,IPqj->BJf', left, tensor, tensor.conj(),
+                          operator.tensors[at])
         return inner(
             _identity(self.cat, self.tensors[-1].domain[0], operator.tensors[-1].domain[1]), left)
 

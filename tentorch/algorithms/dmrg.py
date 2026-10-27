@@ -64,8 +64,8 @@ class DMRG:
           domain `(ket bond,)`.
         '''
         tensor = self.state.tensors[at]
-        return einsum('eia,feQ,aPb,iQPj->fjb', left, tensor.conj(), tensor,
-                      self.operator.tensors[at]).repartition([0, 1])
+        return einsum('EIa,Feq,aPb,IqPj->FJb', left, tensor.conj(), tensor,
+                      self.operator.tensors[at])
 
     def _advance_right(self, right: Tensor, at: int) -> Tensor:
         '''
@@ -79,8 +79,8 @@ class DMRG:
           `(ket bond,)`, so that it meets the bra and the ket of the next site on their own sides.
         '''
         tensor = self.state.tensors[at]
-        return einsum('gfQ,aPb,iQPk,gkb->fia', tensor.conj(), tensor,
-                      self.operator.tensors[at], right).repartition([0, 1])
+        return einsum('Gfq,aPb,IqPk,Gkb->FIa', tensor.conj(), tensor,
+                      self.operator.tensors[at], right)
 
     def cache_environments(self) -> None:
         '''Rebuild both environment sets from the current state.'''
@@ -110,12 +110,12 @@ class DMRG:
         site, following = self.operator.tensors[at], self.operator.tensors[at + 1]
         # The two halves of the effective Hamiltonian do not depend on the vector, so they are taken
         # once per window instead of once per Krylov step.
-        head = einsum('eia,iPQj->ePaQj', self.left[at], site).repartition([0, 1])
-        tail = einsum('jRSk,fkb->jRSfb', following, self.right[at + 2]).repartition([0, 1, 2, 3])
+        head = einsum('EIa,IPqj->EPaqj', self.left[at], site)
+        tail = einsum('JRsk,Fkb->JRSFb', following, self.right[at + 2])
 
         def action(vector: Tensor) -> Tensor:
             '''The Hamiltonian of the window applied to a two site tensor.'''
-            return einsum('ePaQj,jRSfb,aQSb->ePRf', head, tail, vector).repartition([0, 1, 2])
+            return einsum('EPaqj,JRSFb,AQSb->EPRf', head, tail, vector)
 
         energy, vector = lanczos(action, two, self.n_iter)
         # the singular values go into the factor the sweep carries, so that the site left behind is
@@ -174,9 +174,8 @@ class DMRG:
         at = min(self.center, self.L - 2)
         two = contract(self.state.tensors[at], self.state.tensors[at + 1].repartition([0]), [0],
                        [0]).repartition([0, 1, 2])
-        image = einsum('aie,iPQj,jRSk,dkf,eQSf->aPRd', self.left[at], self.operator.tensors[at],
-                       self.operator.tensors[at + 1], self.right[at + 2],
-                       two).repartition([0, 1, 2])
+        image = einsum('AIe,IPqj,JRsk,Dkf,EQSf->APRd', self.left[at], self.operator.tensors[at],
+                       self.operator.tensors[at + 1], self.right[at + 2], two)
         return complex(inner(two, image) / inner(two, two))
 
     def run(self, num_sweeps: int = 5, energy_tol: float = 1e-10, patience: int = 2,

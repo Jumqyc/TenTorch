@@ -2,7 +2,7 @@
 // from it so that no category answers them twice.
 #include "cat.h"
 
-
+#include <cstdlib>
 #include <string>
 #include <utility>
 #include <vector>
@@ -12,6 +12,10 @@ namespace sym
 
   c10::Device default_device()
   {
+    // A small system profiles better on the host: a block is a few hundred entries, which a kernel
+    // launch costs more than to multiply.
+    if (const char *wanted = std::getenv("TENTORCH_DEVICE"); wanted != nullptr && std::string(wanted) == "cpu")
+      return c10::Device(c10::kCPU);
     return at::globalContext().hasCUDA() ? c10::Device(c10::kCUDA) : c10::Device(c10::kCPU);
   }
 
@@ -24,16 +28,13 @@ namespace sym
 
   const std::vector<Outcome> &FusionCategory::outcomes(const Sector &a, const Sector &b) const
   {
-    const auto by_first = outcomes_cache_.find(a);
-    if (by_first != outcomes_cache_.end())
+    const std::pair<Sector, Sector> asked{a, b};
+    auto found = outcomes_cache_.find(asked);
+    if (found == outcomes_cache_.end())
     {
-      const auto by_second = by_first->second.find(b);
-      if (by_second != by_first->second.end())
-      {
-        return by_second->second;
-      }
+      found = outcomes_cache_.emplace(asked, compute_outcomes(a, b)).first;
     }
-    return outcomes_cache_[a].emplace(b, compute_outcomes(a, b)).first->second;
+    return found->second;
   }
 
   void FusionCategory::clear_cache() const { outcomes_cache_.clear(); }

@@ -13,6 +13,8 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace sym
@@ -131,6 +133,27 @@ namespace sym
    * @brief The sector type the engine instantiates: every tensor, tree and block key holds this one.
    */
   using Sector = SectorOf<kMaxSectorRank>;
+
+  /**
+   * @brief The hash of a pair of sectors, the key under which the fusion tables are held.
+   */
+  struct PairHash
+  {
+    size_t operator()(const std::pair<Sector, Sector> &key) const
+    {
+      uint64_t out = 0xcbf29ce484222325ULL;
+      for (const Sector *side : {&key.first, &key.second})
+      {
+        const int64_t width = side->size();
+        out = (out ^ static_cast<uint64_t>(width)) * 0x100000001b3ULL;
+        for (int64_t at = 0; at < width; ++at)
+        {
+          out = (out ^ static_cast<uint64_t>((*side)[at])) * 0x100000001b3ULL;
+        }
+      }
+      return static_cast<size_t>(out);
+    }
+  };
 
   /**
    * @brief One term of a fusion: the sector the pair fuses to, and how many distinct vertices
@@ -402,7 +425,7 @@ namespace sym
     std::string name_;
     c10::Device device_;
     // One fusion table per pair, keyed by the sectors themselves so that a lookup copies nothing.
-    mutable std::map<Sector, std::map<Sector, std::vector<Outcome>>> outcomes_cache_;
+    mutable std::unordered_map<std::pair<Sector, Sector>, std::vector<Outcome>, PairHash> outcomes_cache_;
   };
 
 } // namespace sym

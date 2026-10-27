@@ -1,6 +1,9 @@
 #include "einsum.h"
 
+#include <map>
+
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <iterator>
 #include <limits>
@@ -21,12 +24,24 @@ namespace sym
   {
 
 
-    std::vector<std::string> letters(const std::string &text)
+    // One group of the equation: its labels, lower cased so that the case reads as the side a leg has
+    // to sit on rather than as part of its name, and the side each one asks for, `true` the codomain.
+    struct Side
     {
       std::vector<std::string> labels;
+      std::vector<bool> above;
+    };
+
+    Side side_of(const std::string &text)
+    {
+      Side out;
       for (const char letter : text)
-        if (letter != ' ') labels.emplace_back(1, letter);
-      return labels;
+      {
+        if (letter == ' ') continue;
+        out.labels.emplace_back(1, static_cast<char>(std::tolower(static_cast<unsigned char>(letter))));
+        out.above.push_back(letter >= 'A' && letter <= 'Z');
+      }
+      return out;
     }
 
     int64_t position_of(const std::vector<std::string> &labels, const std::string &label)
@@ -64,17 +79,63 @@ namespace sym
     // list in the order it is to read, every leg of the tensor named by one of them.  This is the
     // general form of Tensor::repartition, which asks for the legs above in the order they already
     // have and leaves the rest under them; the order below has to be spelled out here because a
-    // traced leg is put last on both sides.
+    // traced leg is put last on both sides.  A tensor that already sits that way costs nothing, one
+    // whose sides hold costs a permutation, and only the legs that have to change side are bent.
     Tensor place(const Tensor &tensor, const std::vector<int64_t> &above,
                  const std::vector<int64_t> &below)
     {
+      const int64_t codomain = static_cast<int64_t>(tensor.codomain().size());
+      std::vector<int64_t> cod;
+      std::vector<int64_t> dom;
+      for (int64_t at = 0; at < tensor.nlegs(); ++at) (at < codomain ? cod : dom).push_back(at);
+      // A list is only the layout the tensor already has when it splits the legs the way the tensor
+      // does: the same count on each side and the same order.
+      bool held = static_cast<int64_t>(above.size()) == codomain &&
+                  static_cast<int64_t>(below.size()) == static_cast<int64_t>(tensor.domain().size());
+      for (size_t at = 0; at < above.size() && held; ++at) held = above.at(at) == static_cast<int64_t>(at);
+      for (size_t at = 0; at < below.size() && held; ++at)
+        held = below.at(at) == codomain + static_cast<int64_t>(at);
+      if (held) return tensor;
+      // The sides already hold: the domain is the one the tensor has and the codomain is a permutation
+      // of it, which exchanges alone reach.
+      bool sided = static_cast<int64_t>(above.size()) == codomain &&
+                   static_cast<int64_t>(below.size()) == static_cast<int64_t>(tensor.domain().size());
+      for (size_t at = 0; at < above.size() && sided; ++at) sided = above.at(at) < codomain;
+      for (size_t at = 0; at < below.size() && sided; ++at)
+        sided = below.at(at) == codomain + static_cast<int64_t>(at);
+      if (sided) return tensor.permute(above);
       std::vector<int64_t> order;
       for (const int64_t leg : above) order.push_back(raised(tensor, leg));
       for (auto at = below.rbegin(); at != below.rend(); ++at) order.push_back(raised(tensor, *at));
       Tensor out = all_up(tensor).permute(order);
       for (size_t at = 0; at < below.size(); ++at)
+      {
         out = out.move_across(static_cast<int64_t>(out.codomain().size()) - 1, true);
+      }
       return out;
+    }
+
+    // The tensor with every leg the equation sums left where it sits and every leg it keeps on the
+    // side its case declares, together with the labels in the order the legs then read them.  A
+    // summed leg is paired with the leg it meets in the other operand, so which side it takes is the
+    // contraction's to decide and the case only says where it would like it; a kept leg is free, so
+    // its case is binding and the leg is bent when the tensor disagrees.
+    std::pair<Tensor, std::vector<std::string>> laid_out(const Tensor &tensor, const Side &side,
+                                                         const std::vector<std::string> &summed)
+    {
+      const int64_t codomain = static_cast<int64_t>(tensor.codomain().size());
+      std::vector<int64_t> above;
+      std::vector<int64_t> below;
+      for (int64_t leg = 0; leg < tensor.nlegs(); ++leg)
+      {
+        const size_t at = static_cast<size_t>(leg);
+        const bool stays = holds(summed, side.labels.at(at)) ? leg < codomain : side.above.at(at);
+        (stays ? above : below).push_back(leg);
+      }
+      std::vector<std::string> labels;
+      for (const int64_t leg : above) labels.push_back(side.labels.at(static_cast<size_t>(leg)));
+      for (const int64_t leg : below) labels.push_back(side.labels.at(static_cast<size_t>(leg)));
+      return {place(tensor, above, below), std::move(labels)};
     }
 
     // The fusion tree with its last vertex removed: one leg fewer, the root the remaining legs
@@ -432,9 +493,10 @@ namespace sym
 
     // The operands folded in the order `order` gives, each step summing every label the accumulator
     // and the next operand share.  A step that sums a charge can leave more than one charge, so the
-    // fold carries every partial result it reaches.
+    // fold carries every partial result it reaches.  The legs the output keeps are laid out as its
+    // two groups read them, the upper case ones on the codomain and the lower case ones under them.
     std::vector<Tensor> contract_path(const std::vector<std::vector<std::string>> &inputs,
-                                      const std::vector<std::string> &output,
+                                      const Side &output,
                                       const std::vector<Tensor> &operands,
                                       const std::vector<int64_t> &order)
     {
@@ -450,10 +512,12 @@ namespace sym
         labels = product_labels(labels, inputs.at(at));
         states = std::move(folded);
       }
-      std::vector<int64_t> arrangement;
-      for (const std::string &label : output) arrangement.push_back(position_of(labels, label));
+      std::vector<int64_t> above;
+      std::vector<int64_t> below;
+      for (size_t at = 0; at < output.labels.size(); ++at)
+        (output.above.at(at) ? above : below).push_back(position_of(labels, output.labels.at(at)));
       std::vector<Tensor> out;
-      for (Tensor &state : states) out.push_back(place(state, arrangement, {}));
+      for (Tensor &state : states) out.push_back(place(state, above, below));
       return out;
     }
 
@@ -539,38 +603,38 @@ namespace sym
     if (at_arrow == std::string::npos)
       throw std::invalid_argument("the equation '" + spec + "' does not say what it leaves");
 
-    std::vector<std::vector<std::string>> inputs;
+    std::vector<Side> groups;
     std::string left = spec.substr(0, at_arrow);
     size_t start = 0;
     while (true)
     {
       const size_t comma = left.find(',', start);
-      inputs.push_back(letters(left.substr(start, comma - start)));
+      groups.push_back(side_of(left.substr(start, comma - start)));
       if (comma == std::string::npos) break;
       start = comma + 1;
     }
-    const std::vector<std::string> output = letters(spec.substr(at_arrow + arrow.size()));
+    const Side output = side_of(spec.substr(at_arrow + arrow.size()));
 
-    if (inputs.size() != operands.size())
+    if (groups.size() != operands.size())
       throw std::invalid_argument("the equation '" + spec + "' names " +
-                                  std::to_string(inputs.size()) + " operands but got " +
+                                  std::to_string(groups.size()) + " operands but got " +
                                   std::to_string(operands.size()));
     const FusionCategory &cat = *operands.front().cat();
     for (size_t at = 0; at < operands.size(); ++at)
     {
       if (!same_group(*operands.at(at).cat(), cat))
         throw std::invalid_argument("an einsum needs every operand over one category");
-      if (inputs.at(at).size() != static_cast<size_t>(operands.at(at).nlegs()))
+      if (groups.at(at).labels.size() != static_cast<size_t>(operands.at(at).nlegs()))
         throw std::invalid_argument("the group " + std::to_string(at) + " of '" + spec +
-                                    "' names " + std::to_string(inputs.at(at).size()) +
+                                    "' names " + std::to_string(groups.at(at).labels.size()) +
                                     " legs but the tensor has " +
                                     std::to_string(operands.at(at).nlegs()));
     }
 
     // A label is summed over at most two legs, and it is either summed away or kept, not both.
     std::vector<std::string> seen;
-    for (const std::vector<std::string> &group : inputs)
-      for (const std::string &label : group)
+    for (const Side &group : groups)
+      for (const std::string &label : group.labels)
       {
         if (std::count(seen.begin(), seen.end(), label) >= 2)
           throw std::invalid_argument("the label '" + label + "' of '" + spec +
@@ -580,33 +644,56 @@ namespace sym
     for (const std::string &label : seen)
     {
       const auto count = std::count(seen.begin(), seen.end(), label);
-      if (count == 1 && !holds(output, label))
+      if (count == 1 && !holds(output.labels, label))
         throw std::invalid_argument("the label '" + label + "' of '" + spec +
                                     "' names one leg but is not kept in the output, which would "
                                     "leave it open");
-      if (count == 2 && holds(output, label))
+      if (count == 2 && holds(output.labels, label))
         throw std::invalid_argument("the label '" + label + "' of '" + spec +
                                     "' is summed over and still kept");
     }
-    for (const std::string &label : output)
+    for (const std::string &label : output.labels)
       if (std::count(seen.begin(), seen.end(), label) != 1)
         throw std::invalid_argument("the output label '" + label + "' of '" + spec +
                                     "' does not name a leg of the operands");
 
-    const Prepared prepared = self_contract(operands, inputs, spec);
+    // Every leg the equation keeps takes the side its case declares, and every leg it sums keeps the
+    // side it already has: the two legs of a sum are paired through the contraction, so one of them
+    // has to change side anyway and the case cannot say which.
+    std::vector<std::string> summed;
+    for (const std::string &label : seen)
+      if (std::count(seen.begin(), seen.end(), label) == 2 && !holds(summed, label))
+        summed.push_back(label);
+    std::vector<Tensor> laid;
+    std::vector<std::vector<std::string>> inputs;
+    for (size_t at = 0; at < operands.size(); ++at)
+    {
+      auto [tensor, labels] = laid_out(operands.at(at), groups.at(at), summed);
+      laid.push_back(std::move(tensor));
+      inputs.push_back(std::move(labels));
+    }
 
-    // The legs the operands keep have to span the charge the result carries.
-    std::vector<Leg> output_legs;
-    for (const std::string &label : output)
+    const Prepared prepared = self_contract(laid, inputs, spec);
+
+    // The legs the operands keep have to close to the charge the result carries: the roots the legs
+    // the output puts above reach and the roots the ones it puts below reach have to pair to it.
+    std::vector<Leg> above_legs;
+    std::vector<Leg> below_legs;
+    for (size_t one = 0; one < output.labels.size(); ++one)
       for (size_t at = 0; at < prepared.labels.size(); ++at)
-        if (holds(prepared.labels.at(at), label))
+        if (holds(prepared.labels.at(at), output.labels.at(one)))
         {
-          output_legs.push_back(prepared.operands.at(at).front().legs().at(static_cast<size_t>(
-            position_of(prepared.labels.at(at), label))));
+          const Leg leg = prepared.operands.at(at).front().legs().at(static_cast<size_t>(
+            position_of(prepared.labels.at(at), output.labels.at(one))));
+          (output.above.at(one) ? above_legs : below_legs).push_back(leg);
           break;
         }
-    if (!output.empty() && fusion_trees(cat, output_legs, charge).empty())
-      throw std::invalid_argument("the output legs of '" + spec + "' cannot fuse to " +
+    bool closes = output.labels.empty();
+    for (const Sector &above : reachable_charges(cat, above_legs))
+      for (const Sector &below : reachable_charges(cat, below_legs))
+        if (cat.n_symbol(above, cat.dual(below), charge) > 0) closes = true;
+    if (!closes)
+      throw std::invalid_argument("the output legs of '" + spec + "' cannot close to " +
                                   render(charge));
 
     // A self-contracted leg leaves the charge its kept roots close to, so an operand can come with

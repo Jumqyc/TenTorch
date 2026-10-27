@@ -13,6 +13,10 @@ namespace sym
 
   namespace
   {
+    // The rows the legs of one side span at a root, before the layouts of a tensor are built.
+    int64_t side_rows(const std::shared_ptr<const FusionCategory> &category, const std::vector<Leg> &legs,
+                      const Sector &root);
+
 
     // The block of a leg that carries `sector`, which the leg holds sorted.
     int64_t block_of(const Leg &leg, const Sector &sector)
@@ -91,8 +95,20 @@ namespace sym
     // One layout per root and not one per key: the keys of a side share it, and the layout is cached
     // on the tensor so that a later access of the same root costs a lookup.
     const std::vector<BlockKey> keys = block_keys(*cat_, codomain_, domain_, qtotal_);
+    // The keys of a side share a root, and a side of a root is the same rows or columns every time,
+    // so each root is looked up once.
+    std::map<Sector, int64_t> rows_of_root;
+    std::map<Sector, int64_t> columns_of_root;
     for (const BlockKey &key : keys)
-      blocks_.emplace(key, at::zeros({rows_of(key.codomain).rows(), columns_of(key.domain).rows()}, options));
+    {
+      auto rows = rows_of_root.find(key.codomain);
+      if (rows == rows_of_root.end())
+        rows = rows_of_root.emplace(key.codomain, side_rows(cat_, codomain_, key.codomain)).first;
+      auto columns = columns_of_root.find(key.domain);
+      if (columns == columns_of_root.end())
+        columns = columns_of_root.emplace(key.domain, side_rows(cat_, domain_, key.domain)).first;
+      blocks_.emplace(key, at::zeros({rows->second, columns->second}, options));
+    }
   }
 
   std::vector<Leg> Tensor::legs() const
@@ -906,15 +922,14 @@ namespace sym
 
     // The rows a root gives on a side, built once per shape: a layout is a search over the fusion
     // trees, which is dearer than the walk it sizes, and a chain asks for the same shapes again.
-    int64_t rows_of(const std::shared_ptr<const FusionCategory> &category, const std::vector<Leg> &legs,
-                    const Sector &root)
+    int64_t side_rows(const std::shared_ptr<const FusionCategory> &category, const std::vector<Leg> &legs,
+                      const Sector &root)
     {
       static std::map<std::pair<std::shared_ptr<const FusionCategory>, std::vector<int64_t>>, int64_t> cache;
-      const auto found = cache.find({category, shape_key(legs, root)});
+      std::vector<int64_t> key = shape_key(legs, root);
+      const auto found = cache.find(std::make_pair(category, key));
       if (found != cache.end()) return found->second;
-      return cache.emplace(std::pair<const std::shared_ptr<const FusionCategory>, std::vector<int64_t>>(
-                             category, shape_key(legs, root)),
-                           layout_of(*category, legs, root).rows())
+      return cache.emplace(std::make_pair(category, std::move(key)), layout_of(*category, legs, root).rows())
         .first->second;
     }
 
@@ -947,8 +962,8 @@ namespace sym
             if (last) return out.block(key.codomain, key.domain, key.copy);
             const auto found = next.find(key);
             if (found != next.end()) return found->second;
-            const int64_t rows = rows_of(tensor.cat(), step.codomain, key.codomain);
-            const int64_t columns = rows_of(tensor.cat(), step.domain, key.domain);
+            const int64_t rows = side_rows(tensor.cat(), step.codomain, key.codomain);
+            const int64_t columns = side_rows(tensor.cat(), step.domain, key.domain);
             for (auto spare_at = spare.begin(); spare_at != spare.end(); ++spare_at)
             {
               if (spare_at->second.size(0) != rows || spare_at->second.size(1) != columns) continue;
