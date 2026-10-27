@@ -2,26 +2,27 @@
 
 A Python library for one-dimensional tensor networks whose tensors are block-sparse in a fusion category, built on PyTorch.
 
-There are several existing mature dmrg libraries. 
+- TeNPy is a mature DMRG package on numpy that is easy to use, but it runs on the CPU, and the
+symmetry classes it releases are groups realised through Clebsch-Gordan coefficients, so its reach
+stops where a CG tensor stops. 
+- TensorKit.jl has the categorical picture in full, but it is Julia and CPU native, with GPU truncation only being stabilised in 2026. 
 
-- TeNPy is a mature DMRG package built
-on numpy and is generally easy to use, but: 
-  - it runs on the CPU,
-  - the symmetry classes it releases are groups realised through Clebsch-Gordan coefficients, so its reach stops where a Clebsch-Gordan tensor stops (a fusion-category framework does exist on its development branch). 
+TenTorch keeps the categorical data — the $F$ and $R$ symbols, the fusion trees — and puts the symmetry-adapted tensor and the block multiplications on ordinary `torch` arrays, so a block can live on the GPU.
 
-- TensorKit.jl is another library, with the categorical approach in full, but:
-  - it is in Julia, whose ecosystem is not comparable with Python, 
-  - It is CPU native, although it can hold its dense blocks in CUDA arrays, GPU support for its truncation routines was still being stabilised in 2026. 
-  
-This library, TenTorch keeps the categorical data, the $F$ and $R$ symbol, and store the symmetry-adapted tensor on the GPU and the matrix computation through ordinary `torch` operations.
+## Status
 
 
-## What it does
+| layer | state |
+| --- | --- |
+| symmetry categories | done: no symmetry, $U(1)$, $Z_n$, $SU(2)$, $SU(3)$, Fibonacci, fermion parity |
+| legs, fusion trees, blocks | done |
+| `einsum`, `contract`, `inner`, `norm` | done, with a plan cache per shape |
+| `svd`, `svdvals`, `qr`, `rq` | done, with the new bond carrying the charge sectors |
+| `MPS`, mixed canonical form | done, `qr`/`rq` moves verified against the norm and the expectation |
+| `MPO` | the container is done; the only builder is the Heisenberg chain, abelian categories only |
+| `DMRG` | two site, verified against exact diagonalisation for $L = 4, 6, 8$ |
+| non-abelian `MPO` | **not implemented**: `heisenberg()` raises for $SU(2)$, $SU(3)$ and Fibonacci, because a coefficient in the coupled tree basis is not a plain matrix element |
 
-- Symmetry adapted tensor: currently the symmetry of the model carried exactly by the tensors: `U(1)`, `Z_n`, `SU(2)`, `SU(3)`, `Fibonacci`, `fermion parity`, or `no symmetry`. A block is keyed by a fusion tree of sectors, so the block structure follows the category's fusion rules rather than a crystallographic group. 
-- A standard 2-site DMRG algorithm. Perform DMRG sweep on a 1d quantum chain. 
-- An automated MPO construction: plug in the terms,  construct the MPO automatically. 
-- To be added. 
 
 
 ## Install
@@ -41,88 +42,67 @@ The engine is a C++ extension. It compiles itself on first import, or ahead of t
 .venv/bin/python tentorch/_ext/build.py --jobs 1
 ```
 
-One compile job needs about 2.5 GiB of host memory and the build refuses to start below that
-rather than swap the machine to death; `--jobs` above one multiplies the requirement.
-
-## Getting started
-
-The notebooks in `examples/` are the worked examples, and each one runs top to bottom
-after a kernel restart:
-
-| notebook | what it shows |
-| --- | --- |
-| `Heisenberg.ipynb` | the spin-1/2 Heisenberg chain, with and without SU(2) symmetry |
-| `AKLT.ipynb` | the AKLT state, its exact energy and its correlations |
-| `Charged.ipynb` | a Hamiltonian with a non-trivial total charge |
-
-A calculation starts from a model and one function call:
-
-```python
-import tentorch
-from tentorch.models import heisenberg
-
-model = heisenberg(20, S=0.5)                      # 20 spin-1/2 sites, SU(2) symmetry
-result = tentorch.dmrg(model, max_bond_dim=64, num_sweeps=10)
-print(result.energy, result.state.bond_dim)
-```
-
-A `Model` is the physics only — the sites and the couplings; it holds no state and no numerical
-options. `dmrg` builds the state, sweeps it, and returns the energy, the state and the largest
-discarded weight of the run, so an observable is a call on `result.state` and a bond cap is an
-argument, not a property of the model. `tests/exact.py` diagonalises the
-same model in its full Hilbert space, which is how the sweep is checked on short chains.
-
-A site comes from `tentorch.sites` — `spin(S)` — and carries the operator table the couplings
-name. The model zoo lives in `tentorch/models` (Heisenberg, Ising and AKLT), and the notebooks
-below write their own where the point is the Hamiltonian rather than the sweep.
+One compile job needs about 2.5 GiB of host memory and the build refuses to start below that rather
+than swap the machine to death; `--jobs` above one multiplies the requirement.
 
 ## The layers
 
 ```
-symmetry/cat   ->   symmetry/tree   ->   tensors   ->   linalg
- the category        legs and trees      blocks        splits
-                                                     |
-                                                     v
-                               networks/mps, networks/mpo, algorithms/dmrg
+symmetry/     the categories, the legs and the fusion trees (C++ engine, Python surface)
+tensors/      the block-sparse tensor, its block layout, and the einsum
+linalg/       svd, svdvals, qr, rq and the Krylov eigensolver
+networks/     MPS and MPO
+models/       Model, and the Heisenberg automaton that builds its MPO
+algorithms/   DMRG, dmrg, and exact diagonalisation
 ```
 
-- `tentorch/symmetry/cat` — the category: sectors, fusion outcomes, the associator, the braiding,
-  the duality. Adding a symmetry means adding one subclass here.
-- `tentorch/symmetry/tree` — a `Leg` carries one sector (or several, with multiplicity); a
-  `FusionTree` is an ordered coupling path, and it is what keys one dense block.
-- `tentorch/tensors` — a `Tensor` holds one dense block per charge key, and `cached_einsum`
-  contracts a whole network of them.
-- `tentorch/linalg` — `svd`, `qr`, `rq` and `svdvals` on block-sparse tensors; the split that
-  produces new bond sectors.
-- `tentorch/networks/mps.py`, `tentorch/networks/mpo.py` — the state and the Hamiltonian.
-- `tentorch/sites.py`, `tentorch/model.py` — a site's operator table, and the physics of a chain:
-  its sites and its couplings. A `Model` turns itself into an `MPO` on first use.
-- `tentorch/models/` — the chains the examples and the benchmarks run on.
-- `tentorch/algorithms/dmrg.py` — the sweep driver (`DMRG`, `dmrg`), and
-  `tests/exact.py` — exact diagonalisation, the reference the sweep tests compare against.
+- `tentorch/symmetry` — a `Sector` is a tuple of charges; a `FusionCategory` gives the fusion
+  outcomes, the associator, the braiding and the duality. Adding a symmetry means adding one
+  subclass in `tentorch/symmetry/cat`.
+- `tentorch/tensors` — a `Tensor` carries a codomain and a domain of `Leg`s and one block per pair of
+  fusion trees; `einsum` plans the moves of an equation once per shape and caches the plan.
+- `tentorch/linalg` — the splittings, and `lanczos` for the ground state of one window.
+- `tentorch/networks/mps.py`, `mpo.py` — the state in mixed canonical form, and an operator whose
+  sites carry `(bond left, out)` on the codomain and `(in, bond right)` on the domain.
+- `tentorch/models` — `Model` (the physics, and the slots a driver writes back into) and the
+  Heisenberg automaton that turns a chain into an `MPO`.
+- `tentorch/algorithms` — the two site sweep and the reference diagonalisation.
 
-## Status and limits
+## Performance
 
-Currently the whole symmetry tensor layer is being rewritten thoroughly. If you wish to use this library, use the historical version on Github. 
+Measured on one CPU thread and on an 8 GiB RTX 4060, `u1`, `n_iter = 5`, open chain, the energy of
+every run below matching the dense value to $10^{-11}$:
 
-## Documentation and tests
+| chain | bond | CPU s/sweep | GPU s/sweep |
+| --- | --- | --- | --- |
+| $L=16$ | 32 | 0.36 / 0.31 / 0.22 | 2.90 / 2.63 / 2.39 |
+| $L=32$ | 64 | 1.90 / 2.04 / 1.69 | 11.16 / 13.15 / 9.47 |
 
-`doc/main.pdf` (built from `doc/main.tex` with `pdflatex`) is the theory: the group picture,
-how it becomes a category, a worked SU(2) fusion example, the diagram algorithm, charge flow,
-and the anchors behind each section.
+The GPU is six to nine times slower here, as a contraction of these bonds is a few hundred small matrices, one per block pair, so a kernel launch costs more than the multiplication. `TENTORCH_DEVICE=cpu` forces the CPU while the bond is small. 
 
-`tests/` holds the pytest suite: the sites' operator tables, and the sweep energy of every model
-against exact diagonalization. Run it with
+- For reference, TeNPy on the same chains and the same settings takes
+0.08/0.22/0.29 s ($L=16$, $\chi = 32$) and 0.15/0.39/0.52 s ($L=32$, $\chi = 64$). The difference is that TenPy uses Group theory Clebsch-Gordan coefficients and fully utilize block structure of tensor, where as the categorical approach creates sparser block, and permutes the trees sequentially, making it less computational friendly.  
+
+`bench/` holds the measurement scripts: `bench_dmrg.py` for the sweep above and `build.py` for the
+C++ engine benchmarks. `bench/README.md` records what each one measures.
+
+## Tests
 
 ```shell
-.venv/bin/python -m pytest tests -q
+.venv/bin/python -m pytest tests -q                    # 26 tests, about two seconds
+TENTORCH_SLOW=1 .venv/bin/python -m pytest tests -q    # adds the long chain, about 25 s
 ```
 
-`bench/bench_dmrg.py` times the sweep against the bond cap, one line per run:
+`tests/README.md` says what is covered and what is not.
 
-```shell
-.venv/bin/python bench/bench_dmrg.py --model heisenberg --L 20 --max-bond 16 32 64 --sweeps 5
-```
+## Documentation
+
+`doc/main.pdf` (built from `doc/main.tex` with `pdflatex`) is the theory: the group picture, how it
+becomes a category, a worked $SU(2)$ fusion example, the diagram algorithm, and charge flow.
+
+The notebooks under `examples/` were written against an earlier API — `tentorch.dmrg(model)`, a
+`tentorch.sites` module, an Ising and an AKLT model — and do not run against the current package.
+They are kept for the pictures, not as examples.
 
 ## License
 

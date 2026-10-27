@@ -1,14 +1,3 @@
-'''
-The density matrix renormalisation group: the ground state of a chain, two sites at a time.
-
-One sweep is a right pass followed by a left pass.  At every window the two site tensor is
-contracted, the Hamiltonian of the window is applied through the environments cached at its two
-sides, and the ground state of that little problem is split again; the singular values left out are
-the truncation of the sweep.  The singular values are folded into the factor the sweep carries with
-it, so the chain stays in the mixed canonical form and the environments stay exact.
-'''
-from __future__ import annotations
-
 from typing import Literal, Optional
 
 import torch
@@ -42,7 +31,6 @@ class DMRG:
         self.operator = heisenberg(model.cat, model.length, model.coupling)
         physical = model.physical if model.physical is not None else self.operator.physical
         self.state = MPS.random(model.cat, physical, model.length, model.sector, seed = seed)
-        self.center = self.state.center
         self.left: dict[int, Tensor] = {}
         self.right: dict[int, Tensor] = {}
 
@@ -50,6 +38,16 @@ class DMRG:
     def L(self) -> int:
         '''The number of sites.'''
         return self.model.length
+
+    @property
+    def center(self) -> int:
+        '''The site that carries the orthogonality centre, which is the centre of the state.'''
+        return self.state.center
+
+    @center.setter
+    def center(self, at: int) -> None:
+        '''Move the orthogonality centre onto a site of the state.'''
+        self.state.center = at
 
     def _advance_left(self, left: Tensor, at: int) -> Tensor:
         '''
@@ -106,7 +104,9 @@ class DMRG:
         '''
         at = self.center
         first, second = self.state.tensors[at], self.state.tensors[at + 1]
-        two = contract(first, second.repartition([0]), [0], [0]).repartition([0, 1, 2])
+        # the side boundary of the window sits between the two sites, so the contraction that joins
+        # them already lands on the split the singular value decomposition makes below
+        two = contract(first, second.repartition([0]), [0], [0])
         site, following = self.operator.tensors[at], self.operator.tensors[at + 1]
         # The two halves of the effective Hamiltonian do not depend on the vector, so they are taken
         # once per window instead of once per Krylov step.
@@ -115,16 +115,15 @@ class DMRG:
 
         def action(vector: Tensor) -> Tensor:
             '''The Hamiltonian of the window applied to a two site tensor.'''
-            return einsum('EPaqj,JRSFb,AQSb->EPRf', head, tail, vector)
+            return einsum('EPaqj,JRSFb,AQsb->EPrf', head, tail, vector)
 
         energy, vector = lanczos(action, two, self.n_iter)
         # the singular values go into the factor the sweep carries, so that the site left behind is
         # isometric and the two site tensor is the centre of the chain
         factor = 2 if direction == 'right' else 1
-        left, values, right = svd(vector, [0, 1], self.max_bond_dim, self.svd_tol, factor)
+        left, values, right = svd(vector, self.max_bond_dim, self.svd_tol, factor)
         self.state.tensors[at], self.state.tensors[at + 1] = left, right.repartition([0, 1])
-        self.state.center = at + 1 if direction == 'right' else at
-        self.center = self.state.center
+        self.center = at + 1 if direction == 'right' else at
         # the block entries carry the tree basis, not the state norm, so the centre is gauged back
         self.state.normalize()
         return energy, 1.0 - float(torch.sum(values * values))
@@ -139,7 +138,6 @@ class DMRG:
           largest weight the sweep threw away.
         '''
         self.state.move_center(0)
-        self.center = self.state.center
         self.cache_environments()
         energy, discarded = 0.0, 0.0
 
@@ -151,13 +149,11 @@ class DMRG:
 
         # the last window leaves the singular values on the right factor, which the left pass takes
         # back as the isometric site at the end of the chain
-        self.state._right_move(self.L - 1)
-        self.center = self.state.center
+        self.state._right_canonicalize(self.L - 1)
         self.right[self.L - 1] = self._advance_right(self.right[self.L], self.L - 1)
 
         for at in range(self.L - 3, -1, -1):
             self.center = at
-            self.state.center = at
             energy, lost = self.update('left')
             discarded = max(discarded, lost)
             if at > 0:
@@ -170,11 +166,14 @@ class DMRG:
         the orthogonality centre sits on.
         Returns:
           The energy, a complex scalar whose imaginary part is round-off.
+        Raises:
+          RuntimeError: when no sweep has built the environments yet.
         '''
+        if not self.left:
+            raise RuntimeError('the energy needs the environments of a sweep, and none has run')
         at = min(self.center, self.L - 2)
-        two = contract(self.state.tensors[at], self.state.tensors[at + 1].repartition([0]), [0],
-                       [0]).repartition([0, 1, 2])
-        image = einsum('AIe,IPqj,JRsk,Dkf,EQSf->APRd', self.left[at], self.operator.tensors[at],
+        two = contract(self.state.tensors[at], self.state.tensors[at + 1].repartition([0]), [0], [0])
+        image = einsum('AIe,IPqj,JRsk,Dkf,EQSf->APrd', self.left[at], self.operator.tensors[at],
                        self.operator.tensors[at + 1], self.right[at + 2], two)
         return complex(inner(two, image) / inner(two, two))
 
@@ -190,7 +189,11 @@ class DMRG:
           verbose: whether to report one line per sweep.
         Returns:
           The model, with its `state` and its `energy` filled in.
+        Raises:
+          ValueError: when the run would take no sweep.
         '''
+        if num_sweeps < 1:
+            raise ValueError(f'a run needs at least one sweep, not {num_sweeps}')
         energy, best, stale = float('inf'), float('inf'), 0
         for sweep in range(1, num_sweeps + 1):
             energy, discarded = self.sweep()
@@ -214,7 +217,7 @@ class DMRG:
 
 
 def dmrg(model: Model, max_bond_dim: int = 50, svd_tol: float = 1e-14, num_sweeps: int = 5,
-         energy_tol: float = 1e-10, patience: int = 2, n_iter: int = 20, seed: int = 0,
+         energy_tol: float = 1e-10, patience: int = 2, n_iter: int = 5, seed: int = 0,
          verbose: bool = True) -> Model:
     '''
     The ground state of a model, by the two site density matrix renormalisation group.

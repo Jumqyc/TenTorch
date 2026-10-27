@@ -1,13 +1,3 @@
-'''
-A matrix product operator: one four leg tensor per site.
-
-Each site tensor carries the bond to its left and the bond to its right, and the two physical legs
-of the operator, one for the state it acts on and one for the state it produces.  The chain is
-open: the outermost bonds are trivial, so contracting it into a matrix product state costs one
-tensor per site.
-'''
-from __future__ import annotations
-
 from typing import Iterator, Optional, Sequence
 
 from tentorch._ext import Leg, Tensor
@@ -18,7 +8,8 @@ class MPO:
     '''
     A matrix product operator over a chain of sites.
     Args:
-      sites: the site tensors, each over legs (bond left, out, in, bond right) on its codomain.
+      sites: the site tensors, each over the codomain (bond left, out) and the domain (in, bond
+        right).
       physical: the physical leg of one site, shared by every site.
       cat: the category of the legs.
       sector: the total charge of the operator, the trivial charge when it is None.
@@ -54,16 +45,6 @@ class MPO:
         '''
         return sum(self.physical.multiplicity(block) for block in range(self.physical.nblocks()))
 
-    def site(self, at: int) -> Tensor:
-        '''
-        One site of the chain.
-        Args:
-          at: the position of the site.
-        Returns:
-          The site tensor.
-        '''
-        return self.tensors[at]
-
     def __len__(self) -> int:
         '''
         The number of sites.
@@ -89,15 +70,6 @@ class MPO:
           The site tensor.
         '''
         return self.tensors[at]
-
-    def copy(self) -> 'MPO':
-        '''
-        A copy that shares no tensor with this one.
-        Returns:
-          The copy.
-        '''
-        return MPO([site.clone() for site in self.tensors], self.physical, self.cat, self.sector,
-                   self.dtype, self.device)
 
     def __repr__(self) -> str:
         '''

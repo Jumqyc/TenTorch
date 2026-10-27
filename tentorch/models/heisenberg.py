@@ -7,13 +7,12 @@ $$H = \sum_{i} \vec S_i \cdot \vec S_{i+1}
 The operator is read as a finite automaton over the virtual bond: a state records which part of a
 term has been written, so one pass along the chain spells out every term at once.
 '''
-from __future__ import annotations
 
 from typing import Callable
 
 from tentorch._ext import AbelianGroup, FusionTree, Leg, NoSymmetry, Tensor
 from tentorch.networks.mpo import MPO
-from tentorch.symmetry import FusionCategory, trivial_leg
+from tentorch.symmetry import FusionCategory, Leg
 from tentorch.tensors.tree import entered
 
 # The automaton: 0 nothing written yet, 1 the $S^z$ of a term, 2 its $S^+$, 3 its $S^-$, 4 closed.
@@ -56,28 +55,6 @@ def _table(cat: FusionCategory) -> tuple[Leg, Leg, Callable[[tuple, int], int],
             lambda sector, copy: _STATE_OF_CHARGED[sector][copy], lambda sector, copy: sector[0])
 
 
-def physical(cat: FusionCategory) -> Leg:
-    '''
-    The spin-$\tfrac12$ leg.
-    Args:
-      cat: the category.
-    Returns:
-      The leg, of dimension two.
-    '''
-    return _table(cat)[0]
-
-
-def virtual(cat: FusionCategory) -> Leg:
-    '''
-    The virtual bond of the automaton: one block per state it can carry.
-    Args:
-      cat: the category.
-    Returns:
-      The leg.
-    '''
-    return _table(cat)[1]
-
-
 def heisenberg(cat: FusionCategory, length: int, coupling: float = 1.0) -> MPO:
     '''
     The nearest neighbour Heisenberg chain.
@@ -87,7 +64,8 @@ def heisenberg(cat: FusionCategory, length: int, coupling: float = 1.0) -> MPO:
       length: the number of sites.
       coupling: the coefficient in front of every bond term.
     Returns:
-      The operator, each site tensor over legs (bond left, out, in, bond right).
+      The operator, each site tensor over the codomain (bond left, out) and the domain (in, bond
+      right).
     Raises:
       ValueError: when the category is not abelian, since its tree basis is the coupled basis and a
         coefficient then is not a plain matrix element.
@@ -95,7 +73,7 @@ def heisenberg(cat: FusionCategory, length: int, coupling: float = 1.0) -> MPO:
     if not isinstance(cat, AbelianGroup):
         raise ValueError(f'the rows of {cat.name} would need the recoupling to dress them')
     phys, bond, state_of, spin_of = _table(cat)
-    edge = trivial_leg(cat, 1)
+    edge = Leg(cat, [cat.trivial()], (1,))
     sites = [_site(phys, edge if at == 0 else bond, edge if at == length - 1 else bond,
                    at == 0, at == length - 1, coupling, state_of, spin_of)
              for at in range(length)]

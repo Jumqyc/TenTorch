@@ -1,65 +1,54 @@
-'''Exact diagonalization of a model in its full Hilbert space, the reference the sweep tests
-compare against on chains small enough to hold every state.'''
-import numpy as np
-import scipy.sparse as sparse
-import scipy.sparse.linalg as sparse_linalg
-from numpy.typing import NDArray
+'''
+The exact diagonalisation of a short Heisenberg chain, to check a sweep against.
 
-from tentorch.model import Model
+The operator is dense in one magnetisation sector, so only the lowest eigenvalue is asked for.
+This is a test helper, not part of the package.
+'''
+
+import itertools
+
+import torch
+
+from tentorch.models.model import Model
 
 
-def _operator(model: Model, name: str) -> NDArray[np.complex128]:
+def exact_energy(model: Model) -> float:
     '''
-    The dense matrix of one operator name of a coupling.
+    The lowest eigenvalue of the Heisenberg chain, by dense diagonalisation.
+
     Args:
-        model: the model whose site names the operators.
-        name: an operator name, or several letters for a product of site operators.
+      model: the model, of even length and of trivial charge, so that the sector it names is the
+        one of zero magnetisation.
     Returns:
-        The matrix, of shape ``(physical_dim, physical_dim)``.
-    '''
-    site = model.site
-    if name in site.operators:
-        return site.matrix(name).cpu().numpy()
-    product = np.eye(model.physical_dim, dtype = np.complex128)
-    for letter in name:
-        product = product @ site.matrix(letter).cpu().numpy()
-    return product
-
-
-def exact_energy(model: Model, k: int = 1) -> float | NDArray[np.float64]:
-    '''
-    The lowest eigenvalues of the Hamiltonian of a model, in the full Hilbert space.
-
-    The Hamiltonian is assembled as a sparse Kronecker sum of the couplings and its lowest
-    eigenpairs come from Lanczos on the sparse matrix.
-    Args:
-        model: the chain and its Hamiltonian.
-        k: how many eigenvalues to return, the lowest first.
-    Returns:
-        The lowest eigenvalue, or all ``k`` of them when ``k > 1``.
+      The ground state energy, from `torch.linalg.eigvalsh` of the sector matrix.
     Raises:
-        ValueError: If a coupling names an operator the site does not have, or a location
-            outside the chain.
+      ValueError: when the length is odd, the charge is not the trivial one, or the coupling has an
+        imaginary part.
     '''
-    L, d = model.L, model.physical_dim
-    dim = d ** L
-    identity = sparse.identity(d, format = 'csr', dtype = np.complex128)
-    hamiltonian = sparse.csr_matrix((dim, dim), dtype = np.complex128)
+    length = model.length
+    if length % 2:
+        raise ValueError(f'a chain of {length} sites has no sector of zero magnetisation')
+    if model.sector != model.cat.trivial():
+        raise ValueError(f'the exact energy is written for the trivial charge, not {model.sector}')
+    coupling = complex(model.coupling)
+    if coupling.imag:
+        raise ValueError(f'the exact energy is written for a real coupling, not {coupling}')
 
-    for operators, coeff, locations in model.couplings:
-        if len(operators) != len(locations):
-            raise ValueError(f'Coupling {operators} acts on {len(locations)} sites.')
-        if any(location < 0 or location >= L for location in locations):
-            raise ValueError(f'Coupling {operators} acts outside the chain of {L} sites.')
-        term = sparse.identity(1, format = 'csr', dtype = np.complex128)
-        for site in range(L):
-            if site in locations:
-                term = sparse.kron(term, sparse.csr_matrix(_operator(model, operators[locations.index(site)])),
-                                   format = 'csr')
+    states = [bits for bits in itertools.product((0, 1), repeat = length) if sum(bits) == length // 2]
+    index = {bits: at for at, bits in enumerate(states)}
+    matrix = torch.zeros(
+        (len(states), len(states)),
+        dtype = torch.float64,
+        device = torch.device(model.cat.device))
+    for at, bits in enumerate(states):
+        for site in range(length - 1):
+            # $\vec S_i \cdot \vec S_{i+1}$: the $S^z S^z$ term is diagonal, the flip term moves one
+            # unit of spin across the bond whenever the two sites differ
+            if bits[site] == bits[site + 1]:
+                matrix[at, at] += 0.25 * coupling.real
             else:
-                term = sparse.kron(term, identity, format = 'csr')
-        hamiltonian = hamiltonian + coeff * term
-
-    low = sparse_linalg.eigsh(hamiltonian, k = k, which = 'SA', return_eigenvectors = False)
-    low = np.sort(low)
-    return float(low[0]) if k == 1 else low
+                matrix[at, at] -= 0.25 * coupling.real
+                flipped = list(bits)
+                flipped[site], flipped[site + 1] = flipped[site + 1], flipped[site]
+                matrix[at, index[tuple(flipped)]] += 0.5 * coupling.real
+    return float(torch.linalg.eigvalsh(matrix)[0])

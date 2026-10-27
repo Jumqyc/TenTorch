@@ -10,7 +10,6 @@ missing or older than one of the sources, the headers or the build script.
 Everything here is the raw extension: the layers above build the user-facing objects on it and
 reach the names a user does not need through this module.
 '''
-from __future__ import annotations
 
 import importlib.util
 import os

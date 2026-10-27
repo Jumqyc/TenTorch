@@ -7,7 +7,6 @@ needs to attribute a sample to a function.
     .venv/bin/python bench/build.py --run
     .venv/bin/python bench/build.py --run --only contraction --profile
 '''
-from __future__ import annotations
 
 import argparse
 import subprocess

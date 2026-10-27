@@ -46,22 +46,22 @@ int main(int argc, char **argv)
   fill(second, 1.1);
   fill(third, 2.0);
   fill(fourth, 2.7);
-  bench::run_for("einsum(\"ab,cd,ac,bd->\")", seconds, [&]
-                 { (void)einsum("ab,cd,ac,bd->", {first, second, third, fourth}, cat->trivial()); });
+  bench::run_for("einsum(\"AB,CD,AC,BD->\")", seconds, [&]
+                 { (void)einsum("AB,CD,AC,BD->", {first, second, third, fourth}, cat->trivial()); });
 
   // A chain of four tensors that share a bond with the next one and carry a physical leg each.
   Tensor first_link(cat, {small, physical}, {small}, cat->trivial());
   Tensor second_link(cat, {small, physical}, {small}, cat->trivial());
   fill(first_link, 0.5);
   fill(second_link, 1.7);
-  bench::run_for("einsum(\"asb,btc,cud,dve->astuve\")", seconds, [&] {
-    (void)einsum("asb,btc,cud,dve->astuve",
+  bench::run_for("einsum(\"ASb,BTc,CUd,DVe->astuve\")", seconds, [&] {
+    (void)einsum("ASb,BTc,CUd,DVe->astuve",
                  {first_link, second_link, first_link, second_link}, cat->trivial());
   });
 
   // Three tensors whose labels form a closed loop, so the order decides how many legs stay open.
-  bench::run_for("einsum(\"ab,bc,ca->\")", seconds, [&] {
-    (void)einsum("ab,bc,ca->", {first, second, first}, cat->trivial());
+  bench::run_for("einsum(\"AB,BC,CA->\")", seconds, [&] {
+    (void)einsum("AB,BC,CA->", {first, second, first}, cat->trivial());
   });
   return 0;
 }

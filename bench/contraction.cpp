@@ -74,10 +74,10 @@ int main(int argc, char **argv)
       fill(right, 1.1);
       describe("left", left);
       describe("right", right);
-      const Tensor product = einsum("lsr,ruv->lsuv", {left, right}, neutral);
+      const Tensor product = einsum("LSr,RUv->lsuv", {left, right}, neutral);
       describe("product", product);
-      bench::run_for("einsum(\"lsr,ruv->lsuv\")", seconds,
-                     [&] { (void) einsum("lsr,ruv->lsuv", {left, right}, neutral); });
+      bench::run_for("einsum(\"LSr,RUv->lsuv\")", seconds,
+                     [&] { (void) einsum("LSr,RUv->lsuv", {left, right}, neutral); });
     }
 
     // An environment update: a state block, an MPO block and the next state block.
@@ -91,10 +91,10 @@ int main(int argc, char **argv)
       describe("state", state);
       describe("mpo", mpo);
       describe("next", next);
-      const Tensor updated = einsum("asb,bc,cds->ad", {state, mpo, next}, neutral);
+      const Tensor updated = einsum("ASb,Bc,CdS->ad", {state, mpo, next}, neutral);
       describe("updated", updated);
-      bench::run_for("einsum(\"asb,bc,cds->ad\")", seconds,
-                     [&] { (void) einsum("asb,bc,cds->ad", {state, mpo, next}, neutral); });
+      bench::run_for("einsum(\"ASb,Bc,CdS->ad\")", seconds,
+                     [&] { (void) einsum("ASb,Bc,CdS->ad", {state, mpo, next}, neutral); });
     }
 
     // The elementary contraction: two bond legs of one block against two of the other.

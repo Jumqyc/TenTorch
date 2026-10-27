@@ -20,7 +20,6 @@ Usage: ``python3 tree_tikz.py pentagon`` or ``python3 tree_tikz.py hexagon``
 prints the figure; the output is pasted into an open ``tikzpicture`` in the
 document.
 '''
-from __future__ import annotations
 
 import math
 import sys

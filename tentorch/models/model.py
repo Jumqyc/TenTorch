@@ -1,21 +1,12 @@
-'''
-The model: a chain, the couplings written on it, and the slots a driver leaves its results in.
-
-A `Model` describes the physics only; it builds no operator and no state, and it is both what a
-driver takes in and what a driver hands back, with the state and the energy of the last run on it.
-'''
-from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Optional
 
 from tentorch._ext import FusionCategory, Leg, Sector, u1
 
-
 @dataclass
 class Model:
     '''
-    A chain and the couplings written on it.
+    A chain and the couplings written on it. Currently unfinished.
 
     Args:
       length: the number of sites.

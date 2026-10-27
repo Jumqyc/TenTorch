@@ -9,19 +9,6 @@ from tentorch.linalg.graded import qr, rq
 from tentorch.tensors.tree import entered
 
 
-def _leg(cat: FusionCategory, sectors: Sequence[Sector], multiplets: int = 1) -> Leg:
-    '''
-    A bond over the named sectors, with the same number of multiplets in each of them.
-    Args:
-      cat: the category of the leg.
-      sectors: the sectors to carry, in order.
-      multiplets: the multiplets of every sector.
-    Returns:
-      The leg.
-    '''
-    return Leg(cat, list(sectors), [multiplets] * len(sectors))
-
-
 def _identity(cat: FusionCategory, bond: Leg, middle: Optional[Leg] = None) -> Tensor:
     '''
     The tensor that closes a chain at one end: the identity on the bond it meets.
@@ -96,41 +83,6 @@ class MPS:
         return [self.tensors[at].domain[0].multiplets() for at in range(self.L - 1)]
 
     @classmethod
-    def product(cls, cat: FusionCategory, physical: Leg, patterns: Sequence[Sector],
-                sector: Optional[Sector] = None) -> 'MPS':
-        '''
-        The product state of one physical sector per site, with bonds of one multiplet.
-        Args:
-          cat: the category of the state.
-          physical: the physical leg of one site.
-          patterns: the sector every site occupies, in order.
-          sector: the charge of the state, the trivial charge when it is None.
-        Returns:
-          The state.
-        Raises:
-          ValueError: when the sectors do not couple along the chain, or the chain as a whole
-            couples to a charge other than `sector`.
-        '''
-        charge = cat.trivial() if sector is None else sector
-        bonds = [_leg(cat, [charge])]
-        for pattern in patterns:
-            coupled = [outcome.sector for outcome in cat.outcomes(bonds[-1].sector(0), pattern)]
-            if not coupled:
-                raise ValueError(f'the sector {pattern} couples to nothing on {bonds[-1].sector(0)}')
-            bonds.append(_leg(cat, [coupled[0]]))
-        if bonds[-1].sector(0) != charge:
-            raise ValueError(f'the sites couple to {bonds[-1].sector(0)}, not to {charge}')
-
-        tensors = []
-        for at in range(len(patterns)):
-            def entry(tree_out: FusionTree, copy_out: tuple[int, ...], tree_in: FusionTree,
-                      copy_in: tuple[int, ...]) -> float:
-                return 1.0 if tree_out.sectors[1] == patterns[at] else 0.0
-
-            tensors.append(entered(cat, [bonds[at], physical], [bonds[at + 1]], entry))
-        return cls(tensors, physical)
-
-    @classmethod
     def random(cls, cat: FusionCategory, physical: Leg, length: int,
                sector: Optional[Sector] = None, seed: int = 0, multiplets: int = 1) -> 'MPS':
         '''
@@ -150,12 +102,13 @@ class MPS:
         charge = cat.trivial() if sector is None else sector
         left = [reachable_charges(cat, [physical] * at) for at in range(length + 1)]
         tail = [reachable_charges(cat, [physical] * (length - at)) for at in range(length + 1)]
-        bonds = [_leg(cat, [bond for bond in left[at]
-                            if any(cat.can_fuse_to(bond, reached, charge) for reached in tail[at])],
-                      multiplets)
-                 for at in range(length + 1)]
+        bonds = []
+        for at in range(length + 1):
+            sectors = [bond for bond in left[at]
+                       if any(cat.can_fuse_to(bond, reached, charge) for reached in tail[at])]
+            bonds.append(Leg(cat, sectors, [multiplets] * len(sectors)))
         # the two ends of a finite chain carry one multiplet, so the state is a vector and not a map
-        bonds[0], bonds[-1] = _leg(cat, [charge]), _leg(cat, [charge])
+        bonds[0] = bonds[-1] = Leg(cat, [charge], (1,))
         if not bonds[0].nblocks() or not bonds[-1].nblocks():
             raise ValueError(f'the charge {charge} admits no state of {length} sites')
 
@@ -164,17 +117,7 @@ class MPS:
                    for at in range(length)]
         return cls(tensors, physical)
 
-    def _left_move(self, at: int) -> None:
-        '''
-        Make site `at` left isometric and push its remainders into site `at + 1`.
-
-        The QR of the site splits it into an isometry and the matrix the next site absorbs; the
-        centre therefore lands on `at + 1`.
-        Args:
-          at: the site to canonicalize, in `[0, L - 1)`.
-        Raises:
-          IndexError: when the site has no site to its right.
-        '''
+    def _left_canonicalize(self, at: int) -> None:
         if at < 0 or at >= self.L - 1:
             raise IndexError(f'index {at} has no site to its right in a chain of {self.L} sites')
         factor, rest = qr(self.tensors[at], [0, 1])
@@ -183,17 +126,7 @@ class MPS:
                                         [0]).repartition([0, 1])
         self.center = at + 1
 
-    def _right_move(self, at: int) -> None:
-        '''
-        Make site `at` right isometric and push its remainders into site `at - 1`.
-
-        The RQ of the site splits it into the matrix the previous site absorbs and an isometry; the
-        centre therefore lands on `at - 1`.
-        Args:
-          at: the site to canonicalize, in `(0, L - 1]`.
-        Raises:
-          IndexError: when the site has no site to its left.
-        '''
+    def _right_canonicalize(self, at: int) -> None:
         if at <= 0 or at >= self.L:
             raise IndexError(f'index {at} has no site to its left in a chain of {self.L} sites')
         factor, rest = rq(self.tensors[at], [0])
@@ -212,9 +145,9 @@ class MPS:
         if not 0 <= at < self.L:
             raise IndexError(f'the centre {at} is outside the chain of {self.L} sites')
         while self.center < at:
-            self._left_move(self.center)
+            self._left_canonicalize(self.center)
         while self.center > at:
-            self._right_move(self.center)
+            self._right_canonicalize(self.center)
 
     def canonicalize(self) -> None:
         '''
@@ -224,9 +157,9 @@ class MPS:
         isometric, so the norm of the state ends up in the centre tensor alone.
         '''
         for at in range(self.center):
-            self._left_move(at)
+            self._left_canonicalize(at)
         for at in range(self.L - 1, self.center, -1):
-            self._right_move(at)
+            self._right_canonicalize(at)
 
     def norm(self) -> float:
         '''The norm of the state, the Frobenius norm of the centre tensor.'''
@@ -256,10 +189,6 @@ class MPS:
                           operator.tensors[at])
         return inner(
             _identity(self.cat, self.tensors[-1].domain[0], operator.tensors[-1].domain[1]), left)
-
-    def copy(self) -> 'MPS':
-        '''A copy of the state, at the same centre.'''
-        return MPS([tensor.clone() for tensor in self.tensors], self.physical, self.center)
 
     def __len__(self) -> int:
         '''The number of sites.'''

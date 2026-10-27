@@ -1,8 +1,3 @@
-'''
-The Krylov eigensolver of a Hermitian action on the block-sparse tensors.
-'''
-from __future__ import annotations
-
 from typing import Callable
 
 import torch
