@@ -95,4 +95,27 @@ namespace sym
                                    const std::vector<Leg> &domain,
                                    const Sector &qtotal);
 
+  /**
+   * @brief Where a computation reads the layout of a side it moves a block through.
+   * @details A layout is a search over the fusion trees, so a computation that needs one only has
+   * to know that it can ask for it: whether the source builds it on demand or reads a cache is not
+   * the computation's business.
+   */
+  class LayoutSource
+  {
+  public:
+    virtual ~LayoutSource() = default;
+
+    /**
+     * @brief The layout of one side at one root.
+     * @param category The category.
+     * @param legs The legs of the side, in order.
+     * @param root The sector the trees of the side couple to.
+     * @return The trees that couple to `root`, and where each one starts.
+     */
+    virtual const SideLayout &side(const FusionCategory &category,
+                                  const std::vector<Leg> &legs,
+                                  const Sector &root) const = 0;
+  };
+
 } // namespace sym

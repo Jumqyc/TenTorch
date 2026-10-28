@@ -87,16 +87,16 @@ namespace sym
     /**
      * @brief The layout of one codomain root.
      * @param codomain_root The sector the codomain couples to.
-     * @return The trees of that root and where each one starts; the layout is built once per root
-     * and then read from the cache on the tensor.
+     * @return The trees of that root and where each one starts; the layout is read from the cache
+     * that holds the sides of every tensor of this shape.
      */
     const SideLayout &rows_of(const Sector &codomain_root) const;
 
     /**
      * @brief The layout of one domain root.
      * @param domain_root The sector the domain couples to.
-     * @return The trees of that root and where each one starts; the layout is built once per root
-     * and then read from the cache on the tensor.
+     * @return The trees of that root and where each one starts; the layout is read from the cache
+     * that holds the sides of every tensor of this shape.
      */
     const SideLayout &columns_of(const Sector &domain_root) const;
 
@@ -210,10 +210,6 @@ namespace sym
     std::vector<Leg> codomain_;
     std::vector<Leg> domain_;
     Sector qtotal_;
-    // The layouts of the two sides, one per root: a layout is a function of the legs and the root,
-    // so every block that shares a root shares the layout as well.
-    mutable std::map<Sector, SideLayout> codomain_layouts_;
-    mutable std::map<Sector, SideLayout> domain_layouts_;
     at::ScalarType dtype_ = at::kComplexDouble;
     c10::Device device_ = c10::Device(c10::DeviceType::CPU);
     std::map<BlockKey, at::Tensor> blocks_;
