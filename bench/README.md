@@ -101,14 +101,55 @@ reference, TeNPy 1.1.1 with the same Hamiltonian, `chi_max` and mixer off does L
 0.08 / 0.22 / 0.29 s and L=32 in 0.15 / 0.39 / 0.52 s, so this engine is level at L=16 and 2–4×
 slower at L=32.
 
+## Where a sweep goes
+
+L=32/bond 64, u1, CPU, from the third sweep on, when the bond has stopped growing and the run is in
+its steady state (2.1 s per sweep). The counts come from tallying the engine, the per-operation
+costs from timing each operation on its own:
+
+| What | Per sweep | Each | Total |
+| --- | --- | --- | --- |
+| Planning a block map: the symbol calls, then the run list | 124 k maps, 114 M runs | ≈8 ns per run | 0.92 s |
+| Applying a block map: `to[i] += c * from[i]`, one run at a time | 114 M runs | 3.5 ns | 0.40 s |
+| The block by block `matmul` | 8.9 k | ≈2 µs | 0.02 s |
+| Everything else: the SVD, the Krylov vector work, Python | | | 0.8 s |
+
+The first two rows are one act seen at two moments: a leg move is planned as a list of strided runs
+and then executed by walking that list, so the same 114 M runs are written once and read once. That
+is 1.3 s of the 2.1 s. The symbols are not the cost: `F` is 30 ns, `R` 20 ns, `outcomes` 100 ns, and
+3.7 M calls of them sit inside the 0.92 s of planning. Neither is the arithmetic: 8.9 k matmuls of a
+few hundred entries are 1% of the sweep. A run costs 1.06 ns while the list stays in cache and 3.5 ns
+on real blocks, so the second row is a cache miss count as much as a multiply count.
+
+The plan cache does not help at this size: every lookup is a miss (`lookups == builds`, three sweeps
+running), because one sweep's plans come to about 6.4 GB against the 256 MB the cache holds.
+
+Three ways to spend less, in the order they pay:
+
+- **Move fewer times.** `contract` wants the summed legs trailing on the first tensor and leading on
+  the second, so it places both operands and then places the result: three maps per contraction, so
+  228 M runs instead of 76 M. Contracting with the legs where they sit, the `F` absorbed into the
+  contraction, is the only change that removes maps instead of making each cheaper.
+- **Apply a map as a matrix.** One step's map is a matrix over the copy and tree indices; the engine
+  already builds one for the device (`matrix_of`) and the CPU takes the run list instead. A gemv
+  would trade 3.5 ns per term for about 0.5, and a chain composes into one matrix, at the price of a
+  denser map.
+- **Skip the symbols where they are the identity.** For u1 and the other abelian groups `F` and `R`
+  are exactly 1, so a leg move only permutes the entries: fill a block with distinct values, move a
+  leg, and the multiset of entries comes back unchanged, coefficient 1, even with multiplicity 3 —
+  while su2 mixes them. That would remove most of the 62% for the categories the driver uses, but it
+  teaches `place` which category it is holding, which is the abstraction the engine is built on. It
+  is not done.
+
 ## Reading the numbers
 
 - **The cost is the bytes moved, not the FLOPs.** The same window action as one einsum is 1 ms,
   as a pre contracted eight leg operator it is 110 ms: the operator holds 10⁶ entries and every leg
   it must move is a gather over all of them. Do not pre contract the environments.
 - **A new shape pays for a plan.** The first call of a leg structure builds the plan of every block
-  and step, at a few tens of microseconds each; the same shape afterwards only looks them up. That
-  is the whole difference between the first sweep and the rest.
+  and step, at a few tens of microseconds each; the same shape afterwards only looks them up, as long
+  as the cache still holds it. At bond 64 one sweep's plans are past the 256 MB cap, so the cache is
+  dropped and every sweep pays for them again.
 - **The case of a letter is a layout instruction.** For a free leg the case says which side that
   operand should keep it on, and a mismatch costs the turnover above; for a summed leg it is
   ignored. So write the output in the layout the caller wants and let the einsum do the move it has
