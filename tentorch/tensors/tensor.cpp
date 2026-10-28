@@ -87,12 +87,12 @@ namespace sym
 
   const SideLayout &Tensor::rows_of(const Sector &codomain_root) const
   {
-    return TensorCaches::instance().side(*cat_, codomain_, codomain_root);
+    return layouts().side(*cat_, codomain_, codomain_root);
   }
 
   const SideLayout &Tensor::columns_of(const Sector &domain_root) const
   {
-    return TensorCaches::instance().side(*cat_, domain_, domain_root);
+    return layouts().side(*cat_, domain_, domain_root);
   }
 
   std::vector<BlockKey> Tensor::keys() const

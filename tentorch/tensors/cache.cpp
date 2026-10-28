@@ -155,6 +155,8 @@ namespace sym
     return caches;
   }
 
+  LayoutSource &layouts() { return TensorCaches::instance(); }
+
   // The interned sides of a step: equal legs give the same vector, and the vector stays where it is
   // for as long as the program runs, so a plan can be named by where it sits.
   const std::vector<int64_t> *TensorCaches::intern(const std::vector<Leg> &codomain,

@@ -118,4 +118,10 @@ namespace sym
                                   const Sector &root) const = 0;
   };
 
+  /**
+   * @brief The source of layouts the engine runs on.
+   * @return A layout per side and root, built once and kept.
+   */
+  LayoutSource &layouts();
+
 } // namespace sym

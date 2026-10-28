@@ -1,7 +1,5 @@
 #include "einsum.h"
 
-#include <map>
-
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -23,6 +21,8 @@ namespace sym
   namespace
   {
 
+    // The most charges one fold, or one combination of traces, may carry.
+    constexpr int64_t kMaxCharges = 4096;
 
     // One group of the equation: its labels, lower cased so that the case reads as the side a leg has
     // to sit on rather than as part of its name, and the side each one asks for, `true` the codomain.
@@ -103,8 +103,8 @@ namespace sym
       {
         // A block whose own roots close in more than one way leaves the coefficient undetermined.
         require_single_closing(*cat, key.codomain, key.domain, qtotal, "the roots", "a trace");
-        const SideLayout &rows = tensor.rows_of(key.codomain);
-        const SideLayout &columns = tensor.columns_of(key.domain);
+        const SideLayout &rows = layouts().side(*cat, tensor.codomain(), key.codomain);
+        const SideLayout &columns = layouts().side(*cat, tensor.domain(), key.domain);
         for (size_t row_at = 0; row_at < rows.trees.size(); ++row_at)
         {
           const FusionTree &above_tree = rows.trees.at(row_at);
@@ -118,8 +118,8 @@ namespace sym
             // The two traced legs name one space, so both trees have to pick the same sector of it.
             if (!(above_tree.sectors.back() == under_tree.sectors.back())) continue;
             const FusionTree kept_under = trimmed(*cat, under_tree);
-            const SideLayout out_rows = layout_of(*cat, out_codomain, kept_above.coupled);
-            const SideLayout out_columns = layout_of(*cat, out_domain, kept_under.coupled);
+            const SideLayout &out_rows = layouts().side(*cat, out_codomain, kept_above.coupled);
+            const SideLayout &out_columns = layouts().side(*cat, out_domain, kept_under.coupled);
             const int64_t new_row = tree_position(out_rows, kept_above);
             const int64_t new_column = tree_position(out_columns, kept_under);
             if (new_row < 0 || new_column < 0)
@@ -196,16 +196,15 @@ namespace sym
       return out;
     }
 
-    // The labels only one of the two lists names: the ones the left keeps first, then the ones only
-    // the right brings, which is the order the product reads them.
+    // The labels only one of the two lists names: the union without the ones both name, in its
+    // order, so the left keeps its labels first and the right brings its own after them.
     std::vector<std::string> product_labels(const std::vector<std::string> &left,
                                             const std::vector<std::string> &right)
     {
+      const std::vector<std::string> shared = shared_of(left, right);
       std::vector<std::string> out;
-      for (const std::string &label : left)
-        if (!holds(right, label)) out.push_back(label);
-      for (const std::string &label : right)
-        if (!holds(left, label)) out.push_back(label);
+      for (const std::string &label : union_of(left, right))
+        if (!holds(shared, label)) out.push_back(label);
       return out;
     }
 
@@ -360,9 +359,10 @@ namespace sym
       {
         const int64_t at = order.at(step);
         std::vector<Tensor> folded = combine(states, labels, {operands.at(at)}, inputs.at(at));
-        if (folded.size() > 4096)
-          throw std::invalid_argument("the products of the equation leave more than 4096 charges to "
-                                      "sum, which is more than this takes");
+        if (static_cast<int64_t>(folded.size()) > kMaxCharges)
+          throw std::invalid_argument("the products of the equation leave more than " +
+                                      std::to_string(kMaxCharges) + " charges to sum, which is "
+                                      "more than this takes");
         labels = product_labels(labels, inputs.at(at));
         states = std::move(folded);
       }
@@ -550,10 +550,11 @@ namespace sym
     {
       if (alternatives.empty())
         throw std::invalid_argument("the traces of '" + spec + "' leave nothing to sum");
-      if (alternatives.size() > 4096 / combinations)
-        throw std::invalid_argument("the traces of '" + spec +
-                                    "' leave more than 4096 combinations of charges, which is more "
-                                    "than this sums");
+      if (static_cast<int64_t>(alternatives.size()) >
+          kMaxCharges / static_cast<int64_t>(combinations))
+        throw std::invalid_argument("the traces of '" + spec + "' leave more than " +
+                                    std::to_string(kMaxCharges) +
+                                    " combinations of charges, which is more than this sums");
       combinations *= alternatives.size();
     }
 
