@@ -183,18 +183,14 @@ namespace sym
   Tensor Tensor::place(const std::vector<int64_t> &above) const
   {
     const int64_t total = nlegs();
+    // The legs not named above go below, in the order they already have; a number that is out of
+    // range or repeated is caught by the check below, which every layout goes through.
     std::vector<bool> named(static_cast<size_t>(total), false);
     for (const int64_t leg : above)
-    {
-      if (leg < 0 || leg >= total)
-        throw std::invalid_argument("the leg " + std::to_string(leg) + " does not exist, the tensor has " +
-                                    std::to_string(total) + " legs");
-      if (named.at(static_cast<size_t>(leg)))
-        throw std::invalid_argument("the leg " + std::to_string(leg) + " is named twice");
-      named.at(static_cast<size_t>(leg)) = true;
-    }
+      if (0 <= leg && leg < total) named.at(static_cast<size_t>(leg)) = true;
     std::vector<int64_t> below;
-    below.reserve(static_cast<size_t>(total - static_cast<int64_t>(above.size())));
+    if (static_cast<int64_t>(above.size()) < total)
+      below.reserve(static_cast<size_t>(total - static_cast<int64_t>(above.size())));
     for (int64_t leg = 0; leg < total; ++leg)
       if (!named.at(static_cast<size_t>(leg))) below.push_back(leg);
     return place(above, below);
@@ -234,35 +230,19 @@ namespace sym
     while (!descends && kept < depth && kept < static_cast<int64_t>(below.size()) &&
            below.at(static_cast<size_t>(kept)) == height + kept)
       ++kept;
-    if (kept > 0)
-    {
-      // The legs behind the ones that stay are lifted off the end of the domain, one fold each; the
-      // folds take the end of the codomain first, so the legs that come back down are named last
-      // first, and they land on the domain in the order the caller named them in.
-      for (int64_t at = kept; at < depth; ++at) chain.fold(false);
-      const auto position_of = [height, depth](const int64_t leg) {
-        return leg < height ? leg : height + (depth - 1 - (leg - height));
-      };
-      std::vector<int64_t> order;
-      order.reserve(static_cast<size_t>(total - kept));
-      for (const int64_t leg : above) order.push_back(position_of(leg));
-      for (auto leg = below.rbegin(); leg != below.rend() - kept; ++leg) order.push_back(position_of(*leg));
-      chain.sort(order);
-      for (int64_t at = kept; at < static_cast<int64_t>(below.size()); ++at) chain.fold(true);
-      return carried(*this, chain.steps);
-    }
-    // Otherwise every leg is bent onto the codomain, the only side that can be ordered; a leg taken
-    // off its end goes back last named first, so the folds below land the domain in the named order.
-    while (!chain.domain.empty()) chain.fold(false);
+    // Every leg behind the ones that stay is bent onto the codomain, the only side that can be
+    // ordered, one fold each; a leg taken off its end goes back last named first, so the folds below
+    // land the domain in the named order.
+    for (int64_t at = kept; at < depth; ++at) chain.fold(false);
     const auto position_of = [height, depth](const int64_t leg) {
       return leg < height ? leg : height + (depth - 1 - (leg - height));
     };
     std::vector<int64_t> order;
-    order.reserve(static_cast<size_t>(total));
+    order.reserve(static_cast<size_t>(total - kept));
     for (const int64_t leg : above) order.push_back(position_of(leg));
-    for (auto leg = below.rbegin(); leg != below.rend(); ++leg) order.push_back(position_of(*leg));
+    for (auto leg = below.rbegin(); leg != below.rend() - kept; ++leg) order.push_back(position_of(*leg));
     chain.sort(order);
-    for (int64_t at = 0; at < static_cast<int64_t>(below.size()); ++at) chain.fold(true);
+    for (int64_t at = kept; at < static_cast<int64_t>(below.size()); ++at) chain.fold(true);
     return carried(*this, chain.steps);
   }
 

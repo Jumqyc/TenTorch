@@ -10,6 +10,16 @@
 namespace sym
 {
 
+  namespace
+  {
+    // Whether two tensors live over one category with the same legs and the same charge.
+    bool same_space(const Tensor &a, const Tensor &b)
+    {
+      return same_group(*a.cat(), *b.cat()) && a.qtotal() == b.qtotal() && a.codomain() == b.codomain() &&
+             a.domain() == b.domain();
+    }
+  } // namespace
+
   Tensor::Tensor(std::shared_ptr<const FusionCategory> cat,
                  std::vector<Leg> codomain,
                  std::vector<Leg> domain,
@@ -127,22 +137,18 @@ namespace sym
 
   Tensor &Tensor::operator+=(const Tensor &other)
   {
-    if (!same_group(*cat_, *other.cat_) || !(qtotal_ == other.qtotal_) ||
-        !(codomain_ == other.codomain_) || !(domain_ == other.domain_))
+    if (!same_space(*this, other))
       throw std::invalid_argument("a sum needs both tensors with the same legs and the same charge");
-    for (const auto &[key, block] : other.blocks_)
-      blocks_.at(key).add_(block);
+    for (const auto &[key, block] : other.blocks()) blocks_.at(key).add_(block);
     return *this;
   }
 
   Tensor &Tensor::operator-=(const Tensor &other)
   {
-    if (!same_group(*cat_, *other.cat_) || !(qtotal_ == other.qtotal_) ||
-        !(codomain_ == other.codomain_) || !(domain_ == other.domain_))
+    if (!same_space(*this, other))
       throw std::invalid_argument("a difference needs both tensors with the same legs and the same "
                                   "charge");
-    for (const auto &[key, block] : other.blocks_)
-      blocks_.at(key).sub_(block);
+    for (const auto &[key, block] : other.blocks()) blocks_.at(key).sub_(block);
     return *this;
   }
 
