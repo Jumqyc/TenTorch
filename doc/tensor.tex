@@ -195,63 +195,37 @@ where the former uses the resolution of identity on $\mathscr{V}^{a}\otimes\math
 
 These identities are the algebra of a node. Draw the CG tensor as a node with two legs in and one leg out:
 \begin{center}
-    \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
-    \node (a) at (0,0) {$a$};
-    \node (b) at (1.2,0) {$b$};
-    \node (c) at (0.6,1.2) {$c$};
-    \node[circle, fill, inner sep=1.5pt] (v) at (0.6,0.6) {};
-    \draw (a) -- (v); \draw (b) -- (v); \draw (v) -- (c);
-    \node[anchor=north] at (2.0,0.6) {$=C^{c}_{ab}$};
-  \end{tikzpicture}
+    \ftree{--legs a,b --fuse 1:c}\qquad $=C^{c}_{ab}$
 \end{center}
 The indices are the lines of the node: $a,b$ name the charges on the two incoming legs, $c$ the charge on the outgoing one, and $\alpha,\beta,\mu$ the components carried along each line. Contracting a diagram means summing over the components of every internal line, so the orthogonality relations Eq.(\ref{eq:cg-orth}) read
 \begin{center}
-    \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
-    \node[anchor=center] at (-3,1) {
-        $\sum_{\alpha,\beta}(C^{c}_{ab})^{\mu}_{\alpha\beta}\,
-    \overline{(C^{c'}_{ab})^{\mu'}_{\alpha\beta}} = $
-    }; 
-    \node (a) at (-0.5,1) {$a$};
-    \node (b) at (0.5,1) {$b$};
-    \node (c) at (0,2) {$c$};
-    \node (c') at (0,0) {$c'$};
-    \node[circle,fill] (v) at (0,0.5) {};
-    \node[circle,fill] (v') at (0,1.5) {};
-    \draw (a) -- (v); \draw (b) -- (v);
-    \draw (a) -- (v'); \draw (b) -- (v');
-    \draw (v) -- (c'); \draw (v') -- (c);
-    \node[anchor = center] at (1.2,1) {$=$};
-    \node (c'') at (2,2) {$c$};
-    \node (c''') at (2,0) {$c'$};
-    \draw (c'') -- (c''');
-    \node[anchor=center] at (3.5,1) {$=\delta_{cc'}\delta_{\mu\mu'}$};
+    $\sum_{\alpha,\beta}(C^{c}_{ab})^{\mu}_{\alpha\beta}\,
+    \overline{(C^{c'}_{ab})^{\mu'}_{\alpha\beta}} =
+    \ftree{--legs c@ --split 1:a,b --fuse 1:c}
+    \;=\;
+    \begin{tikzpicture}[thick, baseline=(current bounding box.center)]
+        \draw (0,0) -- (0,1.05);
+        \node[anchor=south, inner sep=1pt, font=\footnotesize] at (0,1.07) {$c$};
+        \node[anchor=north, inner sep=1pt, font=\footnotesize] at (0,-0.02) {$c'$};
     \end{tikzpicture}
+    \;=\;\delta_{cc'}\delta_{\mu\mu'}$
 \end{center}
 The second relation glues the two nodes along the charge instead, so the two legs pass through:
 
 \begin{center}
-    \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
-    \node[anchor=center] at (-3,1) {
-        $\sum_{c,\mu}(C^{c}_{ab})^{\mu}_{\alpha\beta}\,
-    \overline{(C^{c}_{ab})^{\mu}_{\alpha'\beta'}} = $
-    };
-    \node (a') at (-0.5,2) {$a$};
-    \node (b') at (0.5,2) {$b$};
-    \node (a) at (-0.5,0) {$a$};
-    \node (b) at (0.5,0) {$b$};
-    \node[circle,fill] (v') at (0,1.5) {};
-    \node[circle,fill] (v) at (0,0.5) {};
-    \draw (a') -- (v'); \draw (b') -- (v');
-    \draw (a) -- (v); \draw (b) -- (v);
-    \draw (v') -- (v);
-    \node[anchor = center] at (1.2,1) {$=$};
-    \node (x) at (1.95,2) {$a$};
-    \node (y) at (2.6,2) {$b$};
-    \node (x') at (1.95,0) {$a$};
-    \node (y') at (2.6,0) {$b$};
-    \draw (x) -- (x'); \draw (y) -- (y');
-    \node[anchor=center] at (3.85,1) {$=\delta_{\alpha\alpha'}\delta_{\beta\beta'}$};
+    $\sum_{c,\mu}(C^{c}_{ab})^{\mu}_{\alpha\beta}\,
+    \overline{(C^{c}_{ab})^{\mu}_{\alpha'\beta'}} =
+    \ftree{--legs a,b --fuse 1:c --split 1:a,b}
+    \;=\;
+    \begin{tikzpicture}[thick, baseline=(current bounding box.center)]
+        \draw (-0.3,0) -- (-0.3,1.05);
+        \draw (0.3,0) -- (0.3,1.05);
+        \node[anchor=south, inner sep=1pt, font=\footnotesize] at (-0.3,1.07) {$a$};
+        \node[anchor=south, inner sep=1pt, font=\footnotesize] at (0.3,1.07) {$b$};
+        \node[anchor=north, inner sep=1pt, font=\footnotesize] at (-0.3,-0.02) {$a$};
+        \node[anchor=north, inner sep=1pt, font=\footnotesize] at (0.3,-0.02) {$b$};
     \end{tikzpicture}
+    \;=\;\delta_{\alpha\alpha'}\delta_{\beta\beta'}$
 \end{center}
 Tracing these diagrams over the component indices counts dimensions, and in a diagram the trace is a closed loop. With this in mind, we have
 \begin{center}
@@ -269,18 +243,9 @@ Tracing these diagrams over the component indices counts dimensions, and in a di
     \node[anchor=north, inner sep=1pt] at (-0.6,0.8) {$a$};
     \node[anchor=south, inner sep=1pt] at (0,2.0) {$b$};
     \node[anchor=north, inner sep=1pt] at (0,0.8) {$b$};
-    \node[anchor=center] at (0.7,1.4) {$=$};
-    \node[anchor=center] at (1.3,1.4) {$\mathrm{tr}_{a,b}$};
-    \node[circle,fill,inner sep=1.5pt] (t1) at (2.45,1.7) {};
-    \node[circle,fill,inner sep=1.5pt] (t2) at (2.45,1.1) {};
-    \draw (1.95,2.3) -- (t1); \draw (2.95,2.3) -- (t1);
-    \draw (1.95,0.5) -- (t2); \draw (2.95,0.5) -- (t2);
-    \draw (t1) -- (t2);
-    \node[fill=white, inner sep=1.5pt] at (2.45,1.4) {$c$};
-    \node[anchor=south, inner sep=1pt] at (1.95,2.3) {$a$};
-    \node[anchor=south, inner sep=1pt] at (2.95,2.3) {$b$};
-    \node[anchor=north, inner sep=1pt] at (1.95,0.5) {$a$};
-    \node[anchor=north, inner sep=1pt] at (2.95,0.5) {$b$};
+    \node[anchor=center] at (0.55,1.4) {$=$};
+    \node[anchor=center] at (1.45,1.4) {$\sum_{c}\mathrm{tr}_{a,b}$};
+    \node[inner sep=0] at (3.0,1.35) {\input{figures/theta}};
     \node[anchor=center] at (-6.0,-0.95) {$=$};
     \draw (-4.6,-0.45) arc (90:270:0.5);
     \draw (-4.6,-0.45) arc (90:-90:0.5);
@@ -308,64 +273,21 @@ The same number follows from playing with Eq.(\ref{eq:cg-orth}).
 
 \paragraph{Rank 3} A rank-3 tensor needs the fusion twice, and there are two ways to stack the two nodes. Fuse legs $a_1,a_2$ first to a label $b$, then $b$ with $a_3$ to the root $c$:
 \begin{center}
-    \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
-        \node[anchor=north] (a1) at (0,0) {$a_1$};
-        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
-        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
-        \node (b) at (0.6,0.9) {$b$};
-        \node (c) at (1.2,2.0) {$c$};
-        \node[circle, fill, inner sep=1.5pt] (v1) at (0.6,0.6) {};
-        \node[circle, fill, inner sep=1.5pt] (v2) at (1.2,1.2) {};
-        \draw (a1) -- (v1); \draw (a2) -- (v1);
-        \draw (v1) -- (v2); \draw (a3) -- (v2); \draw (v2) -- (c);
-        \node[anchor=north] at (5.0,1.2) {$=C^{c}_{ba_3}C^{b}_{a_1a_2}$};
-
-    \end{tikzpicture}
+    \ftree{--legs a_1,a_2,a_3 --fuse 1:b --fuse 1:c}\qquad $=C^{c}_{ba_3}C^{b}_{a_1a_2}$
 \end{center}
 A state $\ket{c\mu}$ of the product space is then built by inserting the CG tensors inductively. The ket carries its tree, and the component $\mu$ of the root is written outside:
 \begin{align*}
-    \sum_b\left|\,\begin{tikzpicture}[thick, scale=0.5, every node/.style={font=\scriptsize, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
-        \node[anchor=north] (a1) at (0,0) {$a_1$};
-        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
-        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
-        \node (b) at (0.6,0.9) {$b$};
-        \node (c) at (1.2,2.0) {$c$};
-        \node[circle, fill, inner sep=1.5pt] (v1) at (0.6,0.6) {};
-        \node[circle, fill, inner sep=1.5pt] (v2) at (1.2,1.2) {};
-        \draw (a1) -- (v1); \draw (a2) -- (v1);
-        \draw (v1) -- (v2); \draw (a3) -- (v2); \draw (v2) -- (c);
-    \end{tikzpicture}\,\,;c\mu\right\rangle
+    \sum_b\left|\,\ftree{--legs a_1,a_2,a_3 --fuse 1:b --fuse 1:c --scale 0.55 --font \scriptsize}\,\,;c\mu\right\rangle
     &= \sum_b\sum_{\beta\alpha_3} (C^c_{ba_3})^{\mu}_{\beta\alpha_3}\ket{b\beta}\otimes\ket{\alpha_3}_{a_3} \\
     &= \sum_b\sum_{\beta\alpha_3}\sum_{\alpha_1\alpha_2} (C^c_{ba_3})^{\mu}_{\beta\alpha_3}(C^b_{a_1a_2})^{\beta}_{\alpha_1\alpha_2}\ket{\alpha_1}_{a_1}\otimes\ket{\alpha_2}_{a_2}\otimes\ket{\alpha_3}_{a_3}.
 \end{align*}
 
 On the other hand, we can also fuse $a_2$ and $a_3$ first to a label $b'$, then $a_1$ with $b'$ to the root $c$:
 \begin{center}
-    \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
-        \node[anchor=north] (a1) at (0,0) {$a_1$};
-        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
-        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
-        \node (b') at (1.8,0.9) {$b'$};
-        \node (c) at (1.2,2.0) {$c$};
-        \node[circle, fill, inner sep=1.5pt] (v1) at (1.8,0.6) {};
-        \node[circle, fill, inner sep=1.5pt] (v2) at (1.2,1.2) {};
-        \draw (a2) -- (v1); \draw (a3) -- (v1);
-        \draw (v1) -- (v2); \draw (a1) -- (v2); \draw (v2) -- (c);
-        \node[anchor=north] at (5.0,1.2) {$=C^{c}_{a_1b'}C^{b'}_{a_2a_3}$};
-    \end{tikzpicture}
+    \ftree{--legs a_1,a_2,a_3 --fuse 2:b@ --fuse 1:c}\qquad $=C^{c}_{a_1b'}C^{b'}_{a_2a_3}$
 \end{center}
 which means\begin{align}
-    \sum_{b'}\left|\,\begin{tikzpicture}[thick, scale=0.5, every node/.style={font=\scriptsize, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
-        \node[anchor=north] (a1) at (0,0) {$a_1$};
-        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
-        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
-        \node (b') at (1.8,0.9) {$b'$};
-        \node (c) at (1.2,2.0) {$c$};
-        \node[circle, fill, inner sep=1.5pt] (v1) at (1.8,0.6) {};
-        \node[circle, fill, inner sep=1.5pt] (v2) at (1.2,1.2) {};
-        \draw (a2) -- (v1); \draw (a3) -- (v1);
-        \draw (v1) -- (v2); \draw (a1) -- (v2); \draw (v2) -- (c);
-    \end{tikzpicture}\,;c\mu\right\rangle
+    \sum_{b'}\left|\,\ftree{--legs a_1,a_2,a_3 --fuse 2:b@ --fuse 1:c --scale 0.55 --font \scriptsize}\,;c\mu\right\rangle
     &= \sum_{b'}\sum_{\beta'\alpha_1} (C^c_{a_1b'})^{\mu}_{\alpha_1\beta'}\ket{\alpha_1}_{a_1}\otimes\ket{b'\beta'} \\
     &= \sum_{b'}\sum_{\beta'\alpha_1}\sum_{\alpha_2\alpha_3} (C^c_{a_1b'})^{\mu}_{\alpha_1\beta'}(C^{b'}_{a_2a_3})^{\beta'}_{\alpha_2\alpha_3}\ket{\alpha_1}_{a_1}\otimes\ket{\alpha_2}_{a_2}\otimes\ket{\alpha_3}_{a_3}.
 \end{align}
@@ -374,27 +296,7 @@ In both cases the sum over the intermediate charge runs over every charge allowe
 
 Both fusions give the same state $\ket{c\mu}$, but its components in the two tree bases differ. Their overlap is
 \begin{align}
-    (F^{c}_{a_1a_2a_3})_{bb'}&=\left\langle \,\begin{tikzpicture}[thick, scale=0.5, every node/.style={font=\scriptsize, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
-        \node[anchor=north] (a1) at (0,0) {$a_1$};
-        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
-        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
-        \node (b) at (0.6,0.9) {$b$};
-        \node (c) at (1.2,2.0) {$c$};
-        \node[circle, fill, inner sep=1.5pt] (v1) at (0.6,0.6) {};
-        \node[circle, fill, inner sep=1.5pt] (v2) at (1.2,1.2) {};
-        \draw (a1) -- (v1); \draw (a2) -- (v1);
-        \draw (v1) -- (v2); \draw (a3) -- (v2); \draw (v2) -- (c);
-    \end{tikzpicture}\,\,;c\mu\right|\left.\,\begin{tikzpicture}[thick, scale=0.5, every node/.style={font=\scriptsize, inner sep=0pt, outer sep=0pt}, baseline=(current bounding box.center)]
-        \node[anchor=north] (a1) at (0,0) {$a_1$};
-        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
-        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
-        \node (b') at (1.8,0.9) {$b'$};
-        \node (c) at (1.2,2.0) {$c$};
-        \node[circle, fill, inner sep=1.5pt] (v1) at (1.8,0.6) {};
-        \node[circle, fill, inner sep=1.5pt] (v2) at (1.2,1.2) {};
-        \draw (a2) -- (v1); \draw (a3) -- (v1);
-        \draw (v1) -- (v2); \draw (a1) -- (v2); \draw (v2) -- (c);
-    \end{tikzpicture}\,;c\mu\right\rangle
+    (F^{c}_{a_1a_2a_3})_{bb'}&=\left\langle \,\ftree{--legs a_1,a_2,a_3 --fuse 1:b --fuse 1:c --scale 0.55 --font \scriptsize}\,\,;c\mu\right|\left.\,\ftree{--legs a_1,a_2,a_3 --fuse 2:b@ --fuse 1:c --scale 0.55 --font \scriptsize}\,;c\mu\right\rangle
     \\
     &= \sum_{\alpha_1\alpha_2\alpha_3}\sum_{\beta\beta'}
     \overline{(C^{b}_{a_1a_2})^{\beta}_{\alpha_1\alpha_2}}\,
@@ -407,28 +309,8 @@ To reduce it, note that both states lie in the same sector $c$. The overlap is a
 
 Another way to interpret this overlap is to directly take the conjugate of the first tree (flip it over) and glue it to the second tree:
 \begin{center}
-\begin{tikzpicture}[thick, every node/.style={font=\small, inner sep=1pt, outer sep=1pt}]
-    \coordinate (L1) at (0,0);
-    \coordinate (L2) at (1.2,0);
-    \coordinate (L3) at (2.4,0);
-    \node[anchor=east, inner sep=2pt] at (0,0) {$a_1$};
-    \node[anchor=south east, inner sep=2pt] at (1.2,0) {$a_2$};
-    \node[anchor=west, inner sep=2pt] at (2.4,0) {$a_3$};
-    \node[circle, fill, inner sep=1.1pt] (v1) at (0.6,-0.7) {};
-    \node[circle, fill, inner sep=1.1pt] (v2) at (1.2,-1.45) {};
-    \node[circle, fill, inner sep=1.1pt] (w1) at (1.8,0.7) {};
-    \node[circle, fill, inner sep=1.1pt] (w2) at (1.2,1.45) {};
-    \foreach \p in {L1,L2,L3} { \node[circle, fill, inner sep=0.9pt] at (\p) {}; }
-    \draw (L1) -- (v1); \draw (L2) -- (v1);
-    \draw (v1) -- (v2); \draw (L3) -- (v2);
-    \draw (L2) -- (w1); \draw (L3) -- (w1);
-    \draw (w1) -- (w2); \draw (L1) -- (w2);
-    \draw (v2) .. controls (-1.15,-1.1) and (-1.15,1.1) .. (w2);
-    \node[anchor=east] at (0.72,-1.05) {$b$};
-    \node[anchor=west] at (1.68,1.05) {$b'$};
-    \node[anchor=east] at (-0.98,0) {$c$};
-    \node at (3.35,0) {$=$};
-    \begin{scope}[shift={(4.25,-1.2)}]
+\input{figures/foverlap}\qquad$=$\qquad
+\begin{tikzpicture}[thick, every node/.style={font=\small, inner sep=1pt, outer sep=1pt}, baseline=(current bounding box.center)]
         \node[circle, fill, inner sep=1.2pt] (Q) at (0,0) {};
         \node[circle, fill, inner sep=1.2pt] (R) at (3.4,0) {};
         \node[circle, fill, inner sep=1.2pt] (P) at (1.7,2.4) {};
@@ -441,38 +323,15 @@ Another way to interpret this overlap is to directly take the conjugate of the f
         \node[fill=white] at (1.54,1.55) {$a_1$};
         \node[fill=white] at (0.75,0.34) {$c$};
         \node[fill=white] at (2.65,0.34) {$b'$};
-    \end{scope}
 \end{tikzpicture}
 \end{center}
 In the left picture the second tree is the first one flipped over, so the two are glued along $a_1,a_2,a_3$ and along the root $c$, which is drawn as the single curve joining the two upper vertices. Every leg then meets a partner and what remains is the tetrahedron on the right: six edges $a_1,a_2,a_3,b,b',c$, every vertex trivalent, nothing external. Its value is one number per pair of inner labels, and it is the network the $6j$ symbol counts.
 
 Yet another way to see the $F$ symbol is to view it as basis changing matrix. Different fusion path are essentially different conventions in the fusion process: hence we have
 \begin{align*}
-    \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=1pt, outer sep=1pt}, baseline=(current bounding box.center)]
-        \node[anchor=north] (a1) at (0,0) {$a_1$};
-        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
-        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
-        \node[circle, fill, inner sep=1.1pt] (v1) at (0.6,0.6) {};
-        \node[circle, fill, inner sep=1.1pt] (v2) at (1.2,1.4) {};
-        \node (c) at (1.2,2.2) {$c$};
-        \draw (a1) -- (v1); \draw (a2) -- (v1);
-        \draw (v1) -- (v2); \draw (a3) -- (v2);
-        \draw (v2) -- (c);
-        \node[anchor=east] at (0.42,0.98) {$b$};
-    \end{tikzpicture}
+    \ftree{--legs a_1,a_2,a_3 --fuse 1:b --fuse 1:c}
     \;=\sum_{b'}(F^c_{a_1a_2a_3})_{bb'}\;
-    \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=1pt, outer sep=1pt}, baseline=(current bounding box.center)]
-        \node[anchor=north] (a1) at (0,0) {$a_1$};
-        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
-        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
-        \node[circle, fill, inner sep=1.1pt] (w1) at (1.8,0.6) {};
-        \node[circle, fill, inner sep=1.1pt] (v2) at (1.2,1.4) {};
-        \node (c) at (1.2,2.2) {$c$};
-        \draw (a2) -- (w1); \draw (a3) -- (w1);
-        \draw (w1) -- (v2); \draw (a1) -- (v2);
-        \draw (v2) -- (c);
-        \node[anchor=west] at (1.98,0.98) {$b'$};
-    \end{tikzpicture}
+    \ftree{--legs a_1,a_2,a_3 --fuse 2:b@ --fuse 1:c}
 \end{align*}
 
 To conclude, thanks to Schur's lemma, we are able to view the fusion trees as vectors in a Hilbert space, for the same fusion process, the trees form a orthonormal (to see this, use the relation Eq.(\ref{eq:cg-orth})) basis labeled by the intermediate fusion step $b$. We can further define the inner product of two trees, and $F$-symbols are the overlaps of two different fusion ordering, and act as the change of basis between the two bases. 
@@ -513,27 +372,7 @@ In our convention, we always store the tree as\begin{align}
 where the fusion process is from left to right. 
 
 \begin{center}
-    \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=1pt, outer sep=1pt}, baseline=(current bounding box.center)]
-        \node[anchor=north] (a1) at (0,0) {$a_1$};
-        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
-        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
-        \node[anchor=north] (a4) at (3.6,0) {$a_4$};
-        \node[anchor=north] (a5) at (4.8,0) {$a_5$};
-        \node[circle, fill, inner sep=1.1pt] (v1) at (0.6,0.6) {};
-        \node[circle, fill, inner sep=1.1pt] (v2) at (1.2,1.2) {};
-        \node[circle, fill, inner sep=1.1pt] (v3) at (1.8,1.8) {};
-        \node[circle, fill, inner sep=1.1pt] (v4) at (2.4,2.4) {};
-        \node (b1) at (0.6,0.9) {$b_1$};
-        \node (b2) at (1.2,1.5) {$b_2$};
-        \node (b3) at (1.8,2.1) {$b_3$};
-        \node (c) at (2.4,3.2) {$c$};
-        \draw (a1) -- (v1); \draw (a2) -- (v1);
-        \draw (v1) -- (v2); \draw (a3) -- (v2);
-        \draw (v2) -- (v3); \draw (a4) -- (v3);
-        \draw (v3) -- (v4); \draw (a5) -- (v4);
-        \draw (v4) -- (c);
-        \node[anchor = center] at (8.4,0.5) {$=(a_1,a_2,a_3,a_4,a_5|b_1,b_2,b_3|c)$};
-    \end{tikzpicture}
+    \ftree{--legs a_1,a_2,a_3,a_4,a_5 --fuse 1:b_1 --fuse 1:b_2 --fuse 1:b_3 --fuse 1:c --scale 0.75}\qquad $=(a_1,a_2,a_3,a_4,a_5|b_1,b_2,b_3|c)$
 \end{center}
 
 \begin{example}
@@ -559,7 +398,7 @@ in complex double precision. Of the $4\times 1\times 4=16$ combinations of leg c
         \fusiontreepic{\secH{$\tfrac12$}}{\secH{$\tfrac12$}}{\secO{$1$}}{\secO{$1$}} & $(\secMb{secHalf}{50}\cdot\secH{2})(\secMb{secHalf}{1}\cdot\secH{2})(\secMb{secOne}{30}\cdot\secO{3}) = 18000$ & $\secMb{secHalf}{50}\cdot\secMb{secHalf}{1}\cdot\secMb{secOne}{30} = 1500$ \\[3.6em]
         \fusiontreepic{\secO{$1$}}{\secH{$\tfrac12$}}{\secH{$\tfrac12$}}{\secH{$\tfrac12$}} & $(\secMb{secOne}{30}\cdot\secO{3})(\secMb{secHalf}{1}\cdot\secH{2})(\secMb{secHalf}{50}\cdot\secH{2}) = 18000$ & $\secMb{secOne}{30}\cdot\secMb{secHalf}{1}\cdot\secMb{secHalf}{50} = 1500$ \\[3.6em]
         \fusiontreepic{\secO{$1$}}{\secH{$\tfrac12$}}{\secT{$\tfrac32$}}{\secT{$\tfrac32$}} & $(\secMb{secOne}{30}\cdot\secO{3})(\secMb{secHalf}{1}\cdot\secH{2})(\secMb{secThreeHalf}{10}\cdot\secT{4}) = 7200$ & $\secMb{secOne}{30}\cdot\secMb{secHalf}{1}\cdot\secMb{secThreeHalf}{10} = 300$ \\[3.6em]
-        \fusiontreepic{\secT{$\tfrac32$}}{\secH{$\tfrac12$}}{\secO{$1$}}{\secO{$1$}} & $(\secMb{secThreeHalf}{10}\cdot\secT{4})(\secMb{secHalf}{1}\cdot\secH{2})(\secMb{secOne}{30}\cdot\secO{3}) = 7200$ & $\secMb{secThreeHalf}{10}\cdot\secMb{secHalf}{1}\cdot\secMb{secOne}{30} = 300$ \\
+        \fusiontreepic{\secT{$\tfrac32$}}{\secH{$\tfrac12$}}{\secO{$1$}}{\secO{$1$}} & $(\secMb{secThreeHalf}{10}\cdot\secT{4})(\secMb{secHalf}{1}\cdot\secH{2})(\secMb{secOne}{30}\cdot\secO{3}) = 7200$ & $\secMb{secThreeHalf}{10}\cdot\secMb{secHalf}{1}\cdot\secMb{secOne}{30} = 300$ \\[1.6em]
         \hline
         total & $78400$ & $10600$
     \end{tabular}
@@ -584,63 +423,21 @@ The last section built the blocks out of CG tensors. Here we look at the structu
 \subsection{The two moves on a tree}
 Two moves act on a tree. The first re-brackets it, which is the $F$ symbol of Section~\ref{sec:cg}: the left tree below couples $a_1,a_2$ first to the inner charge $b$, the right one couples $a_2,a_3$ first to $b'$, and the entries of $F^{c}_{a_1a_2a_3}$ are the amplitudes of that move,
 \begin{align*}
-    \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=1pt, outer sep=1pt}, baseline=(current bounding box.center)]
-        \node[anchor=north] (a1) at (0,0) {$a_1$};
-        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
-        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
-        \node[circle, fill, inner sep=1.1pt] (v1) at (0.6,0.6) {};
-        \node[circle, fill, inner sep=1.1pt] (v2) at (1.2,1.4) {};
-        \node (c) at (1.2,2.2) {$c$};
-        \draw (a1) -- (v1); \draw (a2) -- (v1);
-        \draw (v1) -- (v2); \draw (a3) -- (v2);
-        \draw (v2) -- (c);
-        \node[anchor=east] at (0.42,0.98) {$b$};
-    \end{tikzpicture}
+    \ftree{--legs a_1,a_2,a_3 --fuse 1:b --fuse 1:c}
     \;\xrightarrow{\;F^{c}_{a_1a_2a_3}\;}\;
-    \begin{tikzpicture}[thick, scale=1.0, every node/.style={font=\small, inner sep=1pt, outer sep=1pt}, baseline=(current bounding box.center)]
-        \node[anchor=north] (a1) at (0,0) {$a_1$};
-        \node[anchor=north] (a2) at (1.2,0) {$a_2$};
-        \node[anchor=north] (a3) at (2.4,0) {$a_3$};
-        \node[circle, fill, inner sep=1.1pt] (w1) at (1.8,0.6) {};
-        \node[circle, fill, inner sep=1.1pt] (v2) at (1.2,1.4) {};
-        \node (c) at (1.2,2.2) {$c$};
-        \draw (a2) -- (w1); \draw (a3) -- (w1);
-        \draw (w1) -- (v2); \draw (a1) -- (v2);
-        \draw (v2) -- (c);
-        \node[anchor=west] at (1.98,0.98) {$b'$};
-    \end{tikzpicture}
+    \ftree{--legs a_1,a_2,a_3 --fuse 2:b@ --fuse 1:c}
 \end{align*}
 one number per pair $(b,b')$. The move back is the inverse matrix, $F^{\dagger}$, which is the unitarity of Section~\ref{sec:cg}.
 
-The second move exchanges two neighbouring legs of a node, and its overlap is the $R$ symbol,
+The second move exchanges two neighbouring legs of a node, and its overlap is the $R$ symbol. The two pictures differ only by the order in which the legs enter the vertex, which is the braid drawn below the vertex:
 \begin{align*}
-    \begin{tikzpicture}[thick, baseline=(current bounding box.center)]
-\begin{scope}[thick, scale=0.9, shift={(0.000,0.000)},
-                 every node/.style={inner sep=1pt, font=\small}]
-  \draw (0.000,0.000) -- (0.600,0.600);
-  \draw (1.200,0.000) -- (0.600,0.600);
-  \draw (0.600,0.600) -- (0.600,1.260);
-  \fill (0.600,0.600) circle (1.3pt);
-  \node[anchor=north] at (0.000,-0.10) {$a_1$};
-  \node[anchor=north] at (1.200,-0.10) {$a_2$};
-  \node[anchor=south, fill=white, inner sep=0.6pt] at (0.600,1.320) {$c$};
-\end{scope}
-    \end{tikzpicture}
+    \ftree{--legs a_1,a_2 --fuse 1:c}
     \;=\;\,R_{a_1a_2}^{c}\,
-    \begin{tikzpicture}[thick, baseline=(current bounding box.center)]
-\begin{scope}[thick, scale=0.9, shift={(0.000,0.000)},
-                 every node/.style={inner sep=1pt, font=\small}]
-  \draw (0.000,0.000) -- (0.600,0.600);
-  \draw (1.200,0.000) -- (0.600,0.600);
-  \draw (0.600,0.600) -- (0.600,1.260);
-  \fill (0.600,0.600) circle (1.3pt);
-  \node[anchor=north] at (0.000,-0.10) {$a_2$};
-  \node[anchor=north] at (1.200,-0.10) {$a_1$};
-  \node[anchor=south, fill=white, inner sep=0.6pt] at (0.600,1.320) {$c$};
-\end{scope}
-    \end{tikzpicture}
+    \ftree{--legs a_1,a_2 --braid 1:1 --fuse 1:c}
+    \;=\;\,(R_{a_1a_2}^{c})^{-1}\,
+    \ftree{--legs a_1,a_2 --braid 1:-1 --fuse 1:c}
 \end{align*}
-where the two trees differ only by the order in which the two legs enter the vertex. Since both states lie in the sector $c$, Schur's lemma makes the overlap proportional to the identity in the component index,
+The first crossing takes the strand on the left over the one on the right; the second takes it under, so it is the same move run backwards and its overlap is the inverse matrix. The charge $c$ sits on the vertex above the crossing in both pictures. Crossing the same pair twice the same way multiplies the state by $(R_{a_1a_2}^{c})^{2}$, which is $1$ for bosons and fermions and not $1$ in general: exchanging two strands twice returns them to their slots but not the state to itself. That is the difference between a braiding and a permutation of the legs. Since both states lie in the sector $c$, Schur's lemma makes the overlap proportional to the identity in the component index,
 \begin{align}
     (R_{a_1a_2}^c)\,\delta_{\mu\mu'}=\sum_{\alpha_1\alpha_2}
     \overline{(C^{c}_{a_1a_2})^{\mu}_{\alpha_1\alpha_2}}\;
@@ -671,115 +468,7 @@ In fact, it can be proven that any tree with any permuting
 The two symbols are not independent. Each is a change of basis, and changes of basis must compose consistently: two routes between the same pair of trees must give the same matrix. There are two minimal such squares of trees, one for each move, and they give the two identities that a pair $(F,R)$ has to satisfy.
 
 The first square re-brackets four legs. Four legs have five possible bracketings, and a single re-bracketing joins two of them, so the five trees close into a pentagon. Two routes lead from the first bracketing to the last, one re-bracketing the left pair step by step and one pairing $a$ with $b$ and $c$ with $d$ at once. Both are the same change of basis between the same two trees, so they agree:
-\begin{center}
-\begin{tikzpicture}[thick, >=stealth, scale=0.46]
-\begin{scope}[thick, scale=1.0, shift={(-1.260,6.756)},
-                 every node/.style={inner sep=1pt, font=\scriptsize}]
-  \draw (0.000,0.000) -- (0.420,0.420);
-  \draw (0.840,0.000) -- (0.420,0.420);
-  \draw (0.420,0.420) -- (1.050,1.050);
-  \draw (2.100,0.000) -- (1.050,1.050);
-  \draw (1.050,1.050) -- (1.785,1.785);
-  \draw (3.570,0.000) -- (1.785,1.785);
-  \draw (1.785,1.785) -- (1.785,2.247);
-  \fill (0.420,0.420) circle (1.3pt);
-  \fill (1.050,1.050) circle (1.3pt);
-  \fill (1.785,1.785) circle (1.3pt);
-  \node[anchor=north] at (0.000,-0.10) {$a$};
-  \node[anchor=north] at (0.840,-0.10) {$b$};
-  \node[anchor=north] at (2.100,-0.10) {$c$};
-  \node[anchor=north] at (3.570,-0.10) {$d$};
-  \node[anchor=south east, fill=white, inner sep=0.6pt] at (0.370,0.480) {$u$};
-  \node[anchor=south east, fill=white, inner sep=0.6pt] at (1.000,1.110) {$v$};
-  \node[anchor=south, fill=white, inner sep=0.6pt] at (1.785,2.307) {$e$};
-\end{scope}
-\begin{scope}[thick, scale=1.0, shift={(-8.590,2.034)},
-                 every node/.style={inner sep=1pt, font=\scriptsize}]
-  \draw (0.840,0.000) -- (1.260,0.420);
-  \draw (1.680,0.000) -- (1.260,0.420);
-  \draw (0.000,0.000) -- (0.840,0.840);
-  \draw (1.260,0.420) -- (0.840,0.840);
-  \draw (0.840,0.840) -- (1.680,1.680);
-  \draw (3.360,0.000) -- (1.680,1.680);
-  \draw (1.680,1.680) -- (1.680,2.142);
-  \fill (1.260,0.420) circle (1.3pt);
-  \fill (0.840,0.840) circle (1.3pt);
-  \fill (1.680,1.680) circle (1.3pt);
-  \node[anchor=north] at (0.000,-0.10) {$a$};
-  \node[anchor=north] at (0.840,-0.10) {$b$};
-  \node[anchor=north] at (1.680,-0.10) {$c$};
-  \node[anchor=north] at (3.360,-0.10) {$d$};
-  \node[anchor=south east, fill=white, inner sep=0.6pt] at (1.710,0.480) {$w$};
-  \node[anchor=south east, fill=white, inner sep=0.6pt] at (0.990,0.900) {$v'$};
-  \node[anchor=south, fill=white, inner sep=0.6pt] at (1.680,2.202) {$e$};
-\end{scope}
-\begin{scope}[thick, scale=1.0, shift={(-6.062,-6.075)},
-                 every node/.style={inner sep=1pt, font=\scriptsize}]
-  \draw (0.840,0.000) -- (1.260,0.420);
-  \draw (1.680,0.000) -- (1.260,0.420);
-  \draw (1.260,0.420) -- (1.890,1.050);
-  \draw (2.940,0.000) -- (1.890,1.050);
-  \draw (0.000,0.000) -- (1.470,1.470);
-  \draw (1.890,1.050) -- (1.470,1.470);
-  \draw (1.470,1.470) -- (1.470,1.932);
-  \fill (1.260,0.420) circle (1.3pt);
-  \fill (1.890,1.050) circle (1.3pt);
-  \fill (1.470,1.470) circle (1.3pt);
-  \node[anchor=north] at (0.000,-0.10) {$a$};
-  \node[anchor=north] at (0.840,-0.10) {$b$};
-  \node[anchor=north] at (1.680,-0.10) {$c$};
-  \node[anchor=north] at (2.940,-0.10) {$d$};
-  \node[anchor=south east, fill=white, inner sep=0.6pt] at (1.310,0.480) {$w$};
-  \node[anchor=south east, fill=white, inner sep=0.6pt] at (2.240,1.110) {$y$};
-  \node[anchor=south, fill=white, inner sep=0.6pt] at (1.470,1.992) {$e$};
-\end{scope}
-\begin{scope}[thick, scale=1.0, shift={(3.542,-6.075)},
-                 every node/.style={inner sep=1pt, font=\scriptsize}]
-  \draw (1.680,0.000) -- (2.100,0.420);
-  \draw (2.520,0.000) -- (2.100,0.420);
-  \draw (0.840,0.000) -- (1.680,0.840);
-  \draw (2.100,0.420) -- (1.680,0.840);
-  \draw (0.000,0.000) -- (1.260,1.260);
-  \draw (1.680,0.840) -- (1.260,1.260);
-  \draw (1.260,1.260) -- (1.260,1.722);
-  \fill (2.100,0.420) circle (1.3pt);
-  \fill (1.680,0.840) circle (1.3pt);
-  \fill (1.260,1.260) circle (1.3pt);
-  \node[anchor=north] at (0.000,-0.10) {$a$};
-  \node[anchor=north] at (0.840,-0.10) {$b$};
-  \node[anchor=north] at (1.680,-0.10) {$c$};
-  \node[anchor=north] at (2.520,-0.10) {$d$};
-  \node[anchor=south east, fill=white, inner sep=0.6pt] at (2.350,0.480) {$z$};
-  \node[anchor=south east, fill=white, inner sep=0.6pt] at (1.930,0.900) {$t$};
-  \node[anchor=south, fill=white, inner sep=0.6pt] at (1.260,1.782) {$e$};
-\end{scope}
-\begin{scope}[thick, scale=1.0, shift={(6.070,2.034)},
-                 every node/.style={inner sep=1pt, font=\scriptsize}]
-  \draw (0.000,0.000) -- (0.420,0.420);
-  \draw (0.840,0.000) -- (0.420,0.420);
-  \draw (2.100,0.000) -- (2.520,0.420);
-  \draw (2.940,0.000) -- (2.520,0.420);
-  \draw (0.420,0.420) -- (1.470,1.470);
-  \draw (2.520,0.420) -- (1.470,1.470);
-  \draw (1.470,1.470) -- (1.470,1.932);
-  \fill (0.420,0.420) circle (1.3pt);
-  \fill (2.520,0.420) circle (1.3pt);
-  \fill (1.470,1.470) circle (1.3pt);
-  \node[anchor=north] at (0.000,-0.10) {$a$};
-  \node[anchor=north] at (0.840,-0.10) {$b$};
-  \node[anchor=north] at (2.100,-0.10) {$c$};
-  \node[anchor=north] at (2.940,-0.10) {$d$};
-  \node[anchor=south east, fill=white, inner sep=0.6pt] at (0.370,0.480) {$u$};
-  \node[anchor=south east, fill=white, inner sep=0.6pt] at (2.470,0.480) {$z$};
-  \node[anchor=south, fill=white, inner sep=0.6pt] at (1.470,1.992) {$e$};
-\end{scope}
-  \draw[->, >=stealth] (-1.610,6.139) -- (-5.720,3.491) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$F^{v}_{abc}$};
-  \draw[->, >=stealth] (-6.996,1.384) -- (-5.406,-3.719) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$F^{e}_{awd}$};
-  \draw[->, >=stealth] (-3.192,-5.655) -- (3.192,-5.655) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$F^{y}_{bcd}$};
-  \draw[->, >=stealth] (1.610,6.139) -- (5.720,3.491) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$F^{e}_{ucd}$};
-  \draw[->, >=stealth] (6.996,1.384) -- (5.406,-3.719) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$F^{e}_{abz}$};
-\end{tikzpicture}
-\end{center}
+\input{figures/pentagon}
 
 Each step is a matrix on the inner charges, so a route read as a product is summed over the labels it passes through, and the equality of the two products is the \emph{pentagon identity}. \begin{align}
     \sum_{w} (F^{v}_{abc})_{uw}\,(F^{e}_{awd})_{vz}\,(F^{y}_{bcd})_{wx} = (F^{e}_{ucd})_{vy}\,(F^{e}_{abz})_{uy}.
@@ -788,109 +477,22 @@ Each step is a matrix on the inner charges, so a route read as a product is summ
 
 
 The second loop braids. Fuse $a$ and $b$ to $u$ and then fuse $u$ with $c$, so that $d$ is the root. Two routes of three moves each carry the same tree to the same tree, exchanging $a$ and $c$: re-bracket, braid $b$ past $c$, re-bracket again (the upper route, $F\,R\,F$); or braid the pair $(ab)$ past $c$, re-bracket, and braid $a$ past $c$ (the lower route, $R\,F\,R$). The hexagon says that the two products agree:
-\begin{center}
-\begin{tikzpicture}[thick, >=stealth, scale=0.62]
-\begin{scope}[thick, scale=1.0, shift={(-8.770,-0.390)},
-                 every node/.style={inner sep=1pt, font=\scriptsize}]
-  \draw (0.000,0.000) -- (0.390,0.390);
-  \draw (0.780,0.000) -- (0.390,0.390);
-  \draw (0.390,0.390) -- (0.975,0.975);
-  \draw (1.950,0.000) -- (0.975,0.975);
-  \draw (0.975,0.975) -- (0.975,1.404);
-  \fill (0.390,0.390) circle (1.3pt);
-  \fill (0.975,0.975) circle (1.3pt);
-  \node[anchor=north] at (0.000,-0.10) {$a$};
-  \node[anchor=north] at (0.780,-0.10) {$b$};
-  \node[anchor=north] at (1.950,-0.10) {$c$};
-  \node[anchor=south east, fill=white, inner sep=0.6pt] at (0.340,0.450) {$u$};
-  \node[anchor=south, fill=white, inner sep=0.6pt] at (0.975,1.464) {$d$};
-\end{scope}
-\begin{scope}[thick, scale=1.0, shift={(-4.970,5.863)},
-                 every node/.style={inner sep=1pt, font=\scriptsize}]
-  \draw (0.780,0.000) -- (1.170,0.390);
-  \draw (1.560,0.000) -- (1.170,0.390);
-  \draw (0.000,0.000) -- (0.780,0.780);
-  \draw (1.170,0.390) -- (0.780,0.780);
-  \draw (0.780,0.780) -- (0.780,1.209);
-  \fill (1.170,0.390) circle (1.3pt);
-  \fill (0.780,0.780) circle (1.3pt);
-  \node[anchor=north] at (0.000,-0.10) {$a$};
-  \node[anchor=north] at (0.780,-0.10) {$b$};
-  \node[anchor=north] at (1.560,-0.10) {$c$};
-  \node[anchor=south east, fill=white, inner sep=0.6pt] at (1.120,0.450) {$v$};
-  \node[anchor=south, fill=white, inner sep=0.6pt] at (0.780,1.269) {$d$};
-\end{scope}
-\begin{scope}[thick, scale=1.0, shift={(2.630,5.863)},
-                 every node/.style={inner sep=1pt, font=\scriptsize}]
-  \draw (0.780,0.000) -- (1.170,0.390);
-  \draw (1.560,0.000) -- (1.170,0.390);
-  \draw (0.000,0.000) -- (0.780,0.780);
-  \draw (1.170,0.390) -- (0.780,0.780);
-  \draw (0.780,0.780) -- (0.780,1.209);
-  \fill (1.170,0.390) circle (1.3pt);
-  \fill (0.780,0.780) circle (1.3pt);
-  \node[anchor=north] at (0.000,-0.10) {$a$};
-  \node[anchor=north] at (0.780,-0.10) {$c$};
-  \node[anchor=north] at (1.560,-0.10) {$b$};
-  \node[anchor=south east, fill=white, inner sep=0.6pt] at (1.120,0.450) {$v$};
-  \node[anchor=south, fill=white, inner sep=0.6pt] at (0.780,1.269) {$d$};
-\end{scope}
-\begin{scope}[thick, scale=1.0, shift={(6.430,-0.390)},
-                 every node/.style={inner sep=1pt, font=\scriptsize}]
-  \draw (0.000,0.000) -- (0.390,0.390);
-  \draw (0.780,0.000) -- (0.390,0.390);
-  \draw (0.390,0.390) -- (0.975,0.975);
-  \draw (1.950,0.000) -- (0.975,0.975);
-  \draw (0.975,0.975) -- (0.975,1.404);
-  \fill (0.390,0.390) circle (1.3pt);
-  \fill (0.975,0.975) circle (1.3pt);
-  \node[anchor=north] at (0.000,-0.10) {$a$};
-  \node[anchor=north] at (0.780,-0.10) {$c$};
-  \node[anchor=north] at (1.950,-0.10) {$b$};
-  \node[anchor=south east, fill=white, inner sep=0.6pt] at (0.340,0.450) {$w$};
-  \node[anchor=south, fill=white, inner sep=0.6pt] at (0.975,1.464) {$d$};
-\end{scope}
-\begin{scope}[thick, scale=1.0, shift={(2.630,-6.643)},
-                 every node/.style={inner sep=1pt, font=\scriptsize}]
-  \draw (0.000,0.000) -- (0.390,0.390);
-  \draw (0.780,0.000) -- (0.390,0.390);
-  \draw (0.390,0.390) -- (0.975,0.975);
-  \draw (1.950,0.000) -- (0.975,0.975);
-  \draw (0.975,0.975) -- (0.975,1.404);
-  \fill (0.390,0.390) circle (1.3pt);
-  \fill (0.975,0.975) circle (1.3pt);
-  \node[anchor=north] at (0.000,-0.10) {$c$};
-  \node[anchor=north] at (0.780,-0.10) {$a$};
-  \node[anchor=north] at (1.950,-0.10) {$b$};
-  \node[anchor=south east, fill=white, inner sep=0.6pt] at (0.340,0.450) {$w$};
-  \node[anchor=south, fill=white, inner sep=0.6pt] at (0.975,1.464) {$d$};
-\end{scope}
-\begin{scope}[thick, scale=1.0, shift={(-4.970,-6.643)},
-                 every node/.style={inner sep=1pt, font=\scriptsize}]
-  \draw (0.780,0.000) -- (1.170,0.390);
-  \draw (1.560,0.000) -- (1.170,0.390);
-  \draw (0.000,0.000) -- (0.780,0.780);
-  \draw (1.170,0.390) -- (0.780,0.780);
-  \draw (0.780,0.780) -- (0.780,1.209);
-  \fill (1.170,0.390) circle (1.3pt);
-  \fill (0.780,0.780) circle (1.3pt);
-  \node[anchor=north] at (0.000,-0.10) {$c$};
-  \node[anchor=north] at (0.780,-0.10) {$a$};
-  \node[anchor=north] at (1.560,-0.10) {$b$};
-  \node[anchor=south east, fill=white, inner sep=0.6pt] at (1.120,0.450) {$u$};
-  \node[anchor=south, fill=white, inner sep=0.6pt] at (0.780,1.269) {$d$};
-\end{scope}
-  \draw[->, >=stealth] (-6.484,1.837) -- (-4.432,5.213) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$F^{d}_{abc}$};
-  \draw[->, >=stealth] (-2.280,6.253) -- (2.280,6.253) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$R_{bc}^d$};
-  \draw[->, >=stealth] (4.432,5.213) -- (6.484,1.837) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$F^{d}_{acb}$};
-  \draw[->, >=stealth] (-6.968,-1.040) -- (-4.916,-4.416) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$R_{uc}^d$};
-  \draw[->, >=stealth] (-2.280,-6.253) -- (2.280,-6.253) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$F^{d}_{cab}$};
-  \draw[->, >=stealth] (4.916,-4.416) -- (6.968,-1.040) node[pos=0.50, above, fill=white, inner sep=1.5pt, font=\normalsize] {$R_{ac}^w$};
-\end{tikzpicture}
-\end{center}
+\input{figures/hexagon}
 Both compositions act on the same tree and must agree: that is the \emph{hexagon}:\begin{align}
     \sum_{v} (F^{d}_{abc})_{uv}\,(R_{bc}^v)\,(F^{d}_{acb})_{vw} = (R_{uc}^d)\,(F^{d}_{cab})_{uw}\,(R_{ac}^w).
 \end{align}
+
+The same square can be read with every exchange undone. All six crossings then run the other way, and the identity holds with each exchange replaced by its inverse:
+\input{figures/hexagon2}
+\begin{align}
+    \sum_{v} (F^{d}_{abc})_{uv}\,(R_{bc}^v)^{-1}\,(F^{d}_{acb})_{vw} = (R_{uc}^d)^{-1}\,(F^{d}_{cab})_{uw}\,(R_{ac}^w)^{-1}.
+\end{align}
+The two are one statement read in two directions: the exchange may be pushed past a fusion before or after the re-bracketing, and the two routes agree. For three strands the same demand is the \emph{Yang--Baxter equation}. Write $\check R_{ij}$ for the exchange of the two strands in slot $i$ and slot $j$. The two pictures below cross the strands in the two possible orders --- first pair, second pair, first pair again on the left, the opposite on the right --- and the equation says they act the same way on the labels:
+\input{figures/yang_baxter}
+\begin{align}
+    \check R_{12}\,\check R_{23}\,\check R_{12} = \check R_{23}\,\check R_{12}\,\check R_{23}.
+\end{align}
+Every single crossing in these pictures is one of the two hexagons, so both sides expand into the same product of $F$ and $R$ symbols: the Yang--Baxter equation follows from the pentagon and the two hexagons, and is not a further axiom.
 
 For a representation neither identity is an extra assumption. $F$ is an overlap of CG tensors, and both sides of the pentagon are the same overlap computed in two ways, so the identity follows for free --- for $\mathsf{SU}(2)$ it is the Biedenharn--Elliott relation among the $6j$ symbols, and the hexagon is the corresponding relation between the $6j$ and the $R$ phases. 
 
